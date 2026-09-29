@@ -4,6 +4,7 @@ Access says how much the agent may do on the machine. cli-funnel has four levels
 
 | Level | Meaning |
 |---|---|
+| `none` | Text in, text out. No writes, no commands, no MCP servers, no approvals. See [Run options](run-options.md). |
 | `supervised` | Every risky action waits for a human. Your `onApproval` callback gets the request. |
 | `accept-edits` | File edits go through. Other actions ask, or are refused when nobody can answer. |
 | `auto` | The CLI decides which actions are safe. The rest ask or are refused. |
@@ -13,6 +14,7 @@ Access says how much the agent may do on the machine. cli-funnel has four levels
 
 | | Claude Code | Codex | Cursor Agent | Antigravity |
 |---|---|---|---|---|
+| `none` | yes | yes | no | no |
 | `supervised` | yes | yes | no | no |
 | `accept-edits` | yes | yes | no | yes |
 | `auto` | yes | yes | yes | no |
@@ -29,6 +31,8 @@ Claude Code has a stdio permission channel. The CLI pauses and asks the host, an
 Cursor Agent runs unrestricted in print mode when the user's Cursor config says so, and its ACP server never asked for permission in testing. Antigravity refuses gated tools in headless mode and lists them as denied. Neither has a channel to answer through, so `supervised` is not offered. When one of them adds one, the provider will list it.
 
 Antigravity's `accept-edits` writes only inside workspaces the user has already trusted in `agy`.
+
+`none` needs a mode the CLI enforces, not one the model is asked to respect. Claude Code can remove every tool. Codex runs in a read-only sandbox with its tool features off and every approval denied. Cursor Agent's `--mode ask` still ran shell commands in testing, and Antigravity's `--mode plan` with `--sandbox` let a shell command write outside the workspace, so neither lists `none`.
 
 ## Denied actions
 

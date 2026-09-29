@@ -1,5 +1,5 @@
 import type { Funnel } from "../funnel.js";
-import { ACCESS_LEVELS, type AccessLevel, type FinishReason, type ProviderId, type RunInput, type Usage } from "../types.js";
+import { ACCESS_LEVELS, type AccessLevel, type Attachment, type FinishReason, type ProviderId, type RunInput, type Usage } from "../types.js";
 import { json, sse, sseHeaders } from "./sse.js";
 
 export interface OpenAIDefaults {
@@ -11,7 +11,7 @@ export interface OpenAIDefaults {
 
 interface ChatMessage {
   role: string;
-  content: string | { type: string; text?: string }[] | null;
+  content: string | { type: string; text?: string; image_url?: { url: string } }[] | null;
 }
 
 interface ChatBody {
@@ -19,12 +19,27 @@ interface ChatBody {
   messages: ChatMessage[];
   stream?: boolean;
   reasoning_effort?: string;
+  max_tokens?: number;
+  max_completion_tokens?: number;
+  response_format?: { type: string; json_schema?: { name?: string; schema?: Record<string, unknown> } };
   /** cli-funnel extension. */
   x_funnel?: { cwd?: string; access?: AccessLevel; sessionId?: string; fast?: boolean; contextWindow?: number };
 }
 
 const text = (c: ChatMessage["content"]) =>
   typeof c === "string" ? c : (c ?? []).map((p) => (p.type === "text" ? p.text ?? "" : "")).join("");
+
+const IMAGE_DATA_URL = /^data:(image\/(?:png|jpeg|webp|gif));base64,(.+)$/;
+
+/** Images from the last user turn. Only data URLs: fetching remote URLs would make this server a proxy. */
+function toAttachments(messages: ChatMessage[]): Attachment[] {
+  const last = [...messages].reverse().find((m) => m.role === "user");
+  if (!last || typeof last.content === "string" || !last.content) return [];
+  return last.content.flatMap((p): Attachment[] => {
+    const m = p.type === "image_url" && p.image_url ? IMAGE_DATA_URL.exec(p.image_url.url) : null;
+    return m ? [{ type: "image", mediaType: m[1] as Attachment["mediaType"], data: m[2]! }] : [];
+  });
+}
 
 /** Flattens a chat into one prompt. The CLI keeps its own history when sessionId is set, so only the last user turn is sent then. */
 function toPrompt(messages: ChatMessage[], resumed: boolean): string {
@@ -78,7 +93,15 @@ export async function handleOpenAI(
       cwd,
       access,
     },
-    prompt: toPrompt(body.messages, !!body.x_funnel?.sessionId),
+    // System messages become the run's system prompt instead of a line in the flattened chat.
+    prompt: toPrompt(body.messages.filter((m) => m.role !== "system"), !!body.x_funnel?.sessionId),
+    system: body.messages.filter((m) => m.role === "system").map((m) => text(m.content)).join("\n\n") || undefined,
+    attachments: toAttachments(body.messages),
+    responseSchema:
+      body.response_format?.type === "json_schema" && body.response_format.json_schema?.schema
+        ? { name: body.response_format.json_schema.name, schema: body.response_format.json_schema.schema }
+        : undefined,
+    maxOutputTokens: body.max_completion_tokens ?? body.max_tokens,
     sessionId: body.x_funnel?.sessionId,
     signal: req.signal,
     onApproval: () => "deny",

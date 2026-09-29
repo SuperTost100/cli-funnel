@@ -3,6 +3,7 @@ import type { AccessLevel, DirListing, FunnelClient, Selection } from "cli-funne
 import { useSelection } from "./hooks.js";
 
 const ACCESS_LABELS: Record<AccessLevel, { label: string; hint: string }> = {
+  none: { label: "No tools", hint: "Answers only. Cannot edit files or run commands" },
   supervised: { label: "Supervised", hint: "Asks before every action" },
   "accept-edits": { label: "Accept edits", hint: "Edits files freely, asks for the rest" },
   auto: { label: "Auto", hint: "A classifier approves safe actions" },

@@ -1,6 +1,7 @@
 import { Channel } from "../util/channel.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { compareVersions, exec, firstUrl, parseVersion, resolveBinary } from "../util/process.js";
+import { parseJsonAnswer } from "./prompt.js";
 import type {
   AuthStatus,
   FunnelEvent,
@@ -147,6 +148,9 @@ export async function collect(
       case "usage":
         result.usage = e.usage;
         break;
+      case "structured":
+        result.structured = e.data;
+        break;
       case "done":
         if (e.text) result.text = e.text;
         result.finishReason = e.finishReason;
@@ -154,6 +158,13 @@ export async function collect(
       case "error":
         result.finishReason = "error";
         throw Object.assign(new Error(e.message), { code: e.code });
+    }
+  }
+  if (input.responseSchema && result.structured === undefined && result.finishReason === "stop") {
+    try {
+      result.structured = parseJsonAnswer(result.text);
+    } catch (err) {
+      result.structuredError = `The answer is not JSON: ${err instanceof Error ? err.message : String(err)}`;
     }
   }
   return result;

@@ -8,6 +8,7 @@
 - [Integrating with an AI assistant](docs/ai-integration.md): ordered steps with a check for each
 - [Selection](docs/selection.md): the settings object, model lists, validation
 - [Access levels](docs/access-levels.md): what each CLI can enforce
+- [Run options](docs/run-options.md): system prompt, images, JSON schema answers, output limit, and access `none`
 - [Sign-in and updates](docs/auth-and-updates.md)
 - [UI components](docs/ui.md): React hooks, picker, login panel, approvals
 - [OpenAI compatibility](docs/openai-compat.md)

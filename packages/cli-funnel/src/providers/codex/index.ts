@@ -9,6 +9,7 @@ import { parseLoginStatus } from "./auth.js";
 import { Translator } from "./events.js";
 import { parseCatalog } from "./models.js";
 import { RpcClient } from "./rpc.js";
+import { noToolsConfig } from "./tools.js";
 
 const BINARY = "codex";
 const TESTED_RANGE = { min: "0.150.0" };
@@ -58,6 +59,7 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   };
 
   const decide = async (req: ServerRequest): Promise<ApprovalDecision> => {
+    if (sel.access === "none") return "deny";
     if (req.method === "item/fileChange/requestApproval" && plan.autoAllowFileChanges) return "allow";
     if (sel.access === "full") return "allow";
     const request = toApprovalRequest(req, translator?.items ?? new Map());
@@ -119,6 +121,8 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
         approvalsReviewer: plan.approvalsReviewer,
         sandbox: plan.sandbox,
         ...(sel.fast ? { serviceTier: "priority" } : {}),
+        ...(input.system ? { developerInstructions: input.system } : {}),
+        ...(sel.access === "none" ? { config: await noToolsConfig(path, sel.cwd) } : {}),
       };
       const started = input.sessionId
         ? await rpc.request("thread/resume", { threadId: input.sessionId, ...settings })
@@ -128,8 +132,12 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
       out.push({ type: "session", sessionId: threadId, model: started.model });
       const res = await rpc.request("turn/start", {
         threadId,
-        input: [{ type: "text", text: input.prompt, text_elements: [] }],
+        input: [
+          ...(input.attachments ?? []).map((a) => ({ type: "image", url: `data:${a.mediaType};base64,${a.data}` })),
+          { type: "text", text: input.prompt, text_elements: [] },
+        ],
         ...(sel.effort ? { effort: sel.effort } : {}),
+        ...(input.responseSchema ? { outputSchema: input.responseSchema.schema } : {}),
       });
       turnId ??= res?.turn?.id;
     } catch (e) {
@@ -150,12 +158,15 @@ export const codexProvider: Provider = {
   displayName: "Codex",
   binary: BINARY,
   capabilities: {
-    access: ["supervised", "accept-edits", "auto", "full"],
+    access: ["none", "supervised", "accept-edits", "auto", "full"],
     effort: true,
     contextWindow: false,
     fast: true,
     resume: true,
     approvals: true,
+    images: true,
+    system: "native",
+    schema: "native",
   },
   detect: () => detectInstallation(BINARY, TESTED_RANGE),
   authStatus,

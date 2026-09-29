@@ -8,6 +8,8 @@ const BIN = "claude";
 const TESTED_RANGE = { min: "2.1.0" };
 
 const PERMISSION_MODE: Record<AccessLevel, string> = {
+  // With every tool removed there is nothing to approve. `manual` keeps it that way if a tool slips in.
+  none: "manual",
   supervised: "manual",
   "accept-edits": "acceptEdits",
   auto: "auto",
@@ -15,13 +17,23 @@ const PERMISSION_MODE: Record<AccessLevel, string> = {
 };
 
 const capabilities: Capabilities = {
-  access: ["supervised", "accept-edits", "auto", "full"],
+  access: ["none", "supervised", "accept-edits", "auto", "full"],
   effort: true,
   contextWindow: false,
   fast: false,
   resume: true,
   approvals: true,
+  images: true,
+  system: "native",
+  schema: "native",
 };
+
+/**
+ * `none` removes every built-in tool, skips MCP servers and skips the user, project and local
+ * settings files, so hooks, skills and CLAUDE.md do not load. Measured: a one-line prompt drops
+ * from about 21,800 input tokens to about 400.
+ */
+const NO_TOOLS = ["--tools", "", "--strict-mcp-config", "--setting-sources", ""];
 
 export function buildArgs(input: RunInput): string[] {
   const { selection } = input;
@@ -35,10 +47,23 @@ export function buildArgs(input: RunInput): string[] {
     "--permission-mode", PERMISSION_MODE[selection.access],
   ];
   if (selection.effort) args.push("--effort", selection.effort);
+  if (selection.access === "none") args.push(...NO_TOOLS);
+  // `none` replaces Claude Code's coding-agent prompt. Other levels keep it and append.
+  if (input.system) args.push(selection.access === "none" ? "--system-prompt" : "--append-system-prompt", input.system);
+  if (input.responseSchema) args.push("--json-schema", JSON.stringify(input.responseSchema.schema));
   // Without this flag the CLI denies anything that needs a prompt instead of asking.
-  if (selection.access !== "full" && input.onApproval) args.push("--permission-prompt-tool", "stdio");
+  if (selection.access !== "full" && selection.access !== "none" && input.onApproval) args.push("--permission-prompt-tool", "stdio");
   if (input.sessionId) args.push("--resume", input.sessionId);
   return args;
+}
+
+/** Plain text, or content blocks when images are attached. Same block shape as the Messages API. */
+export function userContent(input: RunInput): string | unknown[] {
+  if (!input.attachments?.length) return input.prompt;
+  return [
+    ...input.attachments.map((a) => ({ type: "image", source: { type: "base64", media_type: a.mediaType, data: a.data } })),
+    { type: "text", text: input.prompt },
+  ];
 }
 
 async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
@@ -48,7 +73,7 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
     throw new FunnelError('Access "supervised" needs an onApproval handler.', "invalid-selection");
   }
   const proc = spawnStream(bin, buildArgs(input), { cwd: input.selection.cwd, env: input.env, signal: input.signal, closeStdin: false });
-  proc.write(JSON.stringify({ type: "user", message: { role: "user", content: input.prompt } }));
+  proc.write(JSON.stringify({ type: "user", message: { role: "user", content: userContent(input) } }));
 
   let finished = false;
   try {

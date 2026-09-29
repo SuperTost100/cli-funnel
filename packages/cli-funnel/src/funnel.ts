@@ -58,6 +58,9 @@ export function createFunnel(options: FunnelOptions = {}) {
     if (input.selection.access === "supervised" && !input.onApproval) {
       throw new FunnelError('access "supervised" needs an onApproval callback.', "invalid-selection");
     }
+    if (input.attachments?.length && !p.capabilities.images) {
+      throw new FunnelError(`${p.displayName} cannot take image attachments.`, "unsupported");
+    }
     return p;
   }
 

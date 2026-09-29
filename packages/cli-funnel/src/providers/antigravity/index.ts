@@ -17,6 +17,7 @@ import {
 } from "../../types.js";
 import { detectInstallation, findBinary, runUpdate } from "../base.js";
 import { createMapper, parseModels } from "./parser.js";
+import { composePrompt } from "../prompt.js";
 
 const TOKEN_FILE = join(homedir(), ".gemini", "antigravity-cli", "antigravity-oauth-token");
 const TESTED = { min: "1.2.0" };
@@ -31,7 +32,8 @@ export function toCliModel(selection: Selection, models: ModelInfo[] = []): { mo
 export function buildArgs(input: RunInput, models: ModelInfo[] = []): string[] {
   const { selection } = input;
   const { model, effort } = toCliModel(selection, models);
-  const args = ["--print=" + input.prompt, "--output-format", "stream-json", "--model", model];
+  const args = ["--print=" + composePrompt(input, { system: true, schema: false }), "--output-format", "stream-json", "--model", model];
+  if (input.responseSchema) args.push("--json-schema", JSON.stringify(input.responseSchema.schema));
   if (effort) args.push("--effort", effort);
   if (selection.access === "accept-edits") args.push("--mode", "accept-edits");
   if (selection.access === "full") args.push("--dangerously-skip-permissions");
@@ -106,7 +108,18 @@ export const antigravityProvider: Provider = {
   id: "antigravity",
   displayName: "Antigravity",
   binary: "agy",
-  capabilities: { access: ["accept-edits", "full"], effort: true, contextWindow: false, fast: false, resume: true, approvals: false },
+  // No `none`: in testing, `--mode plan` with `--sandbox` still let a shell command write outside the workspace.
+  capabilities: {
+    access: ["accept-edits", "full"],
+    effort: true,
+    contextWindow: false,
+    fast: false,
+    resume: true,
+    approvals: false,
+    images: false,
+    system: "prompt",
+    schema: "native",
+  },
   detect: () => detectInstallation("agy", TESTED),
   authStatus,
   login,

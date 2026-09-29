@@ -106,6 +106,7 @@ export function createMapper() {
         });
         const usage = toUsage(r.usage);
         if (usage) events.push({ type: "usage", usage });
+        if (r.structured_output !== undefined) events.push({ type: "structured", data: r.structured_output });
         const text = r.response ?? "";
         events.push({ type: "done", text, finishReason: denied.length && !text.trim() ? "denied" : "stop" });
         return events;
