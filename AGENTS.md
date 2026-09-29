@@ -26,6 +26,14 @@ Use Claude Code, Codex, Cursor Agent and Antigravity CLIs like an API. The packa
 - Parsers are pure functions tested against recorded fixtures.
 - Writing style for docs and comments: direct, no em dashes, no filler.
 
+## Cursor Cloud
+
+Node 22 is on the default image through nvm. `npm ci && npm run build` from the repo root installs dependencies and builds the packages.
+
+`npm run dev -w playground` serves the test bench at http://127.0.0.1:5173. The API listens on http://127.0.0.1:4747.
+
+Subscription CLIs are not installed here, and API keys are not set. `npm test` is the check to run. Do not set `CLI_FUNNEL_LIVE=1` and do not run `npm run e2e`.
+
 ## Integrating cli-funnel into another project
 
 See `docs/ai-integration.md`.
