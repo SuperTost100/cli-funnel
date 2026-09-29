@@ -1,0 +1,165 @@
+#!/usr/bin/env node
+import { createInterface } from "node:readline/promises";
+import { homedir } from "node:os";
+import { parseArgs } from "node:util";
+import { createFunnel } from "../funnel.js";
+import { createHandler } from "../server/handler.js";
+import { serveNode } from "../server/node.js";
+import { ACCESS_LEVELS, type AccessLevel, type ProviderId } from "../types.js";
+
+const HELP = `cli-funnel <command>
+
+  doctor                       Show which CLIs are installed, logged in, and within the tested version range
+  models <provider>            List models with effort levels, context sizes and fast tier
+  login <provider>             Sign in through the provider's own login flow
+  logout <provider>            Sign out
+  update <provider>            Run the CLI's own updater
+  run <provider> <model> <prompt>
+       [--effort x] [--fast] [--context tokens] [--cwd dir] [--access ${ACCESS_LEVELS.join("|")}]
+  serve [--port 4747] [--host 127.0.0.1] [--cwd dir] [--access level] [--token secret]
+                               HTTP API, SSE streaming and OpenAI-compatible /v1 endpoints
+
+Providers: claude, codex, agent, antigravity`;
+
+const { values, positionals } = parseArgs({
+  allowPositionals: true,
+  options: {
+    effort: { type: "string" },
+    fast: { type: "boolean" },
+    context: { type: "string" },
+    cwd: { type: "string" },
+    access: { type: "string" },
+    port: { type: "string" },
+    host: { type: "string" },
+    token: { type: "string" },
+    json: { type: "boolean" },
+    help: { type: "boolean", short: "h" },
+  },
+});
+
+const funnel = createFunnel();
+const [command, providerArg, ...rest] = positionals;
+const out = (s: string) => process.stdout.write(s + "\n");
+const provider = (): ProviderId => {
+  if (!providerArg || !(providerArg in funnel.providers)) {
+    out(`Pick a provider: ${Object.keys(funnel.providers).join(", ")}`);
+    process.exit(2);
+  }
+  return providerArg as ProviderId;
+};
+
+async function main() {
+  if (!command || values.help) return out(HELP);
+
+  if (command === "doctor") {
+    const rows = await funnel.overview();
+    if (values.json) return out(JSON.stringify(rows, null, 2));
+    for (const r of rows) {
+      const i = r.installation;
+      const state = !i.installed
+        ? "not installed"
+        : `${i.version ?? "?"}${i.withinTestedRange === false ? " (outside tested range)" : ""}, ${r.auth?.loggedIn ? `logged in${r.auth.account ? " as " + r.auth.account : ""}` : "logged out"}`;
+      out(`${r.displayName.padEnd(14)} ${state}`);
+      out(`${"".padEnd(14)} access: ${r.capabilities.access.join(", ") || "none"}`);
+    }
+    return;
+  }
+
+  if (command === "models") {
+    const models = await funnel.models(provider());
+    if (values.json) return out(JSON.stringify(models, null, 2));
+    for (const m of models) {
+      const bits = [
+        m.efforts.length ? `effort ${m.efforts.map((e) => e.id).join("/")}` : "",
+        m.contextWindows.length ? `context ${m.contextWindows.map((c) => (c >= 1e6 ? c / 1e6 + "M" : c / 1e3 + "k")).join("/")}` : "",
+        m.fast ? "fast" : "",
+      ].filter(Boolean);
+      out(`${m.id.padEnd(34)} ${m.name}${bits.length ? "  [" + bits.join(", ") + "]" : ""}`);
+    }
+    return;
+  }
+
+  if (command === "login") {
+    const session = funnel.login(provider());
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    for await (const e of session) {
+      if (e.type === "open-url") out(`Open this link to sign in:\n  ${e.url}`);
+      else if (e.type === "code-prompt") session.sendCode(await rl.question(`${e.message}\n> `));
+      else if (e.type === "needs-terminal") out(`This provider signs in from a terminal. Run: ${e.command.join(" ")}`);
+      else if (e.type === "done") out(`Signed in${e.status.account ? " as " + e.status.account : ""}.`);
+      else if (e.type === "error") {
+        out(e.message);
+        process.exitCode = 1;
+      }
+    }
+    rl.close();
+    return;
+  }
+
+  if (command === "logout") {
+    await funnel.logout(provider());
+    return out("Signed out.");
+  }
+
+  if (command === "update") {
+    const r = await funnel.update(provider());
+    return out(r.changed ? `Updated ${r.from} -> ${r.to}` : `Already current${r.to ? " (" + r.to + ")" : ""}.`);
+  }
+
+  if (command === "run") {
+    const [model, ...words] = rest;
+    if (!model || !words.length) return out("Usage: cli-funnel run <provider> <model> <prompt>");
+    const access = (values.access ?? "accept-edits") as AccessLevel;
+    const rl = access === "supervised" ? createInterface({ input: process.stdin, output: process.stdout }) : undefined;
+    const stream = funnel.stream({
+      selection: {
+        provider: provider(),
+        model,
+        effort: values.effort,
+        fast: values.fast,
+        contextWindow: values.context ? Number(values.context) : undefined,
+        cwd: values.cwd ?? process.cwd(),
+        access,
+      },
+      prompt: words.join(" "),
+      onApproval: async (r) => {
+        const answer = await rl!.question(`\nAllow ${r.tool} ${JSON.stringify(r.input).slice(0, 200)}? [y/N] `);
+        return answer.trim().toLowerCase().startsWith("y") ? "allow" : "deny";
+      },
+    });
+    for await (const e of stream) {
+      if (e.type === "text.delta") process.stdout.write(e.text);
+      else if (e.type === "tool.start") process.stderr.write(`\n[tool] ${e.name}\n`);
+    }
+    const result = await stream.result;
+    process.stdout.write("\n");
+    if (values.json) out(JSON.stringify(result, null, 2));
+    rl?.close();
+    return;
+  }
+
+  if (command === "serve") {
+    const handler = createHandler(funnel, {
+      token: values.token,
+      fsRoots: [homedir(), values.cwd ?? process.cwd()],
+      openai: { cwd: values.cwd ?? process.cwd(), access: (values.access as AccessLevel) ?? "accept-edits" },
+    });
+    const host = values.host ?? "127.0.0.1";
+    if (host !== "127.0.0.1" && host !== "localhost" && !values.token) {
+      out("Refusing to listen on a public address without --token.");
+      process.exit(2);
+    }
+    const { url } = await serveNode(handler, { port: values.port ? Number(values.port) : 4747, host });
+    out(`cli-funnel listening on ${url}`);
+    out(`OpenAI-compatible base URL: ${url}/v1   (model ids look like claude/claude-sonnet-5)`);
+    return;
+  }
+
+  out(HELP);
+  process.exitCode = 2;
+}
+
+main().catch((err) => {
+  process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+  process.exit(1);
+});

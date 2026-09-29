@@ -1,0 +1,1 @@
+{ "extends": "../../tsconfig.base.json", "compilerOptions": { "noEmit": true, "jsx": "react-jsx", "lib": ["ES2023", "DOM"], "types": ["node"], "paths": { "cli-funnel/client": ["../cli-funnel/src/client/index.ts"] } }, "include": ["src"] }

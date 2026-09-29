@@ -1,0 +1,103 @@
+[
+  {
+    "contextWindows": [],
+    "fast": false,
+    "id": "gemini-3.8-flash",
+    "name": "Gemini 3.8 Flash",
+    "efforts": [
+      {
+        "id": "low",
+        "label": "Low"
+      },
+      {
+        "id": "medium",
+        "label": "Medium"
+      },
+      {
+        "id": "high",
+        "label": "High"
+      }
+    ],
+    "defaultEffort": "high"
+  },
+  {
+    "contextWindows": [],
+    "fast": false,
+    "id": "gemini-3.7-flash",
+    "name": "Gemini 3.7 Flash",
+    "efforts": [
+      {
+        "id": "low",
+        "label": "Low"
+      },
+      {
+        "id": "medium",
+        "label": "Medium"
+      },
+      {
+        "id": "high",
+        "label": "High"
+      }
+    ],
+    "defaultEffort": "high"
+  },
+  {
+    "contextWindows": [],
+    "fast": false,
+    "id": "gemini-3.6-flash",
+    "name": "Gemini 3.6 Flash",
+    "efforts": [
+      {
+        "id": "low",
+        "label": "Low"
+      },
+      {
+        "id": "medium",
+        "label": "Medium"
+      },
+      {
+        "id": "high",
+        "label": "High"
+      }
+    ],
+    "defaultEffort": "high"
+  },
+  {
+    "contextWindows": [],
+    "fast": false,
+    "id": "gemini-3.1-pro",
+    "name": "Gemini 3.1 Pro",
+    "efforts": [
+      {
+        "id": "low",
+        "label": "Low"
+      },
+      {
+        "id": "high",
+        "label": "High"
+      }
+    ],
+    "defaultEffort": "high"
+  },
+  {
+    "contextWindows": [],
+    "fast": false,
+    "id": "claude-sonnet-4-6",
+    "name": "Claude Sonnet 4.6 (Thinking)",
+    "efforts": []
+  },
+  {
+    "contextWindows": [],
+    "fast": false,
+    "id": "claude-opus-4-6-thinking",
+    "name": "Claude Opus 4.6 (Thinking)",
+    "efforts": []
+  },
+  {
+    "contextWindows": [],
+    "fast": false,
+    "id": "gpt-oss-120b-medium",
+    "name": "GPT-OSS 120B (Medium)",
+    "efforts": []
+  }
+]

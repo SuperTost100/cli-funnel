@@ -1,0 +1,54 @@
+{
+  "name": "@cli-funnel/react",
+  "version": "0.1.0",
+  "description": "React hooks and components for cli-funnel: model picker, folder picker, access level, login and one-click update.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./styles.css": "./dist/funnel.css"
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": [
+    "*.css"
+  ],
+  "peerDependencies": {
+    "cli-funnel": "^0.1.0",
+    "react": ">=18"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "react": "^19.0.0",
+    "cli-funnel": "*"
+  },
+  "scripts": {
+    "build": "tsup && cp src/funnel.css dist/funnel.css",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SuperTost100/cli-funnel.git",
+    "directory": "packages/react"
+  },
+  "homepage": "https://github.com/SuperTost100/cli-funnel#readme",
+  "bugs": {
+    "url": "https://github.com/SuperTost100/cli-funnel/issues"
+  },
+  "keywords": [
+    "claude-code",
+    "codex",
+    "cursor-agent",
+    "antigravity",
+    "react",
+    "ai"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

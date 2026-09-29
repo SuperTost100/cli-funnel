@@ -1,0 +1,23 @@
+{
+  "name": "cli-funnel-monorepo",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "examples/playground"
+  ],
+  "scripts": {
+    "build": "npm run build -ws --if-present",
+    "test": "npm run test -ws --if-present",
+    "typecheck": "npm run typecheck -ws --if-present",
+    "fixtures": "node --experimental-strip-types scripts/record-fixtures.ts",
+    "playground": "npm run build && npm run dev -w playground",
+    "e2e": "npm run build && node scripts/e2e.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

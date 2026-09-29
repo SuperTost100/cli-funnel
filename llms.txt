@@ -1,0 +1,24 @@
+# cli-funnel
+
+> Use Claude Code, Codex, Cursor Agent and Antigravity CLIs like an API. Spawns the real CLI, so runs use the user's subscription. One event format, one result shape, plus sign-in, update, model pickers and an OpenAI-compatible server.
+
+## Docs
+
+- [Quickstart](docs/quickstart.md): install, run, stream, approvals
+- [Integrating with an AI assistant](docs/ai-integration.md): ordered steps with a check for each
+- [Selection](docs/selection.md): the settings object, model lists, validation
+- [Access levels](docs/access-levels.md): what each CLI can enforce
+- [Sign-in and updates](docs/auth-and-updates.md)
+- [UI components](docs/ui.md): React hooks, picker, login panel, approvals
+- [OpenAI compatibility](docs/openai-compat.md)
+- [API keys](docs/api-keys.md)
+- [Adding a provider](docs/adding-a-provider.md)
+- [Keeping up with CLI changes](docs/maintenance.md)
+- [Terms and limits](docs/tos-notes.md)
+
+## Facts
+
+- Model ids are concrete versioned names. Get them from `cli-funnel models <provider> --json`.
+- `access: "supervised"` needs an `onApproval` callback and is not available on every provider. Check `capabilities.access`.
+- `funnel.run()` returns `{ text, usage, sessionId, model, finishReason, toolCalls, deniedActions }`.
+- Do not run `login`, `logout` or `update` without asking the user.

@@ -1,0 +1,58 @@
+:root {
+  --enamel: #e3e8e2;
+  --card: #f5f6f2;
+  --ink: #13212b;
+  --muted: #5d6b73;
+  --line: #c5cec6;
+  --lamp: #f59e0b;
+  --display: "Bricolage Grotesque Variable", system-ui, sans-serif;
+  --body: "IBM Plex Sans", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--enamel); color: var(--ink); font: 15px/1.5 var(--body); }
+.bench { max-width: 1180px; margin: 0 auto; padding: 28px 24px 64px; }
+.top h1 { margin: 0; font: 700 44px/1 var(--display); letter-spacing: -0.02em; }
+.top p { margin: 8px 0 0; color: var(--muted); max-width: 60ch; }
+
+.bay { margin: 22px 0 26px; padding: 8px 20px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
+.bay svg { display: block; width: 100%; height: auto; }
+.jack { cursor: pointer; outline: none; }
+.jack:focus-visible .jack-ring { stroke: var(--ink); stroke-width: 3; }
+.jack-name { font: 600 16px var(--display); fill: var(--ink); }
+.jack[data-on="false"] .jack-name { fill: var(--muted); font-weight: 500; }
+.jack-state { font: 12px var(--mono); fill: var(--muted); }
+.jack-ring { fill: var(--enamel); stroke: var(--ink); stroke-width: 2; }
+.pulse { stroke: var(--lamp); stroke-dasharray: 2 26; animation: flow 0.9s linear infinite; }
+@keyframes flow { to { stroke-dashoffset: -28; } }
+@media (prefers-reduced-motion: reduce) { .pulse { animation: none; stroke-dasharray: none; opacity: 0.8; } }
+
+.cols { display: grid; grid-template-columns: minmax(320px, 5fr) 6fr; gap: 20px; align-items: start; }
+@media (max-width: 860px) { .cols { grid-template-columns: 1fr; } }
+.panel { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 22px; display: grid; gap: 14px; min-width: 0; }
+.panel h2 { margin: 0; font: 650 22px var(--display); }
+.panel h2:not(:first-child) { margin-top: 10px; }
+.panel h3 { margin: 6px 0 -6px; font: 600 12px var(--mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.accounts { display: grid; gap: 12px; }
+.hint, .muted { color: var(--muted); font-size: 13px; margin: 0; }
+.mono, code, .json, .tools { font-family: var(--mono); font-size: 12.5px; }
+.stack { display: grid; gap: 6px; font-weight: 600; font-size: 13px; }
+textarea { width: 100%; padding: 10px 12px; font: 14px var(--mono); color: inherit; background: #fff; border: 1px solid var(--line); border-radius: 8px; resize: vertical; }
+textarea:focus-visible, button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.bench button { min-height: 38px; padding: 6px 16px; font: 600 14px var(--body); white-space: nowrap; color: var(--ink); background: #fff; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
+.bench button:hover:not(:disabled) { border-color: var(--ink); }
+.bench button:disabled { opacity: 0.5; cursor: default; }
+.bench button.primary { background: var(--ink); color: #fff; border-color: var(--ink); }
+.out, .json { margin: 0; padding: 12px 14px; background: #fff; border: 1px solid var(--line); border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; }
+.out.empty, .json:not(:has(*)) { color: var(--muted); }
+.tools { margin: 0; padding-left: 18px; }
+.tools li[data-failed="true"] { color: #a4291f; }
+.error { color: #a4291f; margin: 0; }
+
+/* Library components inherit the bench palette and type. */
+.bench .cf { --cf-bg: #fff; --cf-fg: var(--ink); --cf-muted: var(--muted); --cf-line: var(--line); --cf-accent: var(--ink); --cf-accent-fg: #fff; --cf-danger: #a4291f; font-family: var(--body); }
+.bench .cf-picker { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+.bench .cf-login { background: #fff; border-radius: 10px; padding: 14px; gap: 8px; }
+.bench .cf-login h3 { margin: 0; font: 600 16px var(--display); text-transform: none; letter-spacing: 0; color: var(--ink); }
+.bench .cf-option.cf-on { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }

@@ -1,0 +1,217 @@
+[
+  {
+    "id": "gpt-6-astra",
+    "name": "GPT-6-Astra",
+    "efforts": [
+      {
+        "id": "low",
+        "label": "Low"
+      },
+      {
+        "id": "medium",
+        "label": "Medium"
+      },
+      {
+        "id": "high",
+        "label": "High"
+      },
+      {
+        "id": "xhigh",
+        "label": "Extra high"
+      },
+      {
+        "id": "max",
+        "label": "Max"
+      },
+      {
+        "id": "ultra",
+        "label": "Ultra"
+      }
+    ],
+    "defaultEffort": "low",
+    "contextWindows": [],
+    "fast": true
+  },
+  {
+    "id": "gpt-6-sol",
+    "name": "GPT-6-Sol",
+    "efforts": [
+      {
+        "id": "low",
+        "label": "Low"
+      },
+      {
+        "id": "medium",
+        "label": "Medium"
+      },
+      {
+        "id": "high",
+        "label": "High"
+      },
+      {
+        "id": "xhigh",
+        "label": "Extra high"
+      },
+      {
+        "id": "max",
+        "label": "Max"
+      },
+      {
+        "id": "ultra",
+        "label": "Ultra"
+      }
+    ],
+    "defaultEffort": "medium",
+    "contextWindows": [],
+    "fast": true
+  },
+  {
+    "id": "gpt-6-luna",
+    "name": "GPT-6-Luna",
+    "efforts": [
+      {
+        "id": "low",
+        "label": "Low"
+      },
+      {
+        "id": "medium",
+        "label": "Medium"
+      },
+      {
+        "id": "high",
+        "label": "High"
+      },
+      {
+        "id": "xhigh",
+        "label": "Extra high"
+      },
+      {
+        "id": "max",
+        "label": "Max"
+      }
+    ],
+    "defaultEffort": "medium",
+    "contextWindows": [],
+    "fast": true
+  },
+  {
+    "id": "gpt-5.6-sol",
+    "name": "GPT-5.6-Sol",
+    "efforts": [
+      {
+        "id": "low",
+        "label": "Low"
+      },
+      {
+        "id": "medium",
+        "label": "Medium"
+      },
+      {
+        "id": "high",
+        "label": "High"
+      },
+      {
+        "id": "xhigh",
+        "label": "Extra high"
+      },
+      {
+        "id": "max",
+        "label": "Max"
+      },
+      {
+        "id": "ultra",
+        "label": "Ultra"
+      }
+    ],
+    "defaultEffort": "low",
+    "contextWindows": [],
+    "fast": true
+  },
+  {
+    "id": "gpt-5.6-terra",
+    "name": "GPT-5.6-Terra",
+    "efforts": [
+      {
+        "id": "low",
+        "label": "Low"
+      },
+      {
+        "id": "medium",
+        "label": "Medium"
+      },
+      {
+        "id": "high",
+        "label": "High"
+      },
+      {
+        "id": "xhigh",
+        "label": "Extra high"
+      },
+      {
+        "id": "max",
+        "label": "Max"
+      },
+      {
+        "id": "ultra",
+        "label": "Ultra"
+      }
+    ],
+    "defaultEffort": "medium",
+    "contextWindows": [],
+    "fast": true
+  },
+  {
+    "id": "gpt-5.6-luna",
+    "name": "GPT-5.6-Luna",
+    "efforts": [
+      {
+        "id": "low",
+        "label": "Low"
+      },
+      {
+        "id": "medium",
+        "label": "Medium"
+      },
+      {
+        "id": "high",
+        "label": "High"
+      },
+      {
+        "id": "xhigh",
+        "label": "Extra high"
+      },
+      {
+        "id": "max",
+        "label": "Max"
+      }
+    ],
+    "defaultEffort": "medium",
+    "contextWindows": [],
+    "fast": true
+  },
+  {
+    "id": "gpt-5.5",
+    "name": "GPT-5.5",
+    "efforts": [
+      {
+        "id": "low",
+        "label": "Low"
+      },
+      {
+        "id": "medium",
+        "label": "Medium"
+      },
+      {
+        "id": "high",
+        "label": "High"
+      },
+      {
+        "id": "xhigh",
+        "label": "Extra high"
+      }
+    ],
+    "defaultEffort": "medium",
+    "contextWindows": [],
+    "fast": true
+  }
+]

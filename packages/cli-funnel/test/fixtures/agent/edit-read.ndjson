@@ -1,0 +1,69 @@
+{"type": "system", "subtype": "init", "apiKeySource": "login", "cwd": "/private/tmp/cf-agent-test", "session_id": "sess-0001", "model": "GPT-5.4 Nano Low", "permissionMode": "default"}
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "create file a.txt containing hello, then read it back with a tool"}]}, "session_id": "sess-0001"}
+{"type": "thinking", "subtype": "delta", "text": "**Considering file operations**\n\nI'm", "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "thinking", "subtype": "delta", "text": " thinking", "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "thinking", "subtype": "delta", "text": " about", "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "thinking", "subtype": "delta", "text": " whether", "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "thinking", "subtype": "completed", "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "I"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "’ll"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": " create"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": " `/"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "tmp"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "/c"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "f"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "-agent"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "-test"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "/a"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": ".txt"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "`"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": " with"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": " the"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": " contents"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": " `"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "hello"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "`,"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": " then"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": " read"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": " it"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": " back"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": " using"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": " the"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": " file"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "-read"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": " tool"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": " to"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": " confirm"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": " it"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": " worked"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "."}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "I’ll create `/tmp/cf-agent-test/a.txt` with the contents `hello`, then read it back using the file-read tool to confirm it worked."}]}, "session_id": "sess-0001", "model_call_id": "mc-0001", "timestamp_ms": 1700000000000}
+{"type": "tool_call", "subtype": "started", "call_id": "call_fRG3", "tool_call": {"editToolCall": {"args": {"path": "/tmp/cf-agent-test/a.txt"}}, "hookAdditionalContexts": [], "toolCallId": "call_fRG3Tpv1gqyWgLcxqynid2Jt\nctc_0954057e98614cdb016abb7c7f5be887d19380121e469e0d72", "startedAtMs": "1790671999424"}, "model_call_id": "mc-0001", "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "tool_call", "subtype": "completed", "call_id": "call_fRG3", "tool_call": {"editToolCall": {"args": {"path": "/tmp/cf-agent-test/a.txt"}, "result": {"success": {"path": "/tmp/cf-agent-test/a.txt", "linesAdded": 1, "linesRemoved": 0, "message": "Success. Updated the following files:\nA /tmp/cf-agent-test/a.txt"}}}, "hookAdditionalContexts": [], "toolCallId": "call_fRG3Tpv1gqyWgLcxqynid2Jt\nctc_0954057e98614cdb016abb7c7f5be887d19380121e469e0d72", "startedAtMs": "1790671999424", "completedAtMs": "1790672000021"}, "model_call_id": "mc-0001", "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "tool_call", "subtype": "started", "call_id": "call_Yjnp", "tool_call": {"readToolCall": {"args": {"path": "/tmp/cf-agent-test/a.txt"}}, "hookAdditionalContexts": [], "toolCallId": "call_YjnpWqb4LbootD98qwKhxuuH\nfc_0954057e98614cdb016abb7c807df087d1bfda0bd6329b5415", "startedAtMs": "1790672000561"}, "model_call_id": "mc-0001", "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "tool_call", "subtype": "completed", "call_id": "call_Yjnp", "tool_call": {"readToolCall": {"args": {"path": "/tmp/cf-agent-test/a.txt"}, "result": {"success": {"content": "hello\n", "isEmpty": false, "exceededLimit": false, "totalLines": 2, "fileSize": 6, "path": "/tmp/cf-agent-test/a.txt", "readRange": {"startLine": 1, "endLine": 2}}}}, "hookAdditionalContexts": [], "toolCallId": "call_YjnpWqb4LbootD98qwKhxuuH\nfc_0954057e98614cdb016abb7c807df087d1bfda0bd6329b5415", "startedAtMs": "1790672000561", "completedAtMs": "1790672000682"}, "model_call_id": "mc-0001", "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Created"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": " `/"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "tmp"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "/c"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "f"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "-agent"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "-test"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "/a"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": ".txt"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "`"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": " with"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": " `"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "hello"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "`,"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": " and"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": " read"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": " it"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": " back"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": " successfully"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": ":\n\n"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "`"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "hello"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "`"}]}, "session_id": "sess-0001", "timestamp_ms": 1700000000000}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Created `/tmp/cf-agent-test/a.txt` with `hello`, and read it back successfully:\n\n`hello`"}]}, "session_id": "sess-0001"}
+{"type": "result", "subtype": "success", "duration_ms": 5826, "duration_api_ms": 5826, "is_error": false, "result": "I’ll create `/tmp/cf-agent-test/a.txt` with the contents `hello`, then read it back using the file-read tool to confirm it worked.Created `/tmp/cf-agent-test/a.txt` with `hello`, and read it back successfully:\n\n`hello`", "session_id": "sess-0001", "request_id": "req-0001", "usage": {"inputTokens": 15252, "outputTokens": 183, "cacheReadTokens": 27648, "cacheWriteTokens": 0}}
