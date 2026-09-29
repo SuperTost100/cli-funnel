@@ -4,7 +4,7 @@ If you are an AI coding assistant adding cli-funnel to a project, follow this or
 
 1. Run `npx cli-funnel doctor --json`. Read `installation.installed` and `auth.loggedIn` for each provider. If the provider the user wants is missing or signed out, tell the user to install it or run `npx cli-funnel login <provider>`. Do not try to sign in for them.
 2. Run `npx cli-funnel models <provider> --json`. Pick a model `id` from that output. Never invent an id and never use an alias.
-3. Install: `npm install cli-funnel`. For React UI, also `npm install @cli-funnel/react`.
+3. Install: `npm install cli-funnel`. For React UI, also `npm install cli-funnel-react`.
 4. Write one selection object using only values from step 2 and from `capabilities.access`. Use an absolute `cwd`.
 5. Call `funnel.run({ selection, prompt })`. Print `result.text`.
 6. If the user wants a UI, mount `createHandler` from `cli-funnel/server` behind a token and render `FunnelPicker`. See [UI components](ui.md).

@@ -1,5 +1,5 @@
 {
-  "name": "@cli-funnel/react",
+  "name": "cli-funnel-react",
   "version": "0.1.0",
   "description": "React hooks and components for cli-funnel: model picker, folder picker, access level, login and one-click update.",
   "license": "MIT",
@@ -47,8 +47,5 @@
     "antigravity",
     "react",
     "ai"
-  ],
-  "publishConfig": {
-    "access": "public"
-  }
+  ]
 }

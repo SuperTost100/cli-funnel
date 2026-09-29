@@ -54,4 +54,4 @@ After an update, run `cli-funnel doctor`. If the new version is outside the test
 
 ## In the UI
 
-`FunnelLogin` from `@cli-funnel/react` wraps all of this: status line, sign in, sign out, update, the sign-in link and the code box. See [UI components](ui.md).
+`FunnelLogin` from `cli-funnel-react` wraps all of this: status line, sign in, sign out, update, the sign-in link and the code box. See [UI components](ui.md).

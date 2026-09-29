@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { createClient } from "cli-funnel/client";
-import { ApprovalPrompt, FunnelLogin, FunnelPickerView, useRun, useSelection } from "@cli-funnel/react";
+import { ApprovalPrompt, FunnelLogin, FunnelPickerView, useRun, useSelection } from "cli-funnel-react";
 import { PatchBay } from "./PatchBay";
 
 declare const __SANDBOX__: string;

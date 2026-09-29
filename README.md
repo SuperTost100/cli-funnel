@@ -97,8 +97,8 @@ client.chat.completions.create(
 
 ```tsx
 import { createClient } from "cli-funnel/client";
-import { FunnelPicker, FunnelLogin, useProviders } from "@cli-funnel/react";
-import "@cli-funnel/react/styles.css";
+import { FunnelPicker, FunnelLogin, useProviders } from "cli-funnel-react";
+import "cli-funnel-react/styles.css";
 
 const client = createClient({ baseUrl: "/api/funnel" });
 

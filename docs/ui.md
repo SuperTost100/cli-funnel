@@ -1,6 +1,6 @@
 # UI components
 
-`@cli-funnel/react` has hooks for building your own UI and three small components. It talks to the HTTP handler from `cli-funnel/server`.
+`cli-funnel-react` has hooks for building your own UI and three small components. It talks to the HTTP handler from `cli-funnel/server`.
 
 ## Server side
 
@@ -35,8 +35,8 @@ The client has no React dependency. It works in any browser or runtime.
 ## Picker
 
 ```tsx
-import { FunnelPicker } from "@cli-funnel/react";
-import "@cli-funnel/react/styles.css";
+import { FunnelPicker } from "cli-funnel-react";
+import "cli-funnel-react/styles.css";
 
 <FunnelPicker
   client={client}
@@ -55,7 +55,7 @@ Styles use CSS variables prefixed `--cf-` and follow `prefers-color-scheme`. Ove
 ## Login and update panel
 
 ```tsx
-import { FunnelLogin, useProviders } from "@cli-funnel/react";
+import { FunnelLogin, useProviders } from "cli-funnel-react";
 
 const { providers, refresh } = useProviders(client);
 providers.map((p) => <FunnelLogin key={p.id} client={client} provider={p} onChange={refresh} />);
@@ -64,7 +64,7 @@ providers.map((p) => <FunnelLogin key={p.id} client={client} provider={p} onChan
 ## Run with approvals
 
 ```tsx
-import { useRun, ApprovalPrompt } from "@cli-funnel/react";
+import { useRun, ApprovalPrompt } from "cli-funnel-react";
 
 const run = useRun(client);
 
