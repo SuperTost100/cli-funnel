@@ -1,6 +1,6 @@
 {
   "name": "cli-funnel",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Use Claude Code, Codex, Cursor Agent and Antigravity CLIs like an API, on your subscription.",
   "license": "MIT",
   "type": "module",
