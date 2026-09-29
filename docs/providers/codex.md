@@ -30,6 +30,7 @@ Usage has no cost figure. `inputTokens` includes cached tokens, as Codex reports
 
 | Access | Approval policy | Sandbox | Behavior |
 | --- | --- | --- | --- |
+| `none` | `untrusted` | `read-only` | Every approval is denied without calling `onApproval`. The thread starts with tool features off (`shell_tool`, `unified_exec`, `apps`, `plugins`, `multi_agent`, and more), web search disabled, and every enabled MCP server from the user's or project's `config.toml` switched off by name. |
 | `supervised` | `untrusted` | `workspace-write` | Every command that is not on Codex's known-safe list and every file change becomes an `approval.request`. |
 | `accept-edits` | `untrusted` | `workspace-write` | File changes are allowed without asking. Commands still go to `onApproval`. |
 | `auto` | `on-request` | `workspace-write` | Codex's auto review agent (`approvalsReviewer: auto_review`) decides escalations. Commands run inside the sandbox without asking. |
@@ -38,6 +39,12 @@ Usage has no cost figure. `inputTokens` includes cached tokens, as Codex reports
 When `onApproval` is missing, requests are denied. Denied commands are declined with `decline`, so the turn continues and the model sees the refusal. Verified live: an approved `echo hi > a.txt` created the file, and a declined one did not.
 
 The `auto` level starts the thread with the auto review reviewer. A run inside the sandbox needs no review, which was verified. An escalation reviewed by the auto review agent was not exercised.
+
+Plugin and feature MCP servers are not overridden by name. Codex rejects the whole configuration when `mcp_servers.<name>.enabled` names a server no config file defines, and those servers go away with their feature. Verified live on 0.159.0: with `none`, a request to create a file and run `ls` produced no tool calls and no file.
+
+## Run options
+
+`system` goes to `developerInstructions` on `thread/start`. Images go as `image` input items with a `data:` URL. `responseSchema` goes to `outputSchema` on `turn/start`, and the final message is the JSON. All three were verified live.
 
 ## Models, effort and fast
 

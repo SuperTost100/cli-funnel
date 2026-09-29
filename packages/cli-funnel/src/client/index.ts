@@ -83,7 +83,10 @@ export function createClient(options: ClientOptions) {
     cancelLogin: (loginId: string) => post(`/logins/${loginId}/cancel`),
 
     /** Streams run events. The first event is `{ type: "run", runId }`, needed to answer approvals. */
-    run: (input: Pick<RunInput, "prompt" | "sessionId"> & { selection: Selection }, signal?: AbortSignal) =>
+    run: (
+      input: Pick<RunInput, "prompt" | "sessionId" | "system" | "attachments" | "responseSchema" | "maxOutputTokens"> & { selection: Selection },
+      signal?: AbortSignal,
+    ) =>
       events<RunEvent>("/run", input, signal),
     approve: (runId: string, approvalId: string, decision: ApprovalDecision) =>
       post(`/approvals/${runId}/${approvalId}`, { decision }),

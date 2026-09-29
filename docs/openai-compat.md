@@ -28,6 +28,10 @@ Ids are `<provider>/<model>`, for example `claude/claude-sonnet-5` or `codex/gpt
 | OpenAI field | cli-funnel |
 |---|---|
 | `messages` | Flattened into one prompt. With a session id, only the last user message is sent. |
+| `system` messages | `system`, joined in order |
+| `image_url` parts with a `data:` URL, last user message | `attachments`. Remote URLs are ignored, so the server never fetches for a client |
+| `response_format` of type `json_schema` | `responseSchema` |
+| `max_completion_tokens`, `max_tokens` | `maxOutputTokens` |
 | `stream: true` | Server-sent events, ending with `[DONE]`. |
 | `reasoning_effort` | `selection.effort` |
 | `usage.prompt_tokens`, `completion_tokens`, `total_tokens` | From the CLI's usage report, when it gives one. |

@@ -10,7 +10,7 @@ interface Selection {
   contextWindow?: number; // tokens, one of the model's contextWindows
   fast?: boolean;         // only when the model has a fast tier
   cwd: string;            // absolute path of the project
-  access: "supervised" | "accept-edits" | "auto" | "full";
+  access: "none" | "supervised" | "accept-edits" | "auto" | "full";
 }
 ```
 

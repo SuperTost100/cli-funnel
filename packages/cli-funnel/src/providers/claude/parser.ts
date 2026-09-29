@@ -74,6 +74,7 @@ function parseResult(r: Obj): FunnelEvent[] {
     };
     events.push({ type: "usage", usage });
   }
+  if (r.structured_output !== undefined) events.push({ type: "structured", data: r.structured_output });
   const denied = Array.isArray(r.permission_denials) && r.permission_denials.length > 0;
   const finishReason: FinishReason = denied ? "denied" : "stop";
   events.push({ type: "done", text, finishReason });

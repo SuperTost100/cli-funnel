@@ -43,6 +43,7 @@ It starts the real binary. Your runs count against the login the CLI already has
 
 | | Claude Code | Codex | Cursor Agent | Antigravity |
 |---|---|---|---|---|
+| No tools (`none`) | yes | yes | no | no |
 | Supervised (approve each action) | yes | yes | no | no |
 | Accept edits | yes | yes | no | yes |
 | Auto | yes | yes | yes | no |
@@ -51,6 +52,9 @@ It starts the real binary. Your runs count against the login the CLI already has
 | Fast mode | no | yes | yes | no |
 | Live model list | no, bundled | yes | yes | yes |
 | Resume a conversation | yes | yes | yes | yes |
+| System prompt | yes | yes | in the prompt | in the prompt |
+| Image input | yes | yes | no | no |
+| JSON schema output | yes | yes | in the prompt | yes |
 | Sign-in from your UI | link | link | link | terminal handoff |
 
 Every "no" in this table is a limit of the CLI, not of cli-funnel. cli-funnel does not fake a feature. When a CLI cannot enforce something headlessly, the option is not offered. [Access levels](docs/access-levels.md) explains each gap.
@@ -114,6 +118,7 @@ const client = createClient({ baseUrl: "/api/funnel" });
 - [Quickstart](docs/quickstart.md)
 - [Concepts](docs/concepts.md)
 - [Selection](docs/selection.md) and [Access levels](docs/access-levels.md)
+- [Run options](docs/run-options.md): system prompt, images, JSON answers, output limit
 - [Sign-in and updates](docs/auth-and-updates.md)
 - [UI components](docs/ui.md)
 - [OpenAI compatibility](docs/openai-compat.md) and [API keys](docs/api-keys.md)
@@ -125,7 +130,7 @@ const client = createClient({ baseUrl: "/api/funnel" });
 
 ## Known limits
 
-Runs inherit the user's own CLI setup. Claude Code loads the user's CLAUDE.md, hooks and skills, so a one-line prompt can cost about 20k input tokens. Cursor Agent follows the user's Cursor approval settings, and cli-funnel always passes an explicit approval flag so those settings cannot silently widen access.
+Runs inherit the user's own CLI setup. Claude Code loads the user's CLAUDE.md, hooks and skills, so a one-line prompt can cost about 20k input tokens. Access `none` skips all of that on Claude Code and cuts most of it on Codex. Cursor Agent follows the user's Cursor approval settings, and cli-funnel always passes an explicit approval flag so those settings cannot silently widen access.
 
 Fast mode on Claude Code is off because the CLI does not enable it headlessly. The fable model needs usage credits on a Pro plan.
 

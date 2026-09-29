@@ -52,6 +52,14 @@ Print mode has "access to all tools, including write and shell" per `--help`. On
 
 `agent acp` speaks Agent Client Protocol over stdio and defines `session/request_permission`. In testing, an ACP session that created a file never sent a permission request, and the file was written. The modes offered are `agent`, `plan` and `ask`, with no way to force approval prompts from the client. With the tested config the approve button could not be reached, so `supervised` and `approvals` are off. This was not tested against a config that gates tools, so the ACP route may work there. Revisit if that changes.
 
+### Why there is no `none`
+
+`--mode ask` is documented as read-only and `--sandbox enabled` turns on the sandbox. On 2026.09.28, `--mode ask --sandbox enabled` still ran `ls ~` through the shell tool, and it refused a `touch` only because the model declined. With `--auto-review --sandbox enabled`, a `touch` outside the workspace succeeded. Neither is enforcement, so `none` is off.
+
+### Run options
+
+The CLI has no system prompt or schema flag. `system` goes in front of the prompt inside `<instructions>`, and `responseSchema` is asked for at the end of the prompt. The result is parsed into `structured` like any other. Images are refused.
+
 ## Models
 
 `agent --list-models` prints flat ids such as `gpt-5.3-codex-high-fast` and `claude-opus-5-thinking-high`. `models()` groups them:

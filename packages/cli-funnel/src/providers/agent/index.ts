@@ -2,6 +2,7 @@ import { fromManifest, loadBundledManifest } from "../../catalog/manifest.js";
 import { compareVersions, exec, spawnStream } from "../../util/process.js";
 import { detectInstallation, findBinary, runLogout, runUpdate, spawnLogin } from "../base.js";
 import { FunnelError, type AuthStatus, type FunnelEvent, type ModelInfo, type Provider, type RunInput } from "../../types.js";
+import { composePrompt } from "../prompt.js";
 import { groupModels, parseModelList, parseStatus, StreamMapper, toCliModel } from "./parser.js";
 
 const BINARY = "agent";
@@ -43,7 +44,7 @@ export function buildArgs(input: RunInput, model: string): string[] {
     ...accessFlags(selection.access),
     ...(input.sessionId ? ["--resume", input.sessionId] : []),
     "--",
-    input.prompt,
+    composePrompt(input, { system: true, schema: true }),
   ];
 }
 
@@ -89,7 +90,18 @@ export const agentProvider: Provider = {
   id: "agent",
   displayName: "Cursor Agent",
   binary: BINARY,
-  capabilities: { access: ["auto", "full"], effort: true, contextWindow: false, fast: true, resume: true, approvals: false },
+  // No `none`: in testing, `--mode ask` with `--sandbox enabled` still ran shell commands, and only the model's own refusal stopped writes.
+  capabilities: {
+    access: ["auto", "full"],
+    effort: true,
+    contextWindow: false,
+    fast: true,
+    resume: true,
+    approvals: false,
+    images: false,
+    system: "prompt",
+    schema: "prompt",
+  },
   detect: () => detectInstallation(BINARY, TESTED_RANGE),
   authStatus,
   login: (options) =>

@@ -11,6 +11,7 @@ import type {
   RunInput,
   UpdateResult,
 } from "../types.js";
+import { parseJsonAnswer } from "./prompt.js";
 
 export function binaryEnvVar(binary: string): string {
   return `CLI_FUNNEL_${binary.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_BIN`;
@@ -147,6 +148,9 @@ export async function collect(
       case "usage":
         result.usage = e.usage;
         break;
+      case "structured":
+        result.structured = e.data;
+        break;
       case "done":
         if (e.text) result.text = e.text;
         result.finishReason = e.finishReason;
@@ -154,6 +158,13 @@ export async function collect(
       case "error":
         result.finishReason = "error";
         throw Object.assign(new Error(e.message), { code: e.code });
+    }
+  }
+  if (input.responseSchema && result.structured === undefined && result.finishReason === "stop") {
+    try {
+      result.structured = parseJsonAnswer(result.text);
+    } catch (err) {
+      result.structuredError = `The answer is not JSON: ${err instanceof Error ? err.message : String(err)}`;
     }
   }
   return result;

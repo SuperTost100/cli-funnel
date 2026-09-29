@@ -6,7 +6,7 @@ A provider is one object that implements `Provider` from `src/types.ts`. Add a f
 
 | Member | Job |
 |---|---|
-| `capabilities` | The access levels the CLI can really enforce headlessly, and whether it has effort, context window, fast mode and resume. |
+| `capabilities` | The access levels the CLI can really enforce headlessly, whether it has effort, context window, fast mode and resume, and how it takes a system prompt, images and a response schema. |
 | `detect()` | Find the binary, read its version, report the tested range. `detectInstallation` in `providers/base.ts` does most of it. |
 | `authStatus()` | Read sign-in state without spending quota. |
 | `login()` | Start the CLI's login and yield `open-url`, `code-prompt`, `needs-terminal`, `done` or `error`. `spawnLogin` covers CLIs that print a URL. |

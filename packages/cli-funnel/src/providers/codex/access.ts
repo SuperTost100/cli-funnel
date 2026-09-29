@@ -13,6 +13,9 @@ export interface AccessPlan {
 
 export function planAccess(access: AccessLevel): AccessPlan {
   switch (access) {
+    case "none":
+      // Read-only sandbox, and every approval is answered "deny" without asking the caller.
+      return { approvalPolicy: "untrusted", sandbox: "read-only", approvalsReviewer: "user", autoAllowFileChanges: false };
     case "supervised":
       return { approvalPolicy: "untrusted", sandbox: "workspace-write", approvalsReviewer: "user", autoAllowFileChanges: false };
     case "accept-edits":

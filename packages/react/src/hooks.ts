@@ -8,11 +8,15 @@ import type {
   LoginEvent,
   ModelInfo,
   ProviderOverview,
+  RunInput,
   Selection,
   Usage,
 } from "cli-funnel/client";
 
 export type SelectionField = keyof Selection;
+
+/** Extra fields for one `useRun().send` call. */
+export type RunOptions = Pick<RunInput, "system" | "attachments" | "responseSchema" | "maxOutputTokens">;
 
 /** Loads installed providers and their login state. */
 export function useProviders(client: FunnelClient) {
@@ -74,7 +78,8 @@ export function useSelection(
     const pickedEffort = model?.id === picked?.model && model?.efforts.some((e) => e.id === picked?.effort) ? picked?.effort : undefined;
     const effort = model?.efforts.some((e) => e.id === draft.effort) ? draft.effort : pickedEffort ?? model?.defaultEffort ?? model?.efforts[0]?.id;
     const contextWindow = model?.contextWindows.includes(draft.contextWindow ?? -1) ? draft.contextWindow : model?.defaultContextWindow ?? model?.contextWindows[0];
-    const access = cap.access.includes(draft.access as never) ? draft.access : cap.access[0];
+    // `none` is never the default: coding UIs expect an agent that can act. Pick it explicitly or lock it.
+    const access = cap.access.includes(draft.access as never) ? draft.access : (cap.access.find((a) => a !== "none") ?? cap.access[0]);
     return {
       provider: providerId,
       model: model?.id,
@@ -190,7 +195,7 @@ export function useRun(client: FunnelClient) {
   const abort = useRef<AbortController | undefined>(undefined);
 
   const send = useCallback(
-    async (prompt: string, selection: Selection) => {
+    async (prompt: string, selection: Selection, options: RunOptions = {}) => {
       abort.current = new AbortController();
       setText("");
       setEvents([]);
@@ -200,7 +205,7 @@ export function useRun(client: FunnelClient) {
       try {
         // A session belongs to one provider and folder. Resuming it anywhere else fails inside the CLI.
         const resume = session && session.provider === selection.provider && session.cwd === selection.cwd ? session.id : undefined;
-        for await (const e of client.run({ prompt, selection, sessionId: resume }, abort.current.signal)) {
+        for await (const e of client.run({ ...options, prompt, selection, sessionId: resume }, abort.current.signal)) {
           if (e.type === "run") {
             runId.current = e.runId;
             continue;

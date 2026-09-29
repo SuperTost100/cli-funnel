@@ -49,7 +49,9 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
   };
 
   async function run(req: Request): Promise<Response> {
-    const body = (await req.json()) as { selection: Selection; prompt: string; sessionId?: string };
+    const body = (await req.json()) as Pick<RunInput, "prompt" | "sessionId" | "system" | "attachments" | "responseSchema" | "maxOutputTokens"> & {
+      selection: Selection;
+    };
     if (!cwdAllowed(body.selection?.cwd ?? "")) {
       return json({ error: "cwd is outside the allowed roots. Set fsRoots on the handler." }, 403);
     }
@@ -58,6 +60,10 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
     const input: RunInput = {
       selection: body.selection,
       prompt: body.prompt,
+      system: body.system,
+      attachments: body.attachments,
+      responseSchema: body.responseSchema,
+      maxOutputTokens: body.maxOutputTokens,
       sessionId: body.sessionId,
       signal: req.signal,
       onApproval: (request) =>

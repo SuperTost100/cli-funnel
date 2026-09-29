@@ -23,7 +23,13 @@ Runs use `agy --print=<prompt> --output-format stream-json` with stdin closed. T
 - `full` passes `--dangerously-skip-permissions`. Every tool runs without a check.
 - `auto` does not exist in `agy` and is not offered.
 
+That is not true of every shell command. On 1.2.13, a `touch` outside the workspace ran without a check both in the default print mode and with `--mode plan --sandbox`. `--mode plan` has no effect together with `--disable-slash-commands`, and the CLI prints a warning saying so. For that reason there is no `none` level.
+
 Denied tools appear as `tool.end` events whose error starts with `denied:`. If the run produced no text and something was denied, the finish reason is `denied`.
+
+## Run options
+
+The CLI has no system prompt flag, so `system` goes in front of the prompt inside `<instructions>`. `responseSchema` goes to `--json-schema`, and the `result` event carries the parsed answer in `structured_output`. Verified live. Images are refused.
 
 ## Models
 

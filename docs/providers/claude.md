@@ -34,12 +34,17 @@ Usage has no `costUsd`. The CLI reports a list-price estimate, not what a subscr
 
 | Access | Permission mode | Approvals |
 | --- | --- | --- |
+| `none` | `manual`, plus `--tools ""`, `--strict-mcp-config`, `--setting-sources ""` | None. No tool exists to ask about |
 | `supervised` | `manual` | Every prompt goes to `onApproval` |
 | `accept-edits` | `acceptEdits` | Other prompts go to `onApproval` when it is set |
 | `auto` | `auto` | Same as above |
 | `full` | `bypassPermissions` | None |
 
 Approvals work. The CLI writes a `control_request` (subtype `can_use_tool`) to stdout and waits. The provider answers on stdin with a `control_response` carrying `{behavior: "allow", updatedInput}` or `{behavior: "deny", message}`. This only happens with `--permission-prompt-tool stdio`. The `--permission-prompts host` flag alone is not enough: without the stdio tool the CLI denies the call and lists it in `permission_denials`, and `done` gets `finishReason: "denied"`. The help text lists `manual` as the mode name, not `default`, though `init` reports it as `default`.
+
+## Run options
+
+`system` goes to `--system-prompt` at `none`, which replaces Claude Code's own prompt, and to `--append-system-prompt` at the other levels. Images go as `image` blocks in the stream-json user message. `responseSchema` goes to `--json-schema`, and the `result` message carries the parsed answer in `structured_output`. All three were verified live on 2.1.285. A `none` run with an image and a schema used about 1,200 input tokens.
 
 ## Models
 

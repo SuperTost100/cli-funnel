@@ -2,10 +2,13 @@ export type CliProviderId = "claude" | "codex" | "agent" | "antigravity";
 export type ApiProviderId = "anthropic-api" | "openai-api";
 export type ProviderId = CliProviderId | ApiProviderId;
 
-/** How much the agent may do on the machine. Providers list the levels they can really enforce. */
-export type AccessLevel = "supervised" | "accept-edits" | "auto" | "full";
+/**
+ * How much the agent may do on the machine. Providers list the levels they can really enforce.
+ * `none` is text in, text out: no file writes, no commands, no MCP servers, no approvals.
+ */
+export type AccessLevel = "none" | "supervised" | "accept-edits" | "auto" | "full";
 
-export const ACCESS_LEVELS: readonly AccessLevel[] = ["supervised", "accept-edits", "auto", "full"];
+export const ACCESS_LEVELS: readonly AccessLevel[] = ["none", "supervised", "accept-edits", "auto", "full"];
 
 export interface EffortOption {
   /** Value passed to the CLI, for example "high". */
@@ -37,6 +40,12 @@ export interface Capabilities {
   fast: boolean;
   resume: boolean;
   approvals: boolean;
+  /** Accepts image attachments. */
+  images: boolean;
+  /** `native` when the CLI or API takes a system prompt. `prompt` means cli-funnel puts it in front of the prompt. */
+  system: "native" | "prompt";
+  /** `native` when the CLI or API enforces `responseSchema`. `prompt` means the schema is only asked for in the prompt. */
+  schema: "native" | "prompt";
 }
 
 /** The whole UI state in one serializable object. Hardcode it or let the UI produce it. */
@@ -61,6 +70,22 @@ export interface Usage {
   costUsd?: number;
 }
 
+/** An image sent with the prompt. `data` is base64 without a `data:` prefix. */
+export interface ImageAttachment {
+  type: "image";
+  mediaType: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
+  data: string;
+}
+
+export type Attachment = ImageAttachment;
+
+/** A JSON Schema for the final answer. Anthropic and Codex need `additionalProperties: false` on every object. */
+export interface ResponseSchema {
+  /** Short name, used by APIs that label schemas. Default "response". */
+  name?: string;
+  schema: Record<string, unknown>;
+}
+
 export type FinishReason = "stop" | "cancelled" | "error" | "denied";
 
 export interface ApprovalRequest {
@@ -82,6 +107,8 @@ export type FunnelEvent =
   /** A provider yields this, then awaits `onApproval` for the answer. */
   | { type: "approval.request"; request: ApprovalRequest }
   | { type: "usage"; usage: Usage }
+  /** The parsed answer when the provider reports structured output itself. */
+  | { type: "structured"; data: unknown }
   | { type: "done"; text: string; finishReason: FinishReason }
   | { type: "error"; message: string; code?: string };
 
@@ -97,11 +124,23 @@ export interface RunResult {
   toolCalls: { id: string; name: string; input?: unknown; error?: string }[];
   /** Tool calls the CLI refused because nobody could approve them. */
   deniedActions: string[];
+  /** The parsed answer when `responseSchema` was set. Not validated against the schema: do that yourself. */
+  structured?: unknown;
+  /** Why `structured` is missing when `responseSchema` was set, for example text that is not JSON. */
+  structuredError?: string;
 }
 
 export interface RunInput {
   selection: Selection;
   prompt: string;
+  /** Instructions for the whole run. See `capabilities.system` for how each provider applies them. */
+  system?: string;
+  /** Images sent with the prompt. Providers without `capabilities.images` refuse the run. */
+  attachments?: Attachment[];
+  /** Ask for a JSON answer that matches this schema. The result carries it in `structured`. */
+  responseSchema?: ResponseSchema;
+  /** Upper bound on output tokens. API providers only. CLIs set their own limit. */
+  maxOutputTokens?: number;
   /** Continue an earlier conversation. Use the `sessionId` from a previous result. */
   sessionId?: string;
   signal?: AbortSignal;
