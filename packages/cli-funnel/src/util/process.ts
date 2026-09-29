@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, accessSync, constants } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -13,11 +13,51 @@ const EXTRA_DIRS = [
   "/usr/local/bin",
 ];
 
-/** Finds a CLI on PATH plus the usual install dirs. GUI apps often start with a thin PATH. */
+const MARK = "__CLI_FUNNEL_ENV__";
+let shellPath: string[] | undefined;
+
+/**
+ * PATH as the user's login shell sets it, read once and cached. An app started from the macOS Dock,
+ * Finder or a Linux desktop launcher inherits a minimal PATH without nvm, asdf, pnpm or Homebrew,
+ * and then cannot find CLIs, or `node` for CLIs that are Node scripts. Windows GUI apps get the full
+ * PATH already, so nothing runs there. Set CLI_FUNNEL_NO_SHELL_PATH=1 to skip it.
+ */
+export function loginShellPath(refresh = false): string[] {
+  if (shellPath && !refresh) return shellPath;
+  shellPath = [];
+  if (process.platform === "win32" || process.env.CLI_FUNNEL_NO_SHELL_PATH === "1") return shellPath;
+  const shell = process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/sh");
+  try {
+    // `env` prints PATH colon-separated in every shell, fish included. The markers skip anything
+    // the user's rc files print. stdin is closed so an interactive shell cannot wait for input.
+    const out = execFileSync(shell, ["-ilc", `echo ${MARK}; /usr/bin/env; echo ${MARK}`], {
+      encoding: "utf8",
+      timeout: 5_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const line = out.split(MARK)[1]?.split("\n").find((l) => l.startsWith("PATH="));
+    if (line) shellPath = line.slice(5).split(":").filter(Boolean);
+  } catch {
+    /* a broken or slow rc file leaves the process PATH as it was */
+  }
+  return shellPath;
+}
+
+/** Directories searched for CLIs, in order: the process PATH, the login shell PATH, then common install dirs. */
+export function searchPath(): string[] {
+  return [...new Set([...(process.env.PATH ?? "").split(delimiter).filter(Boolean), ...loginShellPath(), ...EXTRA_DIRS])];
+}
+
+/** Environment for a child CLI: the full search path, so Node-based CLIs find `node` too. */
+export function childEnv(extra?: Record<string, string | undefined>): NodeJS.ProcessEnv {
+  return { ...process.env, PATH: searchPath().join(delimiter), ...extra };
+}
+
+/** Finds a CLI on PATH, the login shell PATH and the usual install dirs. GUI apps often start with a thin PATH. */
 export function resolveBinary(name: string, envVar?: string): string | undefined {
   const override = envVar ? process.env[envVar] : undefined;
   if (override && existsSync(override)) return override;
-  const dirs = [...(process.env.PATH ?? "").split(delimiter), ...EXTRA_DIRS];
+  const dirs = searchPath();
   const exts = process.platform === "win32" ? [".exe", ".cmd", ".bat", ""] : [""];
   for (const dir of dirs) {
     for (const ext of exts) {
@@ -52,7 +92,7 @@ export function exec(file: string, args: string[], opts: ExecOptions = {}): Prom
   return new Promise((resolve, reject) => {
     const child = spawn(file, args, {
       cwd: opts.cwd,
-      env: { ...process.env, ...opts.env },
+      env: childEnv(opts.env),
       stdio: ["pipe", "pipe", "pipe"],
       signal: opts.signal,
     });
@@ -94,7 +134,7 @@ export function spawnStream(
 ): Streamed {
   const child = spawn(file, args, {
     cwd: opts.cwd,
-    env: { ...process.env, ...opts.env },
+    env: childEnv(opts.env),
     stdio: ["pipe", "pipe", "pipe"],
   });
   const channel = new Channel<unknown>();

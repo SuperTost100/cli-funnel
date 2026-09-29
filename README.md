@@ -68,6 +68,8 @@ npx cli-funnel doctor
 
 `doctor` shows which CLIs it found, their versions, and whether you are signed in.
 
+Apps started from the macOS Dock or a Linux desktop launcher get a minimal PATH. cli-funnel reads the PATH from your login shell once, searches it for the CLIs, and passes it to every CLI it starts, so tools installed through nvm, asdf, pnpm or Homebrew work from a GUI app. Set `CLI_FUNNEL_NO_SHELL_PATH=1` to skip that, or `CLI_FUNNEL_<BINARY>_BIN` to point at one binary directly.
+
 ## Use it from a terminal
 
 ```bash

@@ -1,6 +1,6 @@
 import { Channel } from "../util/channel.js";
 import { spawn, type ChildProcess } from "node:child_process";
-import { compareVersions, exec, firstUrl, parseVersion, resolveBinary } from "../util/process.js";
+import { childEnv, compareVersions, exec, firstUrl, parseVersion, resolveBinary } from "../util/process.js";
 import type {
   AuthStatus,
   FunnelEvent,
@@ -55,7 +55,7 @@ export function spawnLogin(
     channel.push({ type: "error", message: `${binary} is not installed.` });
     channel.end();
   } else {
-    child = spawn(path, args, { env: { ...process.env, ...opts.env }, signal: opts.signal, stdio: ["pipe", "pipe", "pipe"] });
+    child = spawn(path, args, { env: childEnv(opts.env), signal: opts.signal, stdio: ["pipe", "pipe", "pipe"] });
     child.stdin?.on("error", () => {});
     const seen = new Set<string>();
     const scan = (text: string) => {
