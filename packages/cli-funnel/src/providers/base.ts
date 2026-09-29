@@ -1,7 +1,6 @@
 import { Channel } from "../util/channel.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { compareVersions, exec, firstUrl, parseVersion, resolveBinary } from "../util/process.js";
-import { parseJsonAnswer } from "./prompt.js";
 import type {
   AuthStatus,
   FunnelEvent,
@@ -12,6 +11,7 @@ import type {
   RunInput,
   UpdateResult,
 } from "../types.js";
+import { parseJsonAnswer } from "./prompt.js";
 
 export function binaryEnvVar(binary: string): string {
   return `CLI_FUNNEL_${binary.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_BIN`;
