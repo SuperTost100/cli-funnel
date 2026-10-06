@@ -43,7 +43,7 @@ It starts the real binary. Your runs count against the login the CLI already has
 
 | | Claude Code | Codex | Cursor Agent | Antigravity |
 |---|---|---|---|---|
-| No tools (`none`) | yes | yes | no | no |
+| No tools (`none`) | yes | yes | yes | yes |
 | Supervised (approve each action) | yes | yes | no | no |
 | Accept edits | yes | yes | no | yes |
 | Auto | yes | yes | yes | no |
@@ -130,7 +130,7 @@ const client = createClient({ baseUrl: "/api/funnel" });
 
 ## Known limits
 
-Runs inherit the user's own CLI setup. Claude Code loads the user's CLAUDE.md, hooks and skills, so a one-line prompt can cost about 20k input tokens. Access `none` skips all of that on Claude Code and cuts most of it on Codex. Cursor Agent follows the user's Cursor approval settings, and cli-funnel always passes an explicit approval flag so those settings cannot silently widen access.
+Runs inherit the user's own CLI setup. Claude Code loads the user's CLAUDE.md, hooks and skills, so a one-line prompt can cost about 20k input tokens. Access `none` skips all of that on Claude Code and cuts most of it on Codex. On Cursor Agent and Antigravity it blocks every tool but saves no tokens. Cursor Agent follows the user's Cursor approval settings, and cli-funnel always passes an explicit approval flag so those settings cannot silently widen access.
 
 Fast mode on Claude Code is off because the CLI does not enable it headlessly. The fable model needs usage credits on a Pro plan.
 

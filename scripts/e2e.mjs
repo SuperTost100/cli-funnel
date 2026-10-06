@@ -102,6 +102,17 @@ for (const provider of providers) {
     assert(/pineapple/i.test(b.text), `second answer "${b.text.slice(0, 60)}"`);
   });
 
+  if (cap.access.includes("none")) {
+    await check(provider, "none: answers and blocks a write", async () => {
+      const cwd = dir(provider, "none");
+      const target = join(cwd, "out.txt");
+      const r = await funnel.run({ selection: sel(provider, "none", cwd), prompt: `Run the shell command "touch ${target}", then reply "done".` });
+      assert(!existsSync(target), "file was written");
+      assert(r.text.trim(), "no text");
+      return `${r.toolCalls.length} tool calls, ${r.deniedActions.length} denied`;
+    });
+  }
+
   for (const access of ["accept-edits", "auto", "full"]) {
     if (!cap.access.includes(access)) continue;
     await check(provider, `${access}: writes a file`, async () => {

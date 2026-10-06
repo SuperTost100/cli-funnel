@@ -1,6 +1,8 @@
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { agentProvider, buildArgs } from "../src/providers/agent/index.js";
+import { agentProvider, buildArgs, NONE_PERMISSIONS, noneWorkspace } from "../src/providers/agent/index.js";
 import { groupModels, parseModelList, parseStatus, StreamMapper, toCliModel } from "../src/providers/agent/parser.js";
 import { collect } from "../src/providers/base.js";
 import { compareVersions, parseVersion } from "../src/util/process.js";
@@ -57,6 +59,18 @@ describe("stream mapping", () => {
     const ends = events.filter((e) => e.type === "tool.end") as { output?: string; error?: string }[];
     expect(ends[0]?.output).toBe("cfx\n");
     expect(ends[1]?.error).toBe("File not found");
+  });
+
+  it("marks calls refused by deny rules as denied", async () => {
+    const events = replay("none-denied.ndjson");
+    const ends = events.filter((e) => e.type === "tool.end") as { error?: string }[];
+    expect(ends.filter((e) => e.error?.startsWith("denied: Command blocked by permissions configuration"))).toHaveLength(2);
+    expect(events.at(-1)).toMatchObject({ type: "done", finishReason: "denied" });
+    async function* gen() {
+      yield* events;
+    }
+    const res = await collect(gen(), { selection: sel({ access: "none" }), prompt: "x" });
+    expect(res.deniedActions).toEqual(["shell", "shell"]);
   });
 
   it("turns an error result into an error event", () => {
@@ -123,6 +137,28 @@ describe("run arguments and access", () => {
     expect(() => buildArgs(input({ access: "accept-edits" }), "m")).toThrow(/cannot enforce/);
   });
 
+  it("runs none in its own workspace with ask mode and no approval flag", () => {
+    const args = buildArgs(input({ access: "none", cwd: "/tmp/project" }), "m", "/cache/agent-none");
+    expect(args).toEqual(expect.arrayContaining(["--workspace", "/cache/agent-none", "--mode", "ask"]));
+    expect(args).not.toContain("/tmp/project");
+    expect(args).not.toContain("--force");
+    expect(args).not.toContain("--auto-review");
+  });
+
+  it("denies shell, reads, writes, fetches and MCP tools for none", async () => {
+    expect(NONE_PERMISSIONS.permissions.deny).toEqual(["Shell(*)", "Read(**)", "Write(**)", "WebFetch(*)", "Mcp(*:*)"]);
+    const old = process.env.XDG_CACHE_HOME;
+    process.env.XDG_CACHE_HOME = mkdtempSync(join(tmpdir(), "cf-cache-"));
+    try {
+      const dir = await noneWorkspace();
+      expect(readdirSync(dir)).toEqual([".cursor"]);
+      expect(JSON.parse(readFileSync(join(dir, ".cursor", "cli.json"), "utf8"))).toEqual(NONE_PERMISSIONS);
+    } finally {
+      if (old === undefined) delete process.env.XDG_CACHE_HOME;
+      else process.env.XDG_CACHE_HOME = old;
+    }
+  });
+
   it("passes resume, workspace and the prompt after --", () => {
     const args = buildArgs(input({ cwd: "/tmp/x" }, "chat-1"), "m1");
     expect(args).toEqual(expect.arrayContaining(["--resume", "chat-1", "--workspace", "/tmp/x", "--model", "m1", "--trust"]));
@@ -131,7 +167,7 @@ describe("run arguments and access", () => {
 
   it("does not claim approvals", () => {
     expect(agentProvider.capabilities.approvals).toBe(false);
-    expect(agentProvider.capabilities.access).toEqual(["auto", "full"]);
+    expect(agentProvider.capabilities.access).toEqual(["none", "auto", "full"]);
   });
 });
 
@@ -170,5 +206,14 @@ describe.skipIf(process.env.CLI_FUNNEL_LIVE !== "1")("live", () => {
     const next = { selection, prompt: "say hi again", sessionId: first.sessionId };
     const second = await collect(agentProvider.run(next), next);
     expect(second.sessionId).toBe(first.sessionId);
+  }, 120_000);
+
+  it("none answers and blocks a shell write", async () => {
+    const target = join(mkdtempSync(join(tmpdir(), "cf-agent-none-")), "out.txt");
+    const selection = sel({ model: "gpt-5.4-nano", effort: "low", cwd: tmpdir(), access: "none" });
+    const prompt = `Run the shell command "touch ${target}", then reply "done".`;
+    const res = await collect(agentProvider.run({ selection, prompt }), { selection, prompt });
+    expect(existsSync(target)).toBe(false);
+    expect(res.text.length).toBeGreaterThan(0);
   }, 120_000);
 });
