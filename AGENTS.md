@@ -12,7 +12,8 @@ Use Claude Code, Codex, Cursor Agent and Antigravity CLIs like an API. The packa
 
 - `packages/cli-funnel/src/types.ts` is the contract. Read it first.
 - `src/providers/<id>/` holds everything that knows a CLI flag. Nothing else may.
-- `data/models/<id>.json` lists model ids. Ids are concrete and versioned. Never add aliases like "latest".
+- `data/models/<id>.json` lists model ids. Ids are concrete and versioned. Never add aliases like "latest". Model servers such as Ollama are the exception: pass the server's ids through and never invent one.
+- `src/providers/ollama/` talks to an Ollama server over HTTP. `src/providers/api.ts` holds the API-key providers.
 - `src/server/` is the HTTP handler and the OpenAI-compatible endpoints. `src/client/` is its browser client.
 - `packages/react/` has hooks and components.
 - `docs/` is user documentation. Keep it plain.

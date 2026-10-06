@@ -8,6 +8,7 @@ export const CABLE: Record<string, string> = {
   "anthropic-api": "#2447C6",
   "openai-api": "#12805C",
   "gemini-api": "#B7861A",
+  ollama: "#13212B",
 };
 
 const ROW = 46;

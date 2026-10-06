@@ -3,6 +3,7 @@ import { validateSelection } from "./selection.js";
 import { collect } from "./providers/base.js";
 import { PROVIDERS } from "./providers/index.js";
 import { createApiProviders, type ApiKeys } from "./providers/api.js";
+import { createOllamaProvider, type OllamaOptions } from "./providers/ollama/index.js";
 import {
   FunnelError,
   type AuthStatus,
@@ -26,6 +27,8 @@ export interface FunnelOptions {
   providers?: Partial<Record<ProviderId, Provider>>;
   /** API keys for the API providers. Falls back to ANTHROPIC_API_KEY, OPENAI_API_KEY and GEMINI_API_KEY. */
   apiKeys?: ApiKeys;
+  /** Ollama server settings. Without them the provider uses OLLAMA_HOST or 127.0.0.1:11434, and reports itself not installed when no server answers. */
+  ollama?: OllamaOptions;
 }
 
 export interface ProviderOverview {
@@ -42,7 +45,12 @@ export interface RunStream extends AsyncIterable<FunnelEvent> {
 }
 
 export function createFunnel(options: FunnelOptions = {}) {
-  const registry: Record<ProviderId, Provider> = { ...PROVIDERS, ...(options.apiKeys ? createApiProviders(options.apiKeys) : {}), ...options.providers } as Record<ProviderId, Provider>;
+  const registry: Record<ProviderId, Provider> = {
+    ...PROVIDERS,
+    ...(options.apiKeys ? createApiProviders(options.apiKeys) : {}),
+    ...(options.ollama ? { ollama: createOllamaProvider(options.ollama) } : {}),
+    ...options.providers,
+  } as Record<ProviderId, Provider>;
   const provider = (id: ProviderId): Provider => {
     const p = registry[id];
     if (!p) throw new FunnelError(`Unknown provider "${id}".`, "invalid-selection");
@@ -52,7 +60,7 @@ export function createFunnel(options: FunnelOptions = {}) {
   async function prepare(input: RunInput) {
     const p = provider(input.selection.provider);
     const install = await p.detect();
-    if (!install.installed) throw new FunnelError(`${p.displayName} CLI is not installed.`, "not-installed");
+    if (!install.installed) throw new FunnelError(install.detail ?? `${p.displayName} CLI is not installed.`, "not-installed");
     const models = options.allowUnlistedModels ? undefined : await p.models();
     validateSelection(input.selection, p, models);
     if (input.selection.access === "supervised" && !input.onApproval) {

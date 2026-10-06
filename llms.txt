@@ -13,13 +13,14 @@
 - [UI components](docs/ui.md): React hooks, picker, login panel, approvals
 - [OpenAI compatibility](docs/openai-compat.md)
 - [API keys](docs/api-keys.md)
+- [Ollama](docs/providers/ollama.md): local models, no key
 - [Adding a provider](docs/adding-a-provider.md)
 - [Keeping up with CLI changes](docs/maintenance.md)
 - [Terms and limits](docs/tos-notes.md)
 
 ## Facts
 
-- Model ids are concrete versioned names. Get them from `cli-funnel models <provider> --json`.
+- Model ids are concrete versioned names. Get them from `cli-funnel models <provider> --json`. Ollama ids are the server's own names, such as `llama3.2:3b`.
 - `access: "supervised"` needs an `onApproval` callback and is not available on every provider. Check `capabilities.access`.
 - `funnel.run()` returns `{ text, usage, sessionId, model, finishReason, toolCalls, deniedActions }`.
 - Do not run `login`, `logout` or `update` without asking the user.

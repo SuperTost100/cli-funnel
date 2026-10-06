@@ -1,6 +1,8 @@
 export type CliProviderId = "claude" | "codex" | "agent" | "antigravity";
 export type ApiProviderId = "anthropic-api" | "openai-api" | "gemini-api";
-export type ProviderId = CliProviderId | ApiProviderId;
+/** Model servers reached over HTTP. They need no binary and no key. */
+export type ServerProviderId = "ollama";
+export type ProviderId = CliProviderId | ApiProviderId | ServerProviderId;
 
 /**
  * How much the agent may do on the machine. Providers list the levels they can really enforce.
@@ -157,6 +159,8 @@ export interface Installation {
   /** False when the installed version is outside the range this release was tested against. */
   testedRange: { min: string; maxExclusive?: string };
   withinTestedRange?: boolean;
+  /** Why the provider is not available, when it knows. For example a model server that does not answer. */
+  detail?: string;
 }
 
 export interface AuthStatus {

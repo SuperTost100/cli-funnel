@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
 import { readSSE } from "../util/sse.js";
+import { runWithHistory } from "./history.js";
 import {
   FunnelError,
   type ApiProviderId,
@@ -226,9 +226,6 @@ const gemini: ApiSpec = {
   },
 };
 
-// ponytail: conversation history lives in this process only. Persist it yourself if sessions must survive a restart.
-const histories = new Map<string, Msg[]>();
-
 function makeApiProvider(spec: ApiSpec, getKey: () => string | undefined): Provider {
   const key = () => {
     const k = getKey() ?? process.env[spec.envVar];
@@ -266,16 +263,9 @@ function makeApiProvider(spec: ApiSpec, getKey: () => string | undefined): Provi
     },
     update: async () => ({ changed: false, output: "API providers have nothing to update." }),
     models: async () => spec.listModels(key()),
-    async *run(input) {
-      const sessionId = input.sessionId ?? randomUUID();
-      const messages: Msg[] = [...(histories.get(sessionId) ?? []), { role: "user", content: spec.userContent(input) }];
-      yield { type: "session", sessionId, model: input.selection.model };
-      let text = "";
-      for await (const e of spec.stream(key(), input, messages)) {
-        if (e.type === "text.delta") text += e.text;
-        yield e;
-      }
-      histories.set(sessionId, [...messages, { role: "assistant", content: text }]);
+    run(input) {
+      const user: Msg = { role: "user", content: spec.userContent(input) };
+      return runWithHistory(input, user, (text): Msg => ({ role: "assistant", content: text }), (messages) => spec.stream(key(), input, messages));
     },
   };
 }

@@ -4,3 +4,4 @@ export { PROVIDERS } from "./providers/index.js";
 export { loadManifest, type ModelManifest, type ManifestModel } from "./catalog/manifest.js";
 export * from "./types.js";
 export { createApiProviders, type ApiKeys } from "./providers/api.js";
+export { createOllamaProvider, type OllamaOptions } from "./providers/ollama/index.js";

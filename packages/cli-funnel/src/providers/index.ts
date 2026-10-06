@@ -4,6 +4,7 @@ import { codexProvider } from "./codex/index.js";
 import { agentProvider } from "./agent/index.js";
 import { antigravityProvider } from "./antigravity/index.js";
 import { createApiProviders } from "./api.js";
+import { createOllamaProvider } from "./ollama/index.js";
 
 export const PROVIDERS: Record<ProviderId, Provider> = {
   claude: claudeProvider,
@@ -11,4 +12,5 @@ export const PROVIDERS: Record<ProviderId, Provider> = {
   agent: agentProvider,
   antigravity: antigravityProvider,
   ...createApiProviders(),
+  ollama: createOllamaProvider(),
 };
