@@ -36,15 +36,20 @@ Codex and the Anthropic API need `additionalProperties: false` on every object i
 
 ## Text only: access `none`
 
-`none` is for apps that want a model, not an agent. Nothing on the machine changes: no file writes, no commands, no MCP servers. Point `cwd` at an empty folder anyway, since some CLIs can still read files.
+`none` is for apps that want a model, not an agent. Nothing on the machine changes: no file writes, no commands, no MCP tool calls. Point `cwd` at an empty folder anyway, since some CLIs can still read files.
 
 | CLI | How `none` is enforced | One-line prompt, input tokens |
 |---|---|---|
 | Claude Code | `--tools ""`, `--strict-mcp-config`, `--setting-sources ""` | about 21,800 before, about 400 after |
 | Codex | read-only sandbox, every approval denied, tool features and config MCP servers switched off | about 19,000 before, about 11,900 after |
-| Cursor Agent | not offered | |
-| Antigravity | not offered | |
+| Cursor Agent | runs in a cli-funnel folder whose `.cursor/cli.json` denies every tool, plus `--mode ask` | about 13,900 before, about 16,200 after |
+| Antigravity | runs in a cli-funnel folder whose `.agents/hooks.json` denies every tool call | about 15,700 before and after |
 
 Removing settings also stops Claude Code from loading the user's CLAUDE.md, hooks and skills. That is where most of the saved tokens come from.
 
-Cursor Agent and Antigravity do not offer `none`. In testing, Cursor Agent's `--mode ask` with `--sandbox enabled` still ran shell commands, and only the model's own refusal stopped a write. Antigravity's `--mode plan` with `--sandbox` let a shell command write outside the workspace. Neither can enforce the level, so it is not listed. See [Access levels](access-levels.md).
+Cursor Agent and Antigravity have no flag that removes tools. Their read-only modes still ran shell commands in testing. Both read config files from the folder they run in, so at `none` cli-funnel ignores `cwd` and runs them in a folder it owns under `~/.cache/cli-funnel/workspaces/` (or `$XDG_CACHE_HOME`). That folder holds one file:
+
+- Cursor Agent: `.cursor/cli.json` with deny rules for `Shell(*)`, `Read(**)`, `Write(**)`, `WebFetch(*)` and `Mcp(*:*)`. A deny rule beats every allow rule, the user's approval mode and `--force`. Grep and glob stay inside the folder, which is empty.
+- Antigravity: `.agents/hooks.json` with a `PreToolUse` hook that answers `deny` for every tool except `finish`, which carries the `--json-schema` answer. A deny beats an `allow` from any other hook, and a hook that fails also blocks the call.
+
+The model still sees its tools and may try one. The call fails, shows up in `result.deniedActions`, and the model answers in text. Neither CLI drops the tool definitions, so the token count does not go down. Antigravity still starts MCP servers from the user's config, but every call to them is refused. Project files such as `AGENTS.md` are not loaded, since the run does not happen in `cwd`. See [Access levels](access-levels.md).

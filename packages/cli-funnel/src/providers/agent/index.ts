@@ -3,6 +3,7 @@ import { compareVersions, exec, spawnStream } from "../../util/process.js";
 import { detectInstallation, findBinary, runLogout, runUpdate, spawnLogin } from "../base.js";
 import { FunnelError, type AuthStatus, type FunnelEvent, type ModelInfo, type Provider, type RunInput } from "../../types.js";
 import { composePrompt } from "../prompt.js";
+import { ownedWorkspace } from "../../util/workspace.js";
 import { groupModels, parseModelList, parseStatus, StreamMapper, toCliModel } from "./parser.js";
 
 const BINARY = "agent";
@@ -22,14 +23,30 @@ async function knownIds(): Promise<Set<string>> {
   return known;
 }
 
+/**
+ * Deny rules for `none`. Cursor Agent reads `.cursor/cli.json` from the process cwd, and a deny rule wins over
+ * every allow rule, the user's approval mode and `--force`. Grep and glob stay inside the workspace, which is empty.
+ */
+export const NONE_PERMISSIONS = {
+  permissions: { allow: [], deny: ["Shell(*)", "Read(**)", "Write(**)", "WebFetch(*)", "Mcp(*:*)"] },
+};
+
+/** The empty folder `none` runs in. It holds only the deny rules. */
+export function noneWorkspace(): Promise<string> {
+  return ownedWorkspace("agent-none", { ".cursor/cli.json": `${JSON.stringify(NONE_PERMISSIONS, null, 2)}\n` });
+}
+
 /** Access maps to CLI flags. `accept-edits` has no flag and `supervised` has no approval passthrough, so neither is offered. */
 export function accessFlags(access: RunInput["selection"]["access"]): string[] {
   if (access === "full") return ["--force"];
   if (access === "auto") return ["--auto-review"];
-  throw new FunnelError(`Cursor Agent cannot enforce access "${access}". Supported: auto, full.`, "invalid-selection");
+  // The deny rules in the workspace do the enforcing. Ask mode only keeps the model from trying.
+  if (access === "none") return ["--mode", "ask"];
+  throw new FunnelError(`Cursor Agent cannot enforce access "${access}". Supported: none, auto, full.`, "invalid-selection");
 }
 
-export function buildArgs(input: RunInput, model: string): string[] {
+/** `workspace` is the selection's folder, or the `none` workspace. */
+export function buildArgs(input: RunInput, model: string, workspace = input.selection.cwd): string[] {
   const { selection } = input;
   return [
     "-p",
@@ -39,7 +56,7 @@ export function buildArgs(input: RunInput, model: string): string[] {
     "--model",
     model,
     "--workspace",
-    selection.cwd,
+    workspace,
     "--trust",
     ...accessFlags(selection.access),
     ...(input.sessionId ? ["--resume", input.sessionId] : []),
@@ -63,8 +80,9 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   const path = findBinary(BINARY);
   if (!path) throw new FunnelError("agent is not installed.", "not-installed");
   const model = toCliModel(input.selection, await knownIds());
-  const args = buildArgs(input, model);
-  const proc = spawnStream(path, args, { cwd: input.selection.cwd, env: input.env, signal: input.signal, closeStdin: true });
+  const cwd = input.selection.access === "none" ? await noneWorkspace() : input.selection.cwd;
+  const args = buildArgs(input, model, cwd);
+  const proc = spawnStream(path, args, { cwd, env: input.env, signal: input.signal, closeStdin: true });
   const mapper = new StreamMapper();
   let finished = false;
   for await (const line of proc.lines) {
@@ -90,9 +108,8 @@ export const agentProvider: Provider = {
   id: "agent",
   displayName: "Cursor Agent",
   binary: BINARY,
-  // No `none`: in testing, `--mode ask` with `--sandbox enabled` still ran shell commands, and only the model's own refusal stopped writes.
   capabilities: {
-    access: ["auto", "full"],
+    access: ["none", "auto", "full"],
     effort: true,
     contextWindow: false,
     fast: true,

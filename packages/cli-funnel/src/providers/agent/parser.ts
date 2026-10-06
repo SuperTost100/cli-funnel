@@ -157,11 +157,20 @@ function toolInput(name: string, args: Record<string, unknown> | undefined): unk
   return args;
 }
 
+/** Result keys that mean a permission rule or the user refused the call. Edits refused by a `Read` deny rule use `readPermissionDenied`. */
+const DENIED_KEYS = ["rejected", "permissionDenied", "readPermissionDenied"];
+
+function isDenied(result: Record<string, unknown> | undefined): boolean {
+  return !!result && DENIED_KEYS.some((k) => k in result);
+}
+
 function failure(result: Record<string, unknown> | undefined): string | undefined {
   if (!result || "success" in result) return undefined;
   const e = (result.error ?? result.failure ?? result.rejected ?? result.permissionDenied) as Record<string, unknown> | undefined;
-  const msg = e && (e.errorMessage ?? e.message ?? e.reason);
-  return typeof msg === "string" ? msg : JSON.stringify(result).slice(0, 300);
+  const msg = e && (e.errorMessage ?? e.message ?? e.reason ?? e.error);
+  if (typeof msg === "string" && msg) return msg;
+  if ("readPermissionDenied" in result) return "Permission denied";
+  return JSON.stringify(result).slice(0, 300);
 }
 
 function output(result: Record<string, unknown> | undefined): string | undefined {
@@ -215,8 +224,11 @@ export class StreamMapper {
           return [{ type: "tool.start", id, name, input: toolInput(name, call.args) }];
         }
         if (m.subtype === "completed") {
-          const error = failure(call.result);
-          if (error && call.result && ("rejected" in call.result || "permissionDenied" in call.result)) this.denied = true;
+          let error = failure(call.result);
+          if (error && isDenied(call.result)) {
+            this.denied = true;
+            error = `denied: ${error}`;
+          }
           return [{ type: "tool.end", id, ...(error ? { error } : { output: output(call.result) }) }];
         }
         return [];

@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 const CHECKS = {
   claude: { bin: "claude", help: [[["--help"], ["--output-format", "--input-format", "--include-partial-messages", "--permission-mode", "--permission-prompt-tool", "--model", "--effort", "--resume", "--verbose"]], [["auth", "--help"], ["login", "logout", "status"]]] },
   codex: { bin: "codex", help: [[["app-server", "--help"], ["generate-json-schema"]], [["login", "--help"], ["--device-auth", "status"]], [["debug", "--help"], ["models"]]] },
-  agent: { bin: "agent", help: [[["--help"], ["--output-format", "--stream-partial-output", "--model", "--list-models", "--force", "--auto-review", "--workspace", "--trust", "--resume"]]] },
+  agent: { bin: "agent", help: [[["--help"], ["--output-format", "--stream-partial-output", "--model", "--list-models", "--force", "--auto-review", "--mode", "--workspace", "--trust", "--resume"]]] },
   antigravity: { bin: "agy", help: [[["--help"], ["--output-format", "--model", "--effort", "--mode", "--conversation", "--dangerously-skip-permissions", "--print"]]] },
 };
 

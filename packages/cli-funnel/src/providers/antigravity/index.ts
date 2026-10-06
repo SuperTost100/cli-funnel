@@ -18,6 +18,7 @@ import {
 import { detectInstallation, findBinary, runUpdate } from "../base.js";
 import { createMapper, parseModels } from "./parser.js";
 import { composePrompt } from "../prompt.js";
+import { ownedWorkspace } from "../../util/workspace.js";
 
 const TOKEN_FILE = join(homedir(), ".gemini", "antigravity-cli", "antigravity-oauth-token");
 const TESTED = { min: "1.2.0" };
@@ -39,6 +40,30 @@ export function buildArgs(input: RunInput, models: ModelInfo[] = []): string[] {
   if (selection.access === "full") args.push("--dangerously-skip-permissions");
   if (input.sessionId) args.push("--conversation", input.sessionId);
   return args;
+}
+
+const DENY = { decision: "deny", reason: "Tools are disabled. Answer in text only." };
+
+/**
+ * Matches every tool name except `finish`, which ends the turn and carries the `--json-schema` answer.
+ * Go regexp has no lookahead, so the exclusion is spelled out.
+ */
+export const NONE_MATCHER = "^(?:[^f].*|f[^i].*|fi[^n].*|fin[^i].*|fini[^s].*|finis[^h].*|finish.+|.{0,5})$";
+
+/**
+ * Hook file for `none`. agy loads `.agents/hooks.json` from the cwd, and a `deny` from a PreToolUse hook blocks the
+ * call before any permission check. Allow decisions from other hooks do not override it, and a failing hook also blocks.
+ */
+export function noneHooks(platform: NodeJS.Platform = process.platform): Record<string, unknown> {
+  const json = JSON.stringify(DENY);
+  // The hook runs through `sh -c`, or `cmd /c` on Windows. It drains stdin so agy never writes to a closed pipe.
+  const command = platform === "win32" ? `echo ${json}` : `cat >/dev/null; printf '%s\\n' '${json}'`;
+  return { "cli-funnel-none": { PreToolUse: [{ matcher: NONE_MATCHER, hooks: [{ type: "command", command, timeout: 10 }] }] } };
+}
+
+/** The empty folder `none` runs in. It holds only the deny hook. */
+export function noneWorkspace(): Promise<string> {
+  return ownedWorkspace("antigravity-none", { ".agents/hooks.json": `${JSON.stringify(noneHooks(), null, 2)}\n` });
 }
 
 async function loadManifestModels(): Promise<ModelInfo[]> {
@@ -87,8 +112,9 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   const path = findBinary("agy");
   if (!path) throw new FunnelError("agy is not installed.", "not-installed");
   const models = await loadManifestModels();
+  const cwd = input.selection.access === "none" ? await noneWorkspace() : input.selection.cwd;
   const stream = spawnStream(path, buildArgs(input, models), {
-    cwd: input.selection.cwd,
+    cwd,
     env: input.env,
     signal: input.signal,
     input: "",
@@ -108,9 +134,8 @@ export const antigravityProvider: Provider = {
   id: "antigravity",
   displayName: "Antigravity",
   binary: "agy",
-  // No `none`: in testing, `--mode plan` with `--sandbox` still let a shell command write outside the workspace.
   capabilities: {
-    access: ["accept-edits", "full"],
+    access: ["none", "accept-edits", "full"],
     effort: true,
     contextWindow: false,
     fast: false,

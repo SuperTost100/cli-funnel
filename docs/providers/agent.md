@@ -1,12 +1,12 @@
 # Cursor Agent (`agent`)
 
-Provider id `agent`. Spawns the official `agent` binary in print mode and reads its `stream-json` output. Tested against 2026.09.26 and 2026.09.28. Minimum tested version is 2026.09.01.
+Provider id `agent`. Spawns the official `agent` binary in print mode and reads its `stream-json` output. Tested against 2026.09.26, 2026.09.28 and 2026.10.01. Minimum tested version is 2026.09.01.
 
 ## Capabilities
 
 | Field | Value |
 | --- | --- |
-| access | `auto`, `full` |
+| access | `none`, `auto`, `full` |
 | effort | yes |
 | fast | yes |
 | contextWindow | no |
@@ -20,7 +20,7 @@ agent -p --output-format stream-json --stream-partial-output \
   --model <id> --workspace <cwd> --trust [access flag] [--resume <sessionId>] -- <prompt>
 ```
 
-The process runs with `cwd` set to the selection's directory. Aborting the signal sends SIGTERM and yields `done` with `finishReason: "cancelled"`.
+The process runs with `cwd` set to the selection's directory. At `none` both `cwd` and `--workspace` are the `none` folder described below. Aborting the signal sends SIGTERM and yields `done` with `finishReason: "cancelled"`.
 
 ## Stream mapping
 
@@ -43,6 +43,7 @@ Usage: `inputTokens` is input plus cache read plus cache write, `cachedInputToke
 | --- | --- |
 | `full` | `--force` |
 | `auto` | `--auto-review` (a server classifier runs safe calls and holds the rest) |
+| `none` | `--mode ask`, run in a folder whose deny rules block every tool |
 | `accept-edits` | not offered, the CLI has no such flag |
 | `supervised` | not offered, see below |
 
@@ -52,9 +53,23 @@ Print mode has "access to all tools, including write and shell" per `--help`. On
 
 `agent acp` speaks Agent Client Protocol over stdio and defines `session/request_permission`. In testing, an ACP session that created a file never sent a permission request, and the file was written. The modes offered are `agent`, `plan` and `ask`, with no way to force approval prompts from the client. With the tested config the approve button could not be reached, so `supervised` and `approvals` are off. This was not tested against a config that gates tools, so the ACP route may work there. Revisit if that changes.
 
-### Why there is no `none`
+### How `none` works
 
-`--mode ask` is documented as read-only and `--sandbox enabled` turns on the sandbox. On 2026.09.28, `--mode ask --sandbox enabled` still ran `ls ~` through the shell tool, and it refused a `touch` only because the model declined. With `--auto-review --sandbox enabled`, a `touch` outside the workspace succeeded. Neither is enforcement, so `none` is off.
+`--mode ask` is documented as read-only, but on 2026.09.28 `--mode ask --sandbox enabled` still ran `ls ~` through the shell tool. Ask mode alone is not enforcement.
+
+The CLI reads `.cursor/cli.json` from every folder between the git root and the process cwd, and merges its `permissions` into the user's config. A deny rule wins over any allow rule, over `approvalMode` and over `--force`. At `none` the provider runs the CLI in `~/.cache/cli-funnel/workspaces/agent-none/`, which holds only this file:
+
+```json
+{ "permissions": { "allow": [], "deny": ["Shell(*)", "Read(**)", "Write(**)", "WebFetch(*)", "Mcp(*:*)"] } }
+```
+
+Verified on 2026.10.01, with and without `--force` and `--mode ask`:
+
+- Shell commands are refused with "Command blocked by permissions configuration". This covers `bash -c`, `python3 -c`, `env`, pipes, the user's own `Shell(ls)` allow rule, read-only commands in ask mode, and shell calls from a `Task` subagent.
+- Edits, deletes and reads are refused. Grep and glob ignore paths outside the workspace and see only `.cursor/cli.json`.
+- MCP tools from a plugin loaded with `--plugin-dir` are refused with "Blocked by permissions configuration".
+
+`--mode ask` stays on so the model rarely tries a tool at all. Resume works, because every `none` run uses the same folder.
 
 ### Run options
 
@@ -87,6 +102,7 @@ The CLI also accepts bracket ids such as `gpt-5.4-nano[reasoning=low]`, and this
 ## Known limits
 
 - No `supervised` or `accept-edits`.
-- `finishReason: "denied"` is set only when a tool result has a `rejected` or `permissionDenied` key. That shape was not observed.
+- At `none` the model still gets its tool definitions, so a one-line prompt costs about as much as at `full`.
+- `finishReason: "denied"` is set when a tool result has a `rejected`, `permissionDenied` or `readPermissionDenied` key. Those calls also end with an error that starts with `denied:`, so they show up in `result.deniedActions`. A read refused by a `Read` rule comes back as a plain `Permission denied` error and is not counted.
 - The version suffix (`-dd393fe`) is compared as a number by `compareVersions`. This is harmless for the minimum check.
 - Only the `agent` binary name is searched, not the `cursor-agent` alias.

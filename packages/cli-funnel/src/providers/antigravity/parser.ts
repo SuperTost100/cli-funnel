@@ -55,6 +55,8 @@ function toUsage(u: Json | undefined): Usage | undefined {
 export function createMapper() {
   const started = new Set<string>();
   let deniedSeen = 0;
+  // Hook denials never show up in `denied_actions`, so they are counted apart.
+  let hookDenied = 0;
   let finished = false;
 
   return {
@@ -84,8 +86,10 @@ export function createMapper() {
         if (s.state === "DONE") events.push({ type: "tool.end", id });
         if (s.state === "ERROR") {
           const msg = String(s.tool_info?.error?.message ?? "tool failed").split("\n")[0] ?? "tool failed";
-          const denied = /denied permission|permission check failed/i.test(msg);
-          if (denied) deniedSeen++;
+          const byHook = /denied by pre-tool hook/i.test(msg);
+          const denied = byHook || /denied permission|permission check failed/i.test(msg);
+          if (byHook) hookDenied++;
+          else if (denied) deniedSeen++;
           events.push({ type: "tool.end", id, error: denied ? `denied: ${msg}` : msg });
         }
         return events;
@@ -108,7 +112,7 @@ export function createMapper() {
         if (usage) events.push({ type: "usage", usage });
         if (r.structured_output !== undefined) events.push({ type: "structured", data: r.structured_output });
         const text = r.response ?? "";
-        events.push({ type: "done", text, finishReason: denied.length && !text.trim() ? "denied" : "stop" });
+        events.push({ type: "done", text, finishReason: (denied.length || hookDenied) && !text.trim() ? "denied" : "stop" });
         return events;
       }
       return [];

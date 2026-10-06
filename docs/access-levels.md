@@ -14,7 +14,7 @@ Access says how much the agent may do on the machine. cli-funnel has four levels
 
 | | Claude Code | Codex | Cursor Agent | Antigravity |
 |---|---|---|---|---|
-| `none` | yes | yes | no | no |
+| `none` | yes | yes | yes | yes |
 | `supervised` | yes | yes | no | no |
 | `accept-edits` | yes | yes | no | yes |
 | `auto` | yes | yes | yes | no |
@@ -32,7 +32,7 @@ Cursor Agent runs unrestricted in print mode when the user's Cursor config says 
 
 Antigravity's `accept-edits` writes only inside workspaces the user has already trusted in `agy`.
 
-`none` needs a mode the CLI enforces, not one the model is asked to respect. Claude Code can remove every tool. Codex runs in a read-only sandbox with its tool features off and every approval denied. Cursor Agent's `--mode ask` still ran shell commands in testing, and Antigravity's `--mode plan` with `--sandbox` let a shell command write outside the workspace, so neither lists `none`.
+`none` needs a mode the CLI enforces, not one the model is asked to respect. Claude Code can remove every tool. Codex runs in a read-only sandbox with its tool features off and every approval denied. Cursor Agent and Antigravity have no such flag. Their read-only modes still ran shell commands in testing. Both do read config from the folder they run in, so cli-funnel runs them in an empty folder of its own that holds a rule refusing every tool call. The CLI applies the rule, not the model. See [Run options](run-options.md#text-only-access-none).
 
 ## Denied actions
 
