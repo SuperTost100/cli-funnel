@@ -1,0 +1,8 @@
+{"model":"smollm2:135m","created_at":"2026-10-06T11:28:14.602818527Z","message":{"role":"assistant","content":"I"},"done":false}
+{"model":"smollm2:135m","created_at":"2026-10-06T11:28:14.702718328Z","message":{"role":"assistant","content":"'m"},"done":false}
+{"model":"smollm2:135m","created_at":"2026-10-06T11:28:14.848968847Z","message":{"role":"assistant","content":" glad"},"done":false}
+{"model":"smollm2:135m","created_at":"2026-10-06T11:28:14.921894631Z","message":{"role":"assistant","content":" you"},"done":false}
+{"model":"smollm2:135m","created_at":"2026-10-06T11:28:15.170762946Z","message":{"role":"assistant","content":" asked"},"done":false}
+{"model":"smollm2:135m","created_at":"2026-10-06T11:28:15.249875751Z","message":{"role":"assistant","content":" this"},"done":false}
+{"model":"smollm2:135m","created_at":"2026-10-06T11:28:15.360893074Z","message":{"role":"assistant","content":"."},"done":false}
+{"model":"smollm2:135m","created_at":"2026-10-06T11:28:15.426355881Z","message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","total_duration":2174284083,"load_duration":1055381897,"prompt_eval_count":23,"prompt_eval_cached_count":0,"prompt_eval_duration":291630000,"eval_count":8,"eval_duration":824737000}

@@ -21,7 +21,7 @@ result.text;   // the answer
 result.usage;  // { inputTokens, outputTokens, ... }
 ```
 
-Switch `provider` to `codex`, `agent` or `antigravity` and nothing else in your code changes. Switch it to `anthropic-api`, `openai-api` or `gemini-api` to use a key instead.
+Switch `provider` to `codex`, `agent` or `antigravity` and nothing else in your code changes. Switch it to `anthropic-api`, `openai-api` or `gemini-api` to use a key instead, or to `ollama` for a local model.
 
 ## Why
 
@@ -34,7 +34,7 @@ It starts the real binary. Your runs count against the login the CLI already has
 - One event stream and one result shape for every provider. API-key providers return the same thing, so mixing keys and subscriptions needs no changes downstream.
 - Sign-in, sign-out and update passthrough. Your UI shows the sign-in link and a one-click update button. The CLI does the real work.
 - Settings as one object. Model, reasoning effort, fast mode, project folder and access level live in a `Selection` that a UI produces or you hardcode.
-- Model lists with concrete versioned ids. No "latest" aliases, so a run always says which model it used.
+- Model lists with concrete versioned ids. No "latest" aliases, so a run always says which model it used. Local model servers are the exception: their ids are passed through as the server reports them.
 - An approve button for supervised runs, where the CLI supports one.
 - An OpenAI-compatible server. Point any OpenAI SDK at it.
 - React hooks and a picker, a login panel and an approval prompt.
@@ -122,7 +122,7 @@ const client = createClient({ baseUrl: "/api/funnel" });
 - [Sign-in and updates](docs/auth-and-updates.md)
 - [UI components](docs/ui.md)
 - [OpenAI compatibility](docs/openai-compat.md) and [API keys](docs/api-keys.md)
-- Providers: [Claude Code](docs/providers/claude.md), [Codex](docs/providers/codex.md), [Cursor Agent](docs/providers/agent.md), [Antigravity](docs/providers/antigravity.md)
+- Providers: [Claude Code](docs/providers/claude.md), [Codex](docs/providers/codex.md), [Cursor Agent](docs/providers/agent.md), [Antigravity](docs/providers/antigravity.md), [Ollama](docs/providers/ollama.md)
 - [Adding a provider](docs/adding-a-provider.md)
 - [Keeping up with CLI changes](docs/maintenance.md)
 - [Terms and limits](docs/tos-notes.md)
