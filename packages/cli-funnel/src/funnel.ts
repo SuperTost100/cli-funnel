@@ -2,7 +2,7 @@ import { loadManifest } from "./catalog/manifest.js";
 import { validateSelection } from "./selection.js";
 import { collect } from "./providers/base.js";
 import { PROVIDERS } from "./providers/index.js";
-import { createApiProviders } from "./providers/api.js";
+import { createApiProviders, type ApiKeys } from "./providers/api.js";
 import {
   FunnelError,
   type AuthStatus,
@@ -24,8 +24,8 @@ export interface FunnelOptions {
   allowUnlistedModels?: boolean;
   /** Replace or add providers. Used by tests and by custom providers. */
   providers?: Partial<Record<ProviderId, Provider>>;
-  /** API keys for the API providers. Falls back to ANTHROPIC_API_KEY and OPENAI_API_KEY. */
-  apiKeys?: { anthropic?: string; openai?: string };
+  /** API keys for the API providers. Falls back to ANTHROPIC_API_KEY, OPENAI_API_KEY and GEMINI_API_KEY. */
+  apiKeys?: ApiKeys;
 }
 
 export interface ProviderOverview {

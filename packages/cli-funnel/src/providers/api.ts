@@ -137,6 +137,95 @@ const openai: ApiSpec = {
   },
 };
 
+const GEMINI = "https://generativelanguage.googleapis.com/v1beta";
+
+/** Gemini ids that are aliases or models without text chat. Aliases like `gemini-flash-latest` break the versioned-id rule. */
+const GEMINI_SKIP = /latest|embedding|aqa|tts|image|imagen|veo|live|audio|robotics|computer-use/;
+
+/** Finish reasons where Gemini withheld or cut the answer for policy reasons. */
+const GEMINI_BLOCKED = new Set(["SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY"]);
+
+const gemini: ApiSpec = {
+  id: "gemini-api",
+  displayName: "Gemini API",
+  envVar: "GEMINI_API_KEY",
+  keyHint: "aistudio.google.com",
+  async listModels(key) {
+    const out: ModelInfo[] = [];
+    let page = "";
+    do {
+      const res = await fetch(`${GEMINI}/models?pageSize=1000${page ? `&pageToken=${encodeURIComponent(page)}` : ""}`, {
+        headers: { "x-goog-api-key": key },
+      });
+      if (!res.ok) throw new FunnelError(`Gemini API returned ${res.status}.`, "cli-failed");
+      const body = (await res.json()) as {
+        models?: { name: string; displayName?: string; supportedGenerationMethods?: string[] }[];
+        nextPageToken?: string;
+      };
+      for (const m of body.models ?? []) {
+        const id = m.name.replace(/^models\//, "");
+        if (!m.supportedGenerationMethods?.includes("generateContent") || GEMINI_SKIP.test(id)) continue;
+        out.push({ id, name: m.displayName ?? id, provider: "gemini-api", ...NO_EFFORT });
+      }
+      page = body.nextPageToken ?? "";
+    } while (page);
+    return out.sort((a, b) => a.id.localeCompare(b.id));
+  },
+  async *stream(key, input, messages) {
+    const res = await fetch(`${GEMINI}/models/${encodeURIComponent(input.selection.model)}:streamGenerateContent?alt=sse`, {
+      method: "POST",
+      signal: input.signal,
+      headers: { "x-goog-api-key": key, "content-type": "application/json" },
+      body: JSON.stringify({
+        contents: messages.map((m) => ({
+          role: m.role === "assistant" ? "model" : "user",
+          parts: typeof m.content === "string" ? [{ text: m.content }] : m.content,
+        })),
+        ...(input.system ? { systemInstruction: { parts: [{ text: input.system }] } } : {}),
+        generationConfig: {
+          ...(input.maxOutputTokens ? { maxOutputTokens: input.maxOutputTokens } : {}),
+          ...(input.responseSchema ? { responseMimeType: "application/json", responseJsonSchema: input.responseSchema.schema } : {}),
+        },
+      }),
+    });
+    if (!res.ok) return yield { type: "error", message: `Gemini API ${res.status}: ${await res.text()}`, code: "cli-failed" };
+    let usage: Record<string, number> | undefined;
+    let stop = "STOP";
+    for await (const { data } of readSSE(res)) {
+      const e = JSON.parse(data);
+      if (e.error) return yield { type: "error", message: e.error.message ?? "Gemini API error" };
+      if (e.promptFeedback?.blockReason) stop = "SAFETY";
+      const candidate = e.candidates?.[0];
+      for (const part of candidate?.content?.parts ?? []) {
+        if (typeof part.text !== "string" || !part.text) continue;
+        yield part.thought ? { type: "reasoning.delta", text: part.text } : { type: "text.delta", text: part.text };
+      }
+      if (candidate?.finishReason) stop = candidate.finishReason;
+      if (e.usageMetadata) usage = e.usageMetadata;
+    }
+    if (usage) {
+      const inputTokens = usage.promptTokenCount ?? 0;
+      // Thinking tokens are billed as output.
+      const outputTokens = (usage.candidatesTokenCount ?? 0) + (usage.thoughtsTokenCount ?? 0);
+      yield {
+        type: "usage",
+        usage: {
+          inputTokens,
+          outputTokens,
+          cachedInputTokens: usage.cachedContentTokenCount,
+          reasoningTokens: usage.thoughtsTokenCount,
+          totalTokens: usage.totalTokenCount ?? inputTokens + outputTokens,
+        },
+      };
+    }
+    yield { type: "done", text: "", finishReason: GEMINI_BLOCKED.has(stop) ? "denied" : "stop" };
+  },
+  userContent(input) {
+    if (!input.attachments?.length) return input.prompt;
+    return [...input.attachments.map((a) => ({ inlineData: { mimeType: a.mediaType, data: a.data } })), { text: input.prompt }];
+  },
+};
+
 // ponytail: conversation history lives in this process only. Persist it yourself if sessions must survive a restart.
 const histories = new Map<string, Msg[]>();
 
@@ -191,7 +280,14 @@ function makeApiProvider(spec: ApiSpec, getKey: () => string | undefined): Provi
   };
 }
 
-export const createApiProviders = (keys: { anthropic?: string; openai?: string } = {}): Record<ApiProviderId, Provider> => ({
+export interface ApiKeys {
+  anthropic?: string;
+  openai?: string;
+  gemini?: string;
+}
+
+export const createApiProviders = (keys: ApiKeys = {}): Record<ApiProviderId, Provider> => ({
   "anthropic-api": makeApiProvider(anthropic, () => keys.anthropic),
   "openai-api": makeApiProvider(openai, () => keys.openai),
+  "gemini-api": makeApiProvider(gemini, () => keys.gemini),
 });
