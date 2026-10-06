@@ -21,7 +21,7 @@ const res = await client.chat.completions.create({
 
 ## Model ids
 
-Ids are `<provider>/<model>`, for example `claude/claude-sonnet-5` or `codex/gpt-5.3-codex`. `GET /v1/models` lists every model from every installed provider.
+Ids are `<provider>/<model>`, for example `claude/claude-sonnet-5`, `codex/gpt-5.3-codex`, `ollama/llama3.2:3b` or `openai-compatible:lmstudio/qwen/qwen3-8b`. The provider id ends at the first slash. `GET /v1/models` lists every model from every installed provider.
 
 ## Mapping
 

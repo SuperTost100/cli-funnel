@@ -26,6 +26,10 @@ Keep the parser a pure function from one raw line to zero or more events. Test i
 
 Abort the process when `input.signal` fires.
 
+## Providers without a binary
+
+Providers that call an HTTP API spawn nothing. `detect()` reports whether the server answers and puts the reason in `installation.detail` when it does not. `capabilities.access` stays empty. If the server keeps no session, wrap the call in `runWithHistory` from `providers/history.ts`. If it speaks Chat Completions, reuse `streamChatCompletions` from `providers/api.ts`. See `providers/ollama/` and `providers/openai-compatible.ts`.
+
 ## Register it
 
 ```ts

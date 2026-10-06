@@ -1,6 +1,6 @@
 # cli-funnel
 
-Use Claude Code, Codex, Cursor Agent and Antigravity CLIs like an API. The package spawns the real CLI binary, so work counts against the user's subscription.
+Use Claude Code, Codex, Cursor Agent and Antigravity CLIs like an API. The package spawns the real CLI binary, so work counts against the user's subscription. It also has HTTP providers: the Anthropic, OpenAI and Gemini APIs, Ollama, and OpenAI-compatible servers.
 
 ## Commands
 
@@ -12,8 +12,8 @@ Use Claude Code, Codex, Cursor Agent and Antigravity CLIs like an API. The packa
 
 - `packages/cli-funnel/src/types.ts` is the contract. Read it first.
 - `src/providers/<id>/` holds everything that knows a CLI flag. Nothing else may.
-- `data/models/<id>.json` lists model ids. Ids are concrete and versioned. Never add aliases like "latest". Model servers such as Ollama are the exception: pass the server's ids through and never invent one.
-- `src/providers/ollama/` talks to an Ollama server over HTTP. `src/providers/api.ts` holds the API-key providers.
+- `data/models/<id>.json` lists model ids. Ids are concrete and versioned. Never add aliases like "latest". Model servers (Ollama, OpenAI-compatible) are the exception: pass the server's ids through and never invent one.
+- `src/providers/ollama/` talks to an Ollama server over HTTP. `src/providers/api.ts` holds the API-key providers and the shared Chat Completions stream. `src/providers/openai-compatible.ts` builds one provider per configured server. `src/providers/history.ts` keeps session history for providers without server-side sessions.
 - `src/server/` is the HTTP handler and the OpenAI-compatible endpoints. `src/client/` is its browser client.
 - `packages/react/` has hooks and components.
 - `docs/` is user documentation. Keep it plain.
