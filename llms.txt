@@ -23,4 +23,4 @@
 - Model ids are concrete versioned names. Get them from `cli-funnel models <provider> --json`. Ollama ids are the server's own names, such as `llama3.2:3b`.
 - `access: "supervised"` needs an `onApproval` callback and is not available on every provider. Check `capabilities.access`.
 - `funnel.run()` returns `{ text, usage, sessionId, model, finishReason, toolCalls, deniedActions }`.
-- Do not run `login`, `logout` or `update` without asking the user.
+- Do not run `login`, `logout`, `update`, `pull` or `rm` without asking the user.

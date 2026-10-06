@@ -65,10 +65,35 @@ A run is one `POST /api/chat` with `stream: true`. The stream is newline-delimit
 
 A stream that ends without `done: true` ends with an error. Aborting the signal ends the run with `finishReason: "cancelled"`. Thinking models think by default. There is no effort control yet.
 
+## Pull and delete models
+
+Ollama is the one provider with `capabilities.manageModels`. It downloads and removes models through the server.
+
+```ts
+for await (const e of funnel.pullModel("ollama", "llama3.2:3b", { signal })) {
+  if (e.type === "progress") console.log(e.status, e.completed, e.total);
+  if (e.type === "error") console.error(e.message);
+}
+await funnel.deleteModel("ollama", "llama3.2:3b");
+```
+
+- `pullModel` streams `/api/pull`. Each `progress` event carries the server's status line, and while a layer downloads, its `digest`, `completed` and `total` bytes. The stream ends with `done`, or with `error` when the server reports one, for example an unknown model name. Aborting the signal stops the download and ends the stream with no further event.
+- `deleteModel` calls `DELETE /api/delete`. A model that is not on the server throws `invalid-selection`.
+- On every other provider both throw `unsupported`.
+
+The HTTP handler exposes them as `POST /providers/ollama/models/pull` (SSE) and `POST /providers/ollama/models/delete`, both with `{ "name": "<model>" }`. The browser client has `client.pullModel(id, name, signal)` and `client.deleteModel(id, name)`. From a terminal:
+
+```bash
+npx cli-funnel pull ollama llama3.2:3b
+npx cli-funnel rm ollama llama3.2:3b
+```
+
+Pulling uses disk space and bandwidth on the machine that runs the server, and deleting cannot be undone. Ask the user before doing either.
+
 ## Sign-in and update
 
 There is nothing to sign in to. `authStatus()` is signed in when `/api/tags` answers, and signed out with a reason when the server refuses (401 or 403) or does not answer. `login()` and `logout()` say so. `update()` changes nothing: update Ollama with its own installer.
 
 ## Live test
 
-`CLI_FUNNEL_LIVE=1 CLI_FUNNEL_OLLAMA_MODEL=smollm2:135m npm test` runs the live test against `CLI_FUNNEL_OLLAMA_URL`, then `OLLAMA_HOST`, then the default address. Without `CLI_FUNNEL_OLLAMA_MODEL` the live test is skipped.
+`CLI_FUNNEL_LIVE=1 CLI_FUNNEL_OLLAMA_MODEL=smollm2:135m npm test` runs the live test against `CLI_FUNNEL_OLLAMA_URL`, then `OLLAMA_HOST`, then the default address. Without `CLI_FUNNEL_OLLAMA_MODEL` the live test is skipped. `CLI_FUNNEL_OLLAMA_PULL=all-minilm:22m` adds a test that pulls and then deletes that model. Run it only against a throwaway server.

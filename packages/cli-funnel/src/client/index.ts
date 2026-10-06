@@ -5,6 +5,7 @@ import type {
   LoginEvent,
   ModelInfo,
   ProviderId,
+  PullEvent,
   RunInput,
   Selection,
   UpdateResult,
@@ -75,6 +76,9 @@ export function createClient(options: ClientOptions) {
     authStatus: (id: ProviderId) => request<AuthStatus>(`/providers/${id}/auth`),
     logout: (id: ProviderId) => post(`/providers/${id}/logout`),
     update: (id: ProviderId) => request<UpdateResult>(`/providers/${id}/update`, { method: "POST", body: "{}" }),
+    /** Streams `PullEvent`s on providers with `capabilities.manageModels`. */
+    pullModel: (id: ProviderId, name: string, signal?: AbortSignal) => events<PullEvent>(`/providers/${id}/models/pull`, { name }, signal),
+    deleteModel: (id: ProviderId, name: string) => post(`/providers/${id}/models/delete`, { name }),
     listDirs: (path?: string) => request<DirListing>(`/fs${path ? `?path=${encodeURIComponent(path)}` : ""}`),
 
     /** Streams login events. The first event is `{ type: "login", loginId }`. */

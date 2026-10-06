@@ -13,6 +13,7 @@ import {
   type ModelInfo,
   type Provider,
   type ProviderId,
+  type PullEvent,
   type RunInput,
   type RunResult,
   type UpdateResult,
@@ -130,6 +131,18 @@ export function createFunnel(options: FunnelOptions = {}) {
     login: (id: ProviderId, opts?: { signal?: AbortSignal }): LoginSession => provider(id).login(opts),
     logout: async (id: ProviderId): Promise<void> => provider(id).logout(),
     update: async (id: ProviderId): Promise<UpdateResult> => provider(id).update(),
+    /** Downloads a model on providers with `capabilities.manageModels`. Throws `unsupported` elsewhere. */
+    pullModel(id: ProviderId, name: string, opts?: { signal?: AbortSignal }): AsyncIterable<PullEvent> {
+      const p = provider(id);
+      if (!p.pullModel) throw new FunnelError(`${p.displayName} cannot pull models.`, "unsupported");
+      return p.pullModel(name, opts);
+    },
+    /** Removes a downloaded model on providers with `capabilities.manageModels`. Throws `unsupported` elsewhere. */
+    async deleteModel(id: ProviderId, name: string): Promise<void> {
+      const p = provider(id);
+      if (!p.deleteModel) throw new FunnelError(`${p.displayName} cannot delete models.`, "unsupported");
+      await p.deleteModel(name);
+    },
     manifest: () => loadManifest(options.manifestUrl),
 
     stream,

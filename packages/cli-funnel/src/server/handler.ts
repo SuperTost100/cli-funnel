@@ -147,7 +147,18 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
       if (seg[0] === "providers" && seg[1]) {
         const id = seg[1] as ProviderId;
         if (!funnel.providers[id]) return json({ error: `Unknown provider ${id}` }, 404);
-        if (m === "GET" && seg[2] === "models") return json(await funnel.models(id));
+        if (m === "GET" && seg[2] === "models" && !seg[3]) return json(await funnel.models(id));
+        if (m === "POST" && seg[2] === "models" && seg[3] === "pull") {
+          const { name } = (await req.json()) as { name?: string };
+          if (!name) return json({ error: "name is required" }, 400);
+          return new Response(sse(funnel.pullModel(id, name, { signal: req.signal })), { headers: sseHeaders });
+        }
+        if (m === "POST" && seg[2] === "models" && seg[3] === "delete") {
+          const { name } = (await req.json()) as { name?: string };
+          if (!name) return json({ error: "name is required" }, 400);
+          await funnel.deleteModel(id, name);
+          return json({ ok: true });
+        }
         if (m === "GET" && seg[2] === "auth") return json(await funnel.authStatus(id));
         if (m === "POST" && seg[2] === "login") return await login(id, req);
         if (m === "POST" && seg[2] === "logout") {

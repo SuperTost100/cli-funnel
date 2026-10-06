@@ -21,6 +21,7 @@ Use Claude Code, Codex, Cursor Agent and Antigravity CLIs like an API. The packa
 ## Rules
 
 - Never run `login`, `logout` or `update` on a real CLI while testing. They change the user's account and install.
+- Never pull or delete models on the user's Ollama server while testing. Use a throwaway server.
 - Never pass `claude --bare`. It disables subscription login.
 - Never read or store OAuth tokens. Never put emails, org ids or tokens in fixtures.
 - List an access level in a provider's `capabilities.access` only if the CLI can enforce it headlessly. `supervised` needs a working approval passthrough. `none` needs a mode the CLI enforces, not one the model is asked to follow.

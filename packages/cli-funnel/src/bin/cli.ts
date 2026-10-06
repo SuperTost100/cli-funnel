@@ -14,12 +14,14 @@ const HELP = `cli-funnel <command>
   login <provider>             Sign in through the provider's own login flow
   logout <provider>            Sign out
   update <provider>            Run the CLI's own updater
+  pull <provider> <model>      Download a model (Ollama)
+  rm <provider> <model>        Delete a downloaded model (Ollama)
   run <provider> <model> <prompt>
        [--effort x] [--fast] [--context tokens] [--cwd dir] [--access ${ACCESS_LEVELS.join("|")}]
   serve [--port 4747] [--host 127.0.0.1] [--cwd dir] [--access level] [--token secret]
                                HTTP API, SSE streaming and OpenAI-compatible /v1 endpoints
 
-Providers: claude, codex, agent, antigravity`;
+Providers: claude, codex, agent, antigravity, anthropic-api, openai-api, gemini-api, ollama`;
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -104,6 +106,32 @@ async function main() {
   if (command === "update") {
     const r = await funnel.update(provider());
     return out(r.changed ? `Updated ${r.from} -> ${r.to}` : `Already current${r.to ? " (" + r.to + ")" : ""}.`);
+  }
+
+  if (command === "pull") {
+    const [model] = rest;
+    if (!model) return out("Usage: cli-funnel pull <provider> <model>");
+    let last = "";
+    for await (const e of funnel.pullModel(provider(), model)) {
+      if (e.type === "progress") {
+        const pct = e.total ? ` ${Math.floor(((e.completed ?? 0) / e.total) * 100)}%` : "";
+        const line = `${e.status}${pct}`;
+        if (line !== last) process.stderr.write(`${line}\n`);
+        last = line;
+      } else if (e.type === "done") out(`Pulled ${model}.`);
+      else {
+        out(e.message);
+        process.exitCode = 1;
+      }
+    }
+    return;
+  }
+
+  if (command === "rm") {
+    const [model] = rest;
+    if (!model) return out("Usage: cli-funnel rm <provider> <model>");
+    await funnel.deleteModel(provider(), model);
+    return out(`Deleted ${model}.`);
   }
 
   if (command === "run") {
