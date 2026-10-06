@@ -1,5 +1,5 @@
 export type CliProviderId = "claude" | "codex" | "agent" | "antigravity";
-export type ApiProviderId = "anthropic-api" | "openai-api";
+export type ApiProviderId = "anthropic-api" | "openai-api" | "gemini-api";
 export type ProviderId = CliProviderId | ApiProviderId;
 
 /**

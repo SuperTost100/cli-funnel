@@ -8,6 +8,7 @@ import { createHandler, serveNode } from "cli-funnel/server";
 const sandbox = join(homedir(), "cli-funnel-playground");
 mkdirSync(sandbox, { recursive: true });
 
-const handler = createHandler(createFunnel(), { basePath: "/api/funnel", fsRoots: [homedir()] });
+// API providers read ANTHROPIC_API_KEY, OPENAI_API_KEY and GEMINI_API_KEY. Without a key they show as signed out.
+const handler = createHandler(createFunnel({ apiKeys: {} }), { basePath: "/api/funnel", fsRoots: [homedir()] });
 const { url } = await serveNode(handler, { port: 4747 });
 console.log(`funnel server on ${url}  (default project folder: ${sandbox})`);

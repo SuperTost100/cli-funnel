@@ -17,12 +17,12 @@ result.structured; // { color: "rosso" }
 
 ## What each provider does
 
-| | Claude Code | Codex | Cursor Agent | Antigravity | Anthropic API | OpenAI API |
-|---|---|---|---|---|---|---|
-| `system` | `--system-prompt` at `none`, `--append-system-prompt` otherwise | `developerInstructions` | put in front of the prompt | put in front of the prompt | `system` | a system message |
-| `attachments` | image blocks in the stream-json message | `image` input items | refused | refused | image blocks | `image_url` parts |
-| `responseSchema` | `--json-schema` | `outputSchema` | asked for in the prompt | `--json-schema` | `output_config.format` | `response_format` |
-| `maxOutputTokens` | ignored | ignored | ignored | ignored | `max_tokens` | `max_completion_tokens` |
+| | Claude Code | Codex | Cursor Agent | Antigravity | Anthropic API | OpenAI API | Gemini API |
+|---|---|---|---|---|---|---|---|
+| `system` | `--system-prompt` at `none`, `--append-system-prompt` otherwise | `developerInstructions` | put in front of the prompt | put in front of the prompt | `system` | a system message | `systemInstruction` |
+| `attachments` | image blocks in the stream-json message | `image` input items | refused | refused | image blocks | `image_url` parts | `inlineData` parts |
+| `responseSchema` | `--json-schema` | `outputSchema` | asked for in the prompt | `--json-schema` | `output_config.format` | `response_format` | `responseJsonSchema` |
+| `maxOutputTokens` | ignored | ignored | ignored | ignored | `max_tokens` | `max_completion_tokens` | `maxOutputTokens` |
 
 `capabilities.system`, `capabilities.images` and `capabilities.schema` say the same thing in code. A run with attachments on a provider without `images` fails with `unsupported` before the CLI starts.
 

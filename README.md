@@ -21,7 +21,7 @@ result.text;   // the answer
 result.usage;  // { inputTokens, outputTokens, ... }
 ```
 
-Switch `provider` to `codex`, `agent` or `antigravity` and nothing else in your code changes. Switch it to `anthropic-api` or `openai-api` to use a key instead.
+Switch `provider` to `codex`, `agent` or `antigravity` and nothing else in your code changes. Switch it to `anthropic-api`, `openai-api` or `gemini-api` to use a key instead.
 
 ## Why
 

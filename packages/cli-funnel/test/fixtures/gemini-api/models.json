@@ -1,0 +1,19 @@
+{
+  "pages": [
+    {
+      "models": [
+        { "name": "models/gemini-3.8-flash", "displayName": "Gemini 3.8 Flash", "supportedGenerationMethods": ["generateContent", "countTokens"] },
+        { "name": "models/gemini-flash-latest", "displayName": "Gemini Flash Latest", "supportedGenerationMethods": ["generateContent"] },
+        { "name": "models/gemini-embedding-001", "displayName": "Gemini Embedding 001", "supportedGenerationMethods": ["embedContent"] },
+        { "name": "models/gemini-3.8-flash-tts", "displayName": "Gemini 3.8 Flash TTS", "supportedGenerationMethods": ["generateContent"] }
+      ],
+      "nextPageToken": "p2"
+    },
+    {
+      "models": [
+        { "name": "models/gemini-3.1-pro", "displayName": "Gemini 3.1 Pro", "supportedGenerationMethods": ["generateContent"] },
+        { "name": "models/gemma-4-27b-it", "displayName": "Gemma 4 27B", "supportedGenerationMethods": ["generateContent"] }
+      ]
+    }
+  ]
+}

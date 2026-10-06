@@ -3,4 +3,4 @@ export { validateSelection } from "./selection.js";
 export { PROVIDERS } from "./providers/index.js";
 export { loadManifest, type ModelManifest, type ManifestModel } from "./catalog/manifest.js";
 export * from "./types.js";
-export { createApiProviders } from "./providers/api.js";
+export { createApiProviders, type ApiKeys } from "./providers/api.js";
