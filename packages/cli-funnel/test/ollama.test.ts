@@ -2,9 +2,11 @@ import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { collect } from "../src/providers/base.js";
 import { createOllamaProvider } from "../src/providers/ollama/index.js";
-import { mapChatLine, normalizeBaseUrl, parseTags } from "../src/providers/ollama/parser.js";
+import { mapChatLine, mapPullLine, normalizeBaseUrl, parseTags } from "../src/providers/ollama/parser.js";
 import { createFunnel } from "../src/funnel.js";
-import type { FunnelEvent, RunInput } from "../src/types.js";
+import { createHandler } from "../src/server/handler.js";
+import { createClient } from "../src/client/index.js";
+import type { FunnelEvent, PullEvent, RunInput } from "../src/types.js";
 
 // Recorded from Ollama 0.35.1 with smollm2:135m and qwen3:0.6b.
 const fx = (n: string) => readFileSync(new URL(`./fixtures/ollama/${n}`, import.meta.url), "utf8");
@@ -173,6 +175,64 @@ describe("ollama provider", () => {
   });
 });
 
+describe("ollama pull and delete", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const collectPull = async (it: AsyncIterable<PullEvent>) => {
+    const out: PullEvent[] = [];
+    for await (const e of it) out.push(e);
+    return out;
+  };
+
+  it("maps pull lines", () => {
+    const events = lines("pull.ndjson").map(mapPullLine);
+    expect(events[0]).toEqual({ type: "progress", status: "pulling manifest" });
+    expect(events.find((e) => e?.type === "progress" && e.completed)).toMatchObject({ total: 45949216, digest: expect.stringMatching(/^sha256:/) });
+    expect(events.at(-1)).toEqual({ type: "done" });
+    expect(mapPullLine({ error: "boom" })).toEqual({ type: "error", message: "boom" });
+  });
+
+  it("streams a pull and stops at success", async () => {
+    const calls = stubFetch(() => ndjson(fx("pull.ndjson")));
+    const events = await collectPull(createOllamaProvider({ baseUrl: "http://box:1" }).pullModel!("all-minilm:22m"));
+    expect(calls[0]).toMatchObject({ url: "http://box:1/api/pull", body: { model: "all-minilm:22m", stream: true } });
+    expect(events.at(-1)).toEqual({ type: "done" });
+    expect(events.filter((e) => e.type === "progress").length).toBeGreaterThan(5);
+  });
+
+  it("reports a pull error sent inside a 200 stream", async () => {
+    stubFetch(() => ndjson(fx("pull-error.ndjson")));
+    const events = await collectPull(createOllamaProvider({ baseUrl: "http://box:1" }).pullModel!("no-such-model-cf:1b"));
+    expect(events.at(-1)).toEqual({ type: "error", message: "pull model manifest: file does not exist" });
+  });
+
+  it("deletes a model and explains a missing one", async () => {
+    const calls = stubFetch((url) => (calls.length > 1 ? ndjson(fx("delete-not-found.json"), 404) : new Response("", { status: 200 })));
+    const p = createOllamaProvider({ baseUrl: "http://box:1" });
+    await p.deleteModel!("all-minilm:22m");
+    expect(calls[0]).toMatchObject({ url: "http://box:1/api/delete", body: { model: "all-minilm:22m" } });
+    await expect(p.deleteModel!("all-minilm:22m")).rejects.toMatchObject({ code: "invalid-selection" });
+  });
+
+  it("is refused on providers that cannot manage models", () => {
+    const funnel = createFunnel();
+    expect(funnel.providers.ollama.capabilities.manageModels).toBe(true);
+    expect(funnel.providers.claude.capabilities.manageModels).toBeFalsy();
+    expect(() => funnel.pullModel("claude", "x")).toThrow(/cannot pull models/);
+  });
+
+  it("streams a pull through the HTTP handler and the client", async () => {
+    const funnel = createFunnel({ ollama: { baseUrl: "http://box:1" } });
+    const handler = createHandler(funnel);
+    stubFetch(() => ndjson(fx("pull.ndjson")));
+    const client = createClient({ baseUrl: "http://funnel", fetch: (url, init) => handler(new Request(url as string, init)) });
+    const events = await collectPull(client.pullModel("ollama", "all-minilm:22m"));
+    expect(events.at(-1)).toEqual({ type: "done" });
+    const refused = await handler(new Request("http://funnel/providers/claude/models/pull", { method: "POST", body: JSON.stringify({ name: "x" }) }));
+    expect(refused.status).toBe(409);
+  });
+});
+
 const LIVE_URL = process.env.CLI_FUNNEL_OLLAMA_URL ?? process.env.OLLAMA_HOST ?? "127.0.0.1:11434";
 const LIVE_MODEL = process.env.CLI_FUNNEL_OLLAMA_MODEL;
 
@@ -188,4 +248,15 @@ describe.skipIf(process.env.CLI_FUNNEL_LIVE !== "1" || !LIVE_MODEL)("ollama live
     const c = await funnel.run({ selection, prompt: "Give a=1 as JSON.", responseSchema: SCHEMA, maxOutputTokens: 40 });
     expect(c.structured).toMatchObject({ a: expect.any(Number) });
   }, 120_000);
+
+  // Downloads and deletes a model on the server. Point CLI_FUNNEL_OLLAMA_URL at a throwaway server.
+  it.skipIf(!process.env.CLI_FUNNEL_OLLAMA_PULL)("pulls and deletes a model", async () => {
+    const funnel = createFunnel({ ollama: { baseUrl: LIVE_URL } });
+    const name = process.env.CLI_FUNNEL_OLLAMA_PULL!;
+    const events: PullEvent[] = [];
+    for await (const e of funnel.pullModel("ollama", name)) events.push(e);
+    expect(events.at(-1)).toEqual({ type: "done" });
+    await funnel.deleteModel("ollama", name);
+    await expect(funnel.deleteModel("ollama", name)).rejects.toMatchObject({ code: "invalid-selection" });
+  }, 600_000);
 });

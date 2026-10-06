@@ -1,8 +1,8 @@
 import { readNDJSON } from "../../util/ndjson.js";
 import { compareVersions } from "../../util/process.js";
-import { FunnelError, type AuthStatus, type FunnelEvent, type Installation, type ModelInfo, type Provider, type RunInput } from "../../types.js";
+import { FunnelError, type AuthStatus, type FunnelEvent, type Installation, type ModelInfo, type Provider, type PullEvent, type RunInput } from "../../types.js";
 import { runWithHistory } from "../history.js";
-import { mapChatLine, normalizeBaseUrl, parseTags } from "./parser.js";
+import { mapChatLine, mapPullLine, normalizeBaseUrl, parseTags } from "./parser.js";
 
 export interface OllamaOptions {
   /** Server URL. Defaults to `OLLAMA_HOST`, then `http://127.0.0.1:11434`. */
@@ -98,6 +98,30 @@ export function createOllamaProvider(options: OllamaOptions = {}): Provider {
     if (!finished) yield { type: "error", message: "Ollama closed the stream before the answer finished.", code: "cli-failed" };
   }
 
+  async function* pullModel(name: string, opts: { signal?: AbortSignal } = {}): AsyncGenerator<PullEvent> {
+    try {
+      const res = await fetch(`${base()}/api/pull`, { method: "POST", signal: opts.signal, headers: headers(true), body: JSON.stringify({ model: name, stream: true }) });
+      if (!res.ok) return yield { type: "error", message: `Ollama ${res.status}: ${await errorText(res)}` };
+      for await (const line of readNDJSON(res)) {
+        const e = mapPullLine(line);
+        if (!e) continue;
+        yield e;
+        if (e.type !== "progress") return;
+      }
+    } catch (err) {
+      if (opts.signal?.aborted) return;
+      return yield { type: "error", message: `${notRunning()} ${String(err)}` };
+    }
+    if (!opts.signal?.aborted) yield { type: "error", message: "Ollama closed the stream before the pull finished." };
+  }
+
+  async function deleteModel(name: string): Promise<void> {
+    const res = await fetch(`${base()}/api/delete`, { method: "DELETE", headers: headers(true), body: JSON.stringify({ model: name }) }).catch(() => undefined);
+    if (!res) throw new FunnelError(notRunning(), "not-installed");
+    if (res.status === 404) throw new FunnelError(`${name} is not on the Ollama server.`, "invalid-selection");
+    if (!res.ok) throw new FunnelError(`Ollama ${res.status}: ${await errorText(res)}`, "cli-failed");
+  }
+
   return {
     id: "ollama",
     displayName: "Ollama",
@@ -112,6 +136,7 @@ export function createOllamaProvider(options: OllamaOptions = {}): Provider {
       images: true,
       system: "native",
       schema: "native",
+      manageModels: true,
     },
     detect,
     authStatus,
@@ -129,6 +154,8 @@ export function createOllamaProvider(options: OllamaOptions = {}): Provider {
     },
     update: async () => ({ changed: false, output: "Update Ollama with its own installer or package manager." }),
     models,
+    pullModel,
+    deleteModel,
     run: (input) => runWithHistory(input, userMessage(input), (text): ChatMessage => ({ role: "assistant", content: text }), (messages) => chat(input, messages)),
   };
 }

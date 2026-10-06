@@ -32,6 +32,8 @@ const client = createClient({ baseUrl: "/api/funnel", token });
 
 The client has no React dependency. It works in any browser or runtime.
 
+It mirrors the funnel: `providers()`, `models(id)`, `authStatus(id)`, `login(id)`, `logout(id)`, `update(id)`, `run(input)`, and on Ollama `pullModel(id, name, signal)` and `deleteModel(id, name)`.
+
 ## Picker
 
 ```tsx

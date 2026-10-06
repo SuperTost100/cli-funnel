@@ -1,4 +1,4 @@
-import type { FunnelEvent, ModelInfo, Usage } from "../../types.js";
+import type { FunnelEvent, ModelInfo, PullEvent, Usage } from "../../types.js";
 
 type Json = Record<string, any>;
 
@@ -24,6 +24,22 @@ export function toUsage(line: Json): Usage | undefined {
   const inputTokens = line.prompt_eval_count ?? 0;
   const outputTokens = line.eval_count ?? 0;
   return { inputTokens, outputTokens, cachedInputTokens: line.prompt_eval_cached_count, totalTokens: inputTokens + outputTokens };
+}
+
+/** Maps one `/api/pull` stream line. `success` is the last line of a finished pull. */
+export function mapPullLine(line: unknown): PullEvent | undefined {
+  const l = line as Json;
+  if (!l || typeof l !== "object" || "__raw" in l) return undefined;
+  if (l.error) return { type: "error", message: String(l.error) };
+  if (l.status === "success") return { type: "done" };
+  if (typeof l.status !== "string") return undefined;
+  return {
+    type: "progress",
+    status: l.status,
+    ...(l.digest ? { digest: l.digest } : {}),
+    ...(typeof l.total === "number" ? { total: l.total } : {}),
+    ...(typeof l.completed === "number" ? { completed: l.completed } : {}),
+  };
 }
 
 /** Maps one `/api/chat` stream line to events. The final line (`done: true`) carries the token counts. */

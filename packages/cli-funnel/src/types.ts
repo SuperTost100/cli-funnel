@@ -48,7 +48,15 @@ export interface Capabilities {
   system: "native" | "prompt";
   /** `native` when the CLI or API enforces `responseSchema`. `prompt` means the schema is only asked for in the prompt. */
   schema: "native" | "prompt";
+  /** True when `pullModel` and `deleteModel` work. Model servers such as Ollama. */
+  manageModels?: boolean;
 }
+
+/** Progress of `pullModel`. The stream ends after `done` or `error`. */
+export type PullEvent =
+  | { type: "progress"; status: string; digest?: string; completed?: number; total?: number }
+  | { type: "done" }
+  | { type: "error"; message: string };
 
 /** The whole UI state in one serializable object. Hardcode it or let the UI produce it. */
 export interface Selection {
@@ -208,6 +216,10 @@ export interface Provider {
   update(): Promise<UpdateResult>;
   models(): Promise<ModelInfo[]>;
   run(input: RunInput): AsyncIterable<FunnelEvent>;
+  /** Downloads a model so it can run. Present when `capabilities.manageModels` is true. Aborting the signal ends the stream. */
+  pullModel?(name: string, options?: { signal?: AbortSignal }): AsyncIterable<PullEvent>;
+  /** Removes a downloaded model. Present when `capabilities.manageModels` is true. */
+  deleteModel?(name: string): Promise<void>;
 }
 
 export class FunnelError extends Error {
