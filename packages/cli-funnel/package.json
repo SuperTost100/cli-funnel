@@ -1,6 +1,6 @@
 {
   "name": "cli-funnel",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Use Claude Code, Codex, Cursor Agent and Antigravity CLIs like an API, on your subscription. Also the Anthropic, OpenAI and Gemini APIs, Ollama and OpenAI-compatible servers.",
   "license": "MIT",
   "type": "module",

@@ -1,6 +1,6 @@
 {
   "name": "cli-funnel-react",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "React hooks and components for cli-funnel: model picker, folder picker, access level, login and one-click update.",
   "license": "MIT",
   "type": "module",
@@ -18,7 +18,7 @@
     "*.css"
   ],
   "peerDependencies": {
-    "cli-funnel": "^0.2.0",
+    "cli-funnel": "^0.3.0",
     "react": ">=18"
   },
   "devDependencies": {
