@@ -1,6 +1,6 @@
 # cli-funnel
 
-Use Claude Code, Codex, Cursor Agent and Antigravity like an API. Same call, same output, on the subscription you already pay for.
+Use Claude Code, Codex, Cursor Agent and Antigravity like an API. Same call, same output, on the subscription you already pay for. The same call also reaches the Anthropic, OpenAI and Gemini APIs with a key, a local Ollama, and any OpenAI-compatible server.
 
 ```ts
 import { createFunnel } from "cli-funnel";
@@ -21,7 +21,7 @@ result.text;   // the answer
 result.usage;  // { inputTokens, outputTokens, ... }
 ```
 
-Switch `provider` to `codex`, `agent` or `antigravity` and nothing else in your code changes. Switch it to `anthropic-api`, `openai-api` or `gemini-api` to use a key instead, or to `ollama` for a local model.
+Switch `provider` to `codex`, `agent` or `antigravity` and nothing else in your code changes. Switch it to `anthropic-api`, `openai-api` or `gemini-api` to use a key instead, to `ollama` for a local model, or to `openai-compatible:<id>` for a server you configured.
 
 ## Why
 
@@ -122,7 +122,7 @@ const client = createClient({ baseUrl: "/api/funnel" });
 - [Sign-in and updates](docs/auth-and-updates.md)
 - [UI components](docs/ui.md)
 - [OpenAI compatibility](docs/openai-compat.md) and [API keys](docs/api-keys.md)
-- Providers: [Claude Code](docs/providers/claude.md), [Codex](docs/providers/codex.md), [Cursor Agent](docs/providers/agent.md), [Antigravity](docs/providers/antigravity.md), [Ollama](docs/providers/ollama.md)
+- Providers: [Claude Code](docs/providers/claude.md), [Codex](docs/providers/codex.md), [Cursor Agent](docs/providers/agent.md), [Antigravity](docs/providers/antigravity.md), [Ollama](docs/providers/ollama.md), [OpenAI-compatible servers](docs/providers/openai-compatible.md)
 - [Adding a provider](docs/adding-a-provider.md)
 - [Keeping up with CLI changes](docs/maintenance.md)
 - [Terms and limits](docs/tos-notes.md)

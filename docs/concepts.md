@@ -4,6 +4,8 @@
 
 Claude Code, Codex, Cursor Agent and Antigravity each run headless with their own flags, event formats and login commands. cli-funnel starts the real CLI binary as a child process, translates its output into one event format, and gives you one way to sign in, update and pick settings.
 
+The same interface also covers providers that spawn nothing: the Anthropic, OpenAI and Gemini APIs with a key, an Ollama server, and any OpenAI-compatible server. They have no machine access, so `access` and `cwd` do not apply to them.
+
 Because the real binary runs, the work counts against the subscription that CLI is signed in to. cli-funnel never reads or copies OAuth tokens. It never calls a provider's private endpoints. It does not pass `claude --bare`, which would disable subscription login.
 
 ## The pieces

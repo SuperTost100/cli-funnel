@@ -24,6 +24,8 @@ result.structured; // { color: "rosso" }
 | `responseSchema` | `--json-schema` | `outputSchema` | asked for in the prompt | `--json-schema` | `output_config.format` | `response_format` | `responseJsonSchema` | `format` |
 | `maxOutputTokens` | ignored | ignored | ignored | ignored | `max_tokens` | `max_completion_tokens` | `maxOutputTokens` | `options.num_predict` |
 
+OpenAI-compatible servers send the same fields as the OpenAI API, except `max_tokens` for the output limit. See [OpenAI-compatible servers](providers/openai-compatible.md).
+
 `capabilities.system`, `capabilities.images` and `capabilities.schema` say the same thing in code. A run with attachments on a provider without `images` fails with `unsupported` before the CLI starts.
 
 ## Structured answers

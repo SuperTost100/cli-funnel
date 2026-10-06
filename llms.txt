@@ -1,6 +1,6 @@
 # cli-funnel
 
-> Use Claude Code, Codex, Cursor Agent and Antigravity CLIs like an API. Spawns the real CLI, so runs use the user's subscription. One event format, one result shape, plus sign-in, update, model pickers and an OpenAI-compatible server.
+> Use Claude Code, Codex, Cursor Agent and Antigravity CLIs like an API. Spawns the real CLI, so runs use the user's subscription. Also reaches the Anthropic, OpenAI and Gemini APIs, Ollama, and OpenAI-compatible servers through the same call. One event format, one result shape, plus sign-in, update, model pickers and an OpenAI-compatible server.
 
 ## Docs
 
@@ -13,14 +13,16 @@
 - [UI components](docs/ui.md): React hooks, picker, login panel, approvals
 - [OpenAI compatibility](docs/openai-compat.md)
 - [API keys](docs/api-keys.md)
-- [Ollama](docs/providers/ollama.md): local models, no key
+- [Ollama](docs/providers/ollama.md): local models, no key, pull and delete
+- [OpenAI-compatible servers](docs/providers/openai-compatible.md): LM Studio, llama.cpp, vLLM, gateways
 - [Adding a provider](docs/adding-a-provider.md)
 - [Keeping up with CLI changes](docs/maintenance.md)
 - [Terms and limits](docs/tos-notes.md)
 
 ## Facts
 
-- Model ids are concrete versioned names. Get them from `cli-funnel models <provider> --json`. Ollama ids are the server's own names, such as `llama3.2:3b`.
+- Model ids are concrete versioned names. Get them from `cli-funnel models <provider> --json`. Ollama and OpenAI-compatible ids are the server's own names, such as `llama3.2:3b`.
+- Provider ids: `claude`, `codex`, `agent`, `antigravity`, `anthropic-api`, `openai-api`, `gemini-api`, `ollama`, and `openai-compatible:<id>` for each configured server.
 - `access: "supervised"` needs an `onApproval` callback and is not available on every provider. Check `capabilities.access`.
 - `funnel.run()` returns `{ text, usage, sessionId, model, finishReason, toolCalls, deniedActions }`.
 - Do not run `login`, `logout`, `update`, `pull` or `rm` without asking the user.

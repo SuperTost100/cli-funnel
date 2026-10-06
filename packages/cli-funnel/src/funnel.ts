@@ -4,6 +4,7 @@ import { collect } from "./providers/base.js";
 import { PROVIDERS } from "./providers/index.js";
 import { createApiProviders, type ApiKeys } from "./providers/api.js";
 import { createOllamaProvider, type OllamaOptions } from "./providers/ollama/index.js";
+import { createOpenAICompatibleProviders, type OpenAICompatibleEndpoint } from "./providers/openai-compatible.js";
 import {
   FunnelError,
   type AuthStatus,
@@ -30,6 +31,8 @@ export interface FunnelOptions {
   apiKeys?: ApiKeys;
   /** Ollama server settings. Without them the provider uses OLLAMA_HOST or 127.0.0.1:11434, and reports itself not installed when no server answers. */
   ollama?: OllamaOptions;
+  /** OpenAI-compatible servers. Each becomes a provider with id `openai-compatible:<id>`. */
+  openaiCompatible?: OpenAICompatibleEndpoint[];
 }
 
 export interface ProviderOverview {
@@ -50,6 +53,7 @@ export function createFunnel(options: FunnelOptions = {}) {
     ...PROVIDERS,
     ...(options.apiKeys ? createApiProviders(options.apiKeys) : {}),
     ...(options.ollama ? { ollama: createOllamaProvider(options.ollama) } : {}),
+    ...createOpenAICompatibleProviders(options.openaiCompatible),
     ...options.providers,
   } as Record<ProviderId, Provider>;
   const provider = (id: ProviderId): Provider => {

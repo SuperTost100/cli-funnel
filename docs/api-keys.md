@@ -39,6 +39,8 @@ Conversation history for `sessionId` lives in the process memory. It is gone aft
 
 Prefer passing the key through `apiKeys`. `agy` also reads `GEMINI_API_KEY` as a sign-in method, so the variable in the environment of a process that runs Antigravity may switch it to API billing.
 
+For models on your own machine or server, see [Ollama](providers/ollama.md) and [OpenAI-compatible servers](providers/openai-compatible.md). They need no key unless the server asks for one.
+
 ## When to use a key
 
 Use a key when many people share one deployment, when the work needs a service-level guarantee, or when the provider's subscription terms do not fit your product. See [Terms and limits](tos-notes.md).

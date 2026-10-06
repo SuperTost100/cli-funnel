@@ -16,7 +16,7 @@ interface Selection {
 
 ## Where model lists come from
 
-Model ids are never aliases. The list for each provider is built from two sources, and the CLI wins when both name the same id. Ollama is the exception: its list comes only from the server, and ids such as `qwen3:latest` are passed through as the server names them. See [Ollama](providers/ollama.md).
+Model ids are never aliases. The list for each provider is built from two sources, and the CLI wins when both name the same id. Model servers are the exception: Ollama and OpenAI-compatible lists come only from the server, and ids such as `qwen3:latest` are passed through as the server names them. See [Ollama](providers/ollama.md) and [OpenAI-compatible servers](providers/openai-compatible.md).
 
 1. The CLI itself, when it can list models. Codex, Cursor Agent and Antigravity can.
 2. A manifest in `data/models/<provider>.json`, verified against the real CLI by the contract tests. Claude Code has no list command, so its list comes only from here.

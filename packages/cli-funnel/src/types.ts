@@ -1,7 +1,7 @@
 export type CliProviderId = "claude" | "codex" | "agent" | "antigravity";
 export type ApiProviderId = "anthropic-api" | "openai-api" | "gemini-api";
-/** Model servers reached over HTTP. They need no binary and no key. */
-export type ServerProviderId = "ollama";
+/** Model servers reached over HTTP. They need no binary. `openai-compatible:<id>` is one configured endpoint. */
+export type ServerProviderId = "ollama" | `openai-compatible:${string}`;
 export type ProviderId = CliProviderId | ApiProviderId | ServerProviderId;
 
 /**

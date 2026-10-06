@@ -9,7 +9,7 @@ import {
   type RunInput,
 } from "../types.js";
 
-interface Msg {
+export interface Msg {
   role: "user" | "assistant";
   /** A string, or vendor-shaped content parts when images are attached. */
   content: string | unknown[];
@@ -83,6 +83,84 @@ const anthropic: ApiSpec = {
   },
 };
 
+export interface ChatCompletionsOptions {
+  /** Base URL that ends before `/chat/completions`, for example `https://api.openai.com/v1`. */
+  baseUrl: string;
+  key?: string;
+  /** Name of the output limit field. OpenAI uses `max_completion_tokens`, most other servers `max_tokens`. */
+  maxTokensField: "max_completion_tokens" | "max_tokens";
+  /** Prefix for error messages, for example "OpenAI API". */
+  label: string;
+}
+
+/** Streams one Chat Completions turn. Shared by `openai-api` and the OpenAI-compatible endpoints. */
+export async function* streamChatCompletions(opts: ChatCompletionsOptions, input: RunInput, messages: Msg[]): AsyncGenerator<FunnelEvent> {
+  let res: Response;
+  try {
+    res = await fetch(`${opts.baseUrl}/chat/completions`, {
+      method: "POST",
+      signal: input.signal,
+      headers: { ...(opts.key ? { authorization: `Bearer ${opts.key}` } : {}), "content-type": "application/json" },
+      body: JSON.stringify({
+        model: input.selection.model,
+        // The system message is sent on every call and never stored in the session history.
+        messages: input.system ? [{ role: "system", content: input.system }, ...messages] : messages,
+        stream: true,
+        stream_options: { include_usage: true },
+        ...(input.maxOutputTokens ? { [opts.maxTokensField]: input.maxOutputTokens } : {}),
+        ...(input.responseSchema
+          ? { response_format: { type: "json_schema", json_schema: { name: input.responseSchema.name ?? "response", schema: input.responseSchema.schema } } }
+          : {}),
+      }),
+    });
+  } catch (err) {
+    if (input.signal?.aborted) return yield { type: "done", text: "", finishReason: "cancelled" };
+    return yield { type: "error", message: `${opts.label} is not reachable at ${opts.baseUrl}: ${String(err)}`, code: "cli-failed" };
+  }
+  if (!res.ok) return yield { type: "error", message: `${opts.label} ${res.status}: ${await res.text()}`, code: "cli-failed" };
+  let usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number; prompt_tokens_details?: { cached_tokens?: number } } | undefined;
+  let stop = "stop";
+  try {
+    for await (const { data } of readSSE(res)) {
+      if (data === "[DONE]") break;
+      const e = JSON.parse(data);
+      if (e.error) return yield { type: "error", message: String(e.error.message ?? e.error), code: "cli-failed" };
+      const choice = e.choices?.[0];
+      // Servers name the reasoning field differently: vLLM, llama.cpp and LM Studio use reasoning_content, Ollama uses reasoning.
+      const reasoning = choice?.delta?.reasoning_content ?? choice?.delta?.reasoning;
+      if (typeof reasoning === "string" && reasoning) yield { type: "reasoning.delta", text: reasoning };
+      if (choice?.delta?.content) yield { type: "text.delta", text: choice.delta.content };
+      if (choice?.finish_reason) stop = choice.finish_reason;
+      if (e.usage) usage = e.usage;
+    }
+  } catch (err) {
+    if (input.signal?.aborted) return yield { type: "done", text: "", finishReason: "cancelled" };
+    throw err;
+  }
+  if (usage) {
+    const cached = usage.prompt_tokens_details?.cached_tokens;
+    yield {
+      type: "usage",
+      usage: {
+        inputTokens: usage.prompt_tokens,
+        outputTokens: usage.completion_tokens,
+        ...(cached !== undefined ? { cachedInputTokens: cached } : {}),
+        totalTokens: usage.total_tokens ?? usage.prompt_tokens + usage.completion_tokens,
+      },
+    };
+  }
+  yield { type: "done", text: "", finishReason: stop === "content_filter" ? "denied" : "stop" };
+}
+
+/** The user turn in Chat Completions format. */
+export function chatUserContent(input: RunInput): string | unknown[] {
+  if (!input.attachments?.length) return input.prompt;
+  return [
+    { type: "text", text: input.prompt },
+    ...input.attachments.map((a) => ({ type: "image_url", image_url: { url: `data:${a.mediaType};base64,${a.data}` } })),
+  ];
+}
+
 const openai: ApiSpec = {
   id: "openai-api",
   displayName: "OpenAI API",
@@ -97,44 +175,9 @@ const openai: ApiSpec = {
       .map((m) => ({ id: m.id, name: m.id, provider: "openai-api" as const, ...NO_EFFORT }))
       .sort((a, b) => a.id.localeCompare(b.id));
   },
-  async *stream(key, input, messages) {
-    const res = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      signal: input.signal,
-      headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
-      body: JSON.stringify({
-        model: input.selection.model,
-        // The system message is sent on every call and never stored in the session history.
-        messages: input.system ? [{ role: "system", content: input.system }, ...messages] : messages,
-        stream: true,
-        stream_options: { include_usage: true },
-        ...(input.maxOutputTokens ? { max_completion_tokens: input.maxOutputTokens } : {}),
-        ...(input.responseSchema
-          ? { response_format: { type: "json_schema", json_schema: { name: input.responseSchema.name ?? "response", schema: input.responseSchema.schema } } }
-          : {}),
-      }),
-    });
-    if (!res.ok) return yield { type: "error", message: `OpenAI API ${res.status}: ${await res.text()}`, code: "cli-failed" };
-    let usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
-    let stop = "stop";
-    for await (const { data } of readSSE(res)) {
-      if (data === "[DONE]") break;
-      const e = JSON.parse(data);
-      const choice = e.choices?.[0];
-      if (choice?.delta?.content) yield { type: "text.delta", text: choice.delta.content };
-      if (choice?.finish_reason) stop = choice.finish_reason;
-      if (e.usage) usage = e.usage;
-    }
-    if (usage) yield { type: "usage", usage: { inputTokens: usage.prompt_tokens, outputTokens: usage.completion_tokens, totalTokens: usage.total_tokens } };
-    yield { type: "done", text: "", finishReason: stop === "content_filter" ? "denied" : "stop" };
-  },
-  userContent(input) {
-    if (!input.attachments?.length) return input.prompt;
-    return [
-      { type: "text", text: input.prompt },
-      ...input.attachments.map((a) => ({ type: "image_url", image_url: { url: `data:${a.mediaType};base64,${a.data}` } })),
-    ];
-  },
+  stream: (key, input, messages) =>
+    streamChatCompletions({ baseUrl: "https://api.openai.com/v1", key, maxTokensField: "max_completion_tokens", label: "OpenAI API" }, input, messages),
+  userContent: chatUserContent,
 };
 
 const GEMINI = "https://generativelanguage.googleapis.com/v1beta";
