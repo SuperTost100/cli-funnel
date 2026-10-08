@@ -25,10 +25,10 @@ Without a token, the handler refuses requests a website in the same browser coul
 
 - loopback: `localhost`, `127.x.x.x` or `::1`
 - an IP address, such as a LAN or tailnet address
-- a `*.ts.net` name, when `tailscale serve` forwarded the request for a tailnet user. Tailscale Funnel requests from the internet have no tailnet user and are refused. Set `tailscale: false` to refuse tailnet requests too.
+- a `*.ts.net` name, when `tailscale serve` forwarded the request for a tailnet user. Tailscale Funnel requests from the internet are always refused, whatever their `Host`. Set `tailscale: false` to refuse tailnet requests too.
 - a name in `allowedHosts`. `".example.com"` also matches its subdomains, and `"*"` turns the check off.
 
-The `Origin`, when the browser sends one, must be loopback, in `allowedHosts`, or the same host the request went to. Anything else gets a 403. Everyone who can reach an accepted name can run agents, so set a token when others share your network or tailnet. `cli-funnel serve` and the playground server read `allowedHosts` from `CLI_FUNNEL_ALLOWED_HOSTS`, comma-separated.
+The `Origin`, when the browser sends one, must be loopback, in `allowedHosts`, or the same host the request went to. Anything else gets a 403. Everyone who can reach an accepted name can run agents, so set a token when others share your network or tailnet. The check reads headers a reverse proxy can rewrite. Behind any proxy other than `tailscale serve` that others can reach, set a token. `cli-funnel serve` and the playground server read `allowedHosts` from `CLI_FUNNEL_ALLOWED_HOSTS`, comma-separated.
 
 The folder picker only lists directories inside `fsRoots`, which defaults to the home directory.
 

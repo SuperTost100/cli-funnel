@@ -90,6 +90,8 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
   const allowed = (options.allowedHosts ?? []).map((h) => h.toLowerCase());
   const listed = (name: string) => allowed.some((h) => h === "*" || h === name || (h.startsWith(".") && (name.endsWith(h) || name === h.slice(1))));
   const localOnly = (req: Request): string | undefined => {
+    // Tailscale sets this on every Funnel request and strips it from the rest. Funnel is the public internet.
+    if (req.headers.has("tailscale-funnel-request")) return "Requests through Tailscale Funnel need a token.";
     const host = req.headers.get("host")?.toLowerCase();
     const name = host && hostnameOf(`http://${host}`);
     if (host) {

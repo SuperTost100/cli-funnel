@@ -165,6 +165,8 @@ describe("server", () => {
     expect((await at({ ...tailnet, origin: "https://other.example.ts.net" })).status).toBe(403);
     // Funnel requests and DNS rebinding have no tailnet user.
     expect((await at({ host: "devbox.example.ts.net" })).status).toBe(403);
+    // A Funnel client can send any Host, so the Funnel marker refuses it even with a loopback Host.
+    expect((await at({ host: "127.0.0.1:4747", "tailscale-funnel-request": "?1" })).status).toBe(403);
     const off = createHandler(funnel, { tailscale: false });
     expect((await off(new Request("http://x/providers", { headers: tailnet }))).status).toBe(403);
   });
