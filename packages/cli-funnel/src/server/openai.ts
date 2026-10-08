@@ -1,5 +1,5 @@
 import type { Funnel } from "../funnel.js";
-import { ACCESS_LEVELS, type AccessLevel, type Attachment, type FinishReason, type ProviderId, type RunInput, type Usage } from "../types.js";
+import { ACCESS_LEVELS, FunnelError, type AccessLevel, type Attachment, type FinishReason, type ProviderId, type RunInput, type Usage } from "../types.js";
 import { json, sse, sseHeaders } from "./sse.js";
 
 export interface OpenAIDefaults {
@@ -148,6 +148,7 @@ export async function handleOpenAI(
     })();
     return new Response(sse(chunks, { done: "[DONE]" }), { headers: sseHeaders });
   } catch (err) {
-    return json({ error: { message: err instanceof Error ? err.message : String(err), type: "cli_funnel_error" } }, 500);
+    const status = err instanceof FunnelError ? (err.code === "invalid-selection" ? 400 : 409) : 500;
+    return json({ error: { message: err instanceof Error ? err.message : String(err), type: "cli_funnel_error", code: (err as FunnelError).code } }, status);
   }
 }

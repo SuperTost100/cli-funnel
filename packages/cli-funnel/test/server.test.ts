@@ -55,6 +55,11 @@ describe("server", () => {
     expect(res.usage.total_tokens).toBe(5);
   });
 
+  it("answers 400 for a model the provider does not list", async () => {
+    const res = await post("/v1/chat/completions", { model: "claude/nope", messages: [{ role: "user", content: "hi" }] });
+    expect(res.status).toBe(400);
+  });
+
   it("streams chat completions ending with [DONE]", async () => {
     const res = await post("/v1/chat/completions", { model: "claude/fake-1", stream: true, messages: [{ role: "user", content: "hi" }] });
     const body = await res.text();

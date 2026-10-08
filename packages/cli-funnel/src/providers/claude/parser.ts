@@ -75,8 +75,12 @@ function parseResult(r: Obj): FunnelEvent[] {
     events.push({ type: "usage", usage });
   }
   if (r.structured_output !== undefined) events.push({ type: "structured", data: r.structured_output });
-  const denied = Array.isArray(r.permission_denials) && r.permission_denials.length > 0;
-  const finishReason: FinishReason = denied ? "denied" : "stop";
+  const denials = Array.isArray(r.permission_denials) ? r.permission_denials.filter(isObj) : [];
+  // The tool result only says the call failed. The denial list says why, so the call ends again as denied.
+  for (const d of denials) {
+    if (typeof d.tool_use_id === "string") events.push({ type: "tool.end", id: d.tool_use_id, error: `denied: ${String(d.tool_name)} was not allowed` });
+  }
+  const finishReason: FinishReason = denials.length ? "denied" : "stop";
   events.push({ type: "done", text, finishReason });
   return events;
 }

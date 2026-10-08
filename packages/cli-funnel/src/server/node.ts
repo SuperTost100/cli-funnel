@@ -10,25 +10,35 @@ export function serveNode(
   const server = createServer(async (nodeReq, nodeRes) => {
     const ac = new AbortController();
     nodeRes.on("close", () => ac.abort());
-    const url = `http://${nodeReq.headers.host ?? host}${nodeReq.url ?? "/"}`;
-    const hasBody = nodeReq.method !== "GET" && nodeReq.method !== "HEAD";
-    const req = new Request(url, {
-      method: nodeReq.method,
-      headers: nodeReq.headers as Record<string, string>,
-      body: hasBody ? (Readable.toWeb(nodeReq) as ReadableStream) : undefined,
-      duplex: "half",
-      signal: ac.signal,
-    } as RequestInit);
-    const res = await handler(req);
+    let res: Response;
+    try {
+      const url = `http://${nodeReq.headers.host ?? host}${nodeReq.url ?? "/"}`;
+      const hasBody = nodeReq.method !== "GET" && nodeReq.method !== "HEAD";
+      // Throws on methods fetch does not allow, such as TRACE and CONNECT, and on a malformed Host header.
+      const req = new Request(url, {
+        method: nodeReq.method,
+        headers: nodeReq.headers as Record<string, string>,
+        body: hasBody ? (Readable.toWeb(nodeReq) as ReadableStream) : undefined,
+        duplex: "half",
+        signal: ac.signal,
+      } as RequestInit);
+      res = await handler(req);
+    } catch (err) {
+      res = Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 400 });
+    }
     nodeRes.writeHead(res.status, Object.fromEntries(res.headers));
     if (!res.body) return nodeRes.end();
     const reader = res.body.getReader();
+    // A client that hangs up cancels the body, which ends the run behind it.
+    nodeRes.on("close", () => void reader.cancel().catch(() => {}));
     try {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
         nodeRes.write(value);
       }
+    } catch {
+      /* the body was cancelled or failed; the response ends below */
     } finally {
       nodeRes.end();
     }

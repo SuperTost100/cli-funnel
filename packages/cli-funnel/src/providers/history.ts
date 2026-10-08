@@ -3,10 +3,13 @@ import type { FunnelEvent, RunInput } from "../types.js";
 
 // ponytail: conversation history lives in this process only. Persist it yourself if sessions must survive a restart.
 const histories = new Map<string, unknown[]>();
+/** Sessions kept before the least recently used one is dropped. Keeps a long-running server from growing without bound. */
+export const MAX_SESSIONS = 500;
 
 /**
  * Runs one turn for a provider that keeps no server-side session. Prepends the stored history, emits `session`,
- * and stores the user message plus the streamed answer under the session id.
+ * and stores the user message plus the streamed answer under the session id. A turn that fails, is cancelled or
+ * produces no text is not stored: an empty assistant message makes some APIs reject every later turn.
  */
 export async function* runWithHistory<M>(
   input: RunInput,
@@ -15,12 +18,20 @@ export async function* runWithHistory<M>(
   stream: (messages: M[]) => AsyncIterable<FunnelEvent>,
 ): AsyncGenerator<FunnelEvent> {
   const sessionId = input.sessionId ?? randomUUID();
-  const messages = [...((histories.get(sessionId) ?? []) as M[]), user];
+  const previous = (histories.get(sessionId) ?? []) as M[];
+  const messages = [...previous, user];
   yield { type: "session", sessionId, model: input.selection.model };
   let text = "";
+  let completed = false;
   for await (const e of stream(messages)) {
     if (e.type === "text.delta") text += e.text;
+    if (e.type === "done") completed = e.finishReason !== "cancelled";
+    if (e.type === "error") completed = false;
     yield e;
   }
-  histories.set(sessionId, [...messages, assistant(text)]);
+  const kept = completed && text ? [...messages, assistant(text)] : previous;
+  // Deleting first moves the session to the end of the map, which keeps it in least-recently-used order.
+  histories.delete(sessionId);
+  if (kept.length) histories.set(sessionId, kept);
+  while (histories.size > MAX_SESSIONS) histories.delete(histories.keys().next().value!);
 }
