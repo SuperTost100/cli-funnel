@@ -120,8 +120,13 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
     input: "",
   });
   const mapper = createMapper();
-  for await (const line of stream.lines) {
-    for (const e of mapper.map(line)) yield e;
+  try {
+    for await (const line of stream.lines) {
+      for (const e of mapper.map(line)) yield e;
+    }
+  } finally {
+    // Runs too when the caller stops reading early. The CLI must not keep working unattended.
+    if (stream.child.exitCode === null) stream.child.kill("SIGTERM");
   }
   const code = await stream.exited;
   if (mapper.finished) return;

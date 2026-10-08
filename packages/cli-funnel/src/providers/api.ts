@@ -269,6 +269,17 @@ const gemini: ApiSpec = {
   },
 };
 
+/** Turns an aborted fetch into a cancelled run and a network failure into an error event, as the other providers do. */
+async function* settle(spec: ApiSpec, input: RunInput, stream: () => AsyncIterable<FunnelEvent>): AsyncGenerator<FunnelEvent> {
+  try {
+    yield* stream();
+  } catch (err) {
+    if (input.signal?.aborted) return yield { type: "done", text: "", finishReason: "cancelled" };
+    const code = err instanceof FunnelError ? err.code : "cli-failed";
+    yield { type: "error", message: `${spec.displayName}: ${err instanceof Error ? err.message : String(err)}`, code };
+  }
+}
+
 function makeApiProvider(spec: ApiSpec, getKey: () => string | undefined): Provider {
   const key = () => {
     const k = getKey() ?? process.env[spec.envVar];
@@ -308,7 +319,9 @@ function makeApiProvider(spec: ApiSpec, getKey: () => string | undefined): Provi
     models: async () => spec.listModels(key()),
     run(input) {
       const user: Msg = { role: "user", content: spec.userContent(input) };
-      return runWithHistory(input, user, (text): Msg => ({ role: "assistant", content: text }), (messages) => spec.stream(key(), input, messages));
+      return runWithHistory(input, user, (text): Msg => ({ role: "assistant", content: text }), (messages) =>
+        settle(spec, input, () => spec.stream(key(), input, messages)),
+      );
     },
   };
 }

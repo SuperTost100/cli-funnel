@@ -85,11 +85,16 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   const proc = spawnStream(path, args, { cwd, env: input.env, signal: input.signal, closeStdin: true });
   const mapper = new StreamMapper();
   let finished = false;
-  for await (const line of proc.lines) {
-    for (const event of mapper.map(line)) {
-      if (event.type === "done" || event.type === "error") finished = true;
-      yield event;
+  try {
+    for await (const line of proc.lines) {
+      for (const event of mapper.map(line)) {
+        if (event.type === "done" || event.type === "error") finished = true;
+        yield event;
+      }
     }
+  } finally {
+    // Runs too when the caller stops reading early. The CLI must not keep working unattended.
+    if (proc.child.exitCode === null) proc.child.kill("SIGTERM");
   }
   const code = await proc.exited;
   if (input.signal?.aborted) {

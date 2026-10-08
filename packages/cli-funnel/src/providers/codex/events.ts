@@ -74,11 +74,13 @@ export class Translator {
       case "commandExecution": {
         const bad = item.status === "failed" || item.status === "declined" || (item.exitCode ?? 0) !== 0;
         const code = item.exitCode != null ? ` (exit ${item.exitCode})` : "";
-        return [{ type: "tool.end", id: item.id, output: item.aggregatedOutput ?? undefined, error: bad ? `Command ${item.status}${code}` : undefined }];
+        const error = bad ? `${item.status === "declined" ? "denied: " : ""}Command ${item.status}${code}` : undefined;
+        return [{ type: "tool.end", id: item.id, output: item.aggregatedOutput ?? undefined, error }];
       }
       case "fileChange": {
         const bad = item.status === "failed" || item.status === "declined";
-        return [{ type: "tool.end", id: item.id, error: bad ? `File change ${item.status}` : undefined }];
+        const error = bad ? `${item.status === "declined" ? "denied: " : ""}File change ${item.status}` : undefined;
+        return [{ type: "tool.end", id: item.id, error }];
       }
       case "mcpToolCall": {
         const error = item.error?.message ?? (item.status === "failed" ? "MCP tool call failed" : undefined);

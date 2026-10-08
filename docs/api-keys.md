@@ -25,7 +25,7 @@ They stream text and report usage. They have no tools, no file access and no app
 
 Model lists come live from each vendor's `/models` endpoint, so they need a valid key.
 
-Conversation history for `sessionId` lives in the process memory. It is gone after a restart.
+Conversation history for `sessionId` lives in the process memory. It is gone after a restart, and only the 500 most recently used sessions are kept. A turn that fails or is cancelled is not added, so the next turn in the session sends the same history again.
 
 ## Gemini API
 

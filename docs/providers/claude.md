@@ -40,7 +40,7 @@ Usage has no `costUsd`. The CLI reports a list-price estimate, not what a subscr
 | `auto` | `auto` | Same as above |
 | `full` | `bypassPermissions` | None |
 
-Approvals work. The CLI writes a `control_request` (subtype `can_use_tool`) to stdout and waits. The provider answers on stdin with a `control_response` carrying `{behavior: "allow", updatedInput}` or `{behavior: "deny", message}`. This only happens with `--permission-prompt-tool stdio`. The `--permission-prompts host` flag alone is not enough: without the stdio tool the CLI denies the call and lists it in `permission_denials`, and `done` gets `finishReason: "denied"`. The help text lists `manual` as the mode name, not `default`, though `init` reports it as `default`.
+Approvals work. The CLI writes a `control_request` (subtype `can_use_tool`) to stdout and waits. The provider answers on stdin with a `control_response` carrying `{behavior: "allow", updatedInput}` or `{behavior: "deny", message}`. This only happens with `--permission-prompt-tool stdio`. The `--permission-prompts host` flag alone is not enough: without the stdio tool the CLI denies the call and lists it in `permission_denials`, and `done` gets `finishReason: "denied"`. Each entry in `permission_denials` also lands in `result.deniedActions`. The help text lists `manual` as the mode name, not `default`, though `init` reports it as `default`.
 
 ## Run options
 

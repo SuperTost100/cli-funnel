@@ -36,7 +36,7 @@ Usage has no cost figure. `inputTokens` includes cached tokens, as Codex reports
 | `auto` | `on-request` | `workspace-write` | Codex's auto review agent (`approvalsReviewer: auto_review`) decides escalations. Commands run inside the sandbox without asking. |
 | `full` | `never` | `danger-full-access` | No sandbox and no prompts. |
 
-When `onApproval` is missing, requests are denied. Denied commands are declined with `decline`, so the turn continues and the model sees the refusal. Verified live: an approved `echo hi > a.txt` created the file, and a declined one did not.
+When `onApproval` is missing, requests are denied. Denied commands are declined with `decline`, so the turn continues and the model sees the refusal. Declined commands and file changes appear in `result.deniedActions`. Verified live: an approved `echo hi > a.txt` created the file, and a declined one did not.
 
 The `auto` level starts the thread with the auto review reviewer. A run inside the sandbox needs no review, which was verified. An escalation reviewed by the auto review agent was not exercised.
 
