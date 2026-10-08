@@ -30,7 +30,10 @@ Providers: claude, codex, agent, antigravity, anthropic-api, openai-api, gemini-
 
 OpenAI-compatible servers come from CLI_FUNNEL_OPENAI_COMPATIBLE, a JSON list such as
   [{"id":"lmstudio","name":"LM Studio","baseUrl":"http://127.0.0.1:1234/v1"}]
-Each one becomes the provider openai-compatible:<id>.`;
+Each one becomes the provider openai-compatible:<id>.
+
+Without --token, serve answers only localhost, IP addresses and tailscale serve. CLI_FUNNEL_ALLOWED_HOSTS adds
+host names, comma-separated. ".example.com" matches subdomains, "*" turns the check off.`;
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -200,6 +203,7 @@ async function main() {
   if (command === "serve") {
     const handler = createHandler(funnel, {
       token: values.token,
+      allowedHosts: process.env.CLI_FUNNEL_ALLOWED_HOSTS?.split(",").map((h) => h.trim()).filter(Boolean),
       fsRoots: [homedir(), values.cwd ?? process.cwd()],
       openai: { cwd: values.cwd ?? process.cwd(), access: (values.access as AccessLevel) ?? "accept-edits" },
     });

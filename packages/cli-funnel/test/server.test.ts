@@ -155,11 +155,29 @@ describe("server", () => {
     expect(run.status).toBe(403);
   });
 
+  it("accepts IP addresses and tailscale serve from the same page", async () => {
+    const at = (headers: Record<string, string>) => call("/providers", { headers });
+    expect((await at({ host: "100.64.0.7:4747", origin: "http://100.64.0.7:4747" })).status).toBe(200);
+    expect((await at({ host: "192.168.1.20:4747" })).status).toBe(200);
+    expect((await at({ host: "100.64.0.7:4747", origin: "http://100.64.0.9:4747" })).status).toBe(403);
+    const tailnet = { host: "devbox.example.ts.net", "tailscale-user-login": "someone" };
+    expect((await at({ ...tailnet, origin: "https://devbox.example.ts.net" })).status).toBe(200);
+    expect((await at({ ...tailnet, origin: "https://other.example.ts.net" })).status).toBe(403);
+    // Funnel requests and DNS rebinding have no tailnet user.
+    expect((await at({ host: "devbox.example.ts.net" })).status).toBe(403);
+    const off = createHandler(funnel, { tailscale: false });
+    expect((await off(new Request("http://x/providers", { headers: tailnet }))).status).toBe(403);
+  });
+
   it("accepts allowedHosts and any origin once a token is set", async () => {
     const tailnet = createHandler(funnel, { allowedHosts: ["devbox.example.ts.net"] });
     const req = (headers: Record<string, string>) => new Request("http://x/providers", { headers });
     expect((await tailnet(req({ host: "devbox.example.ts.net", origin: "https://devbox.example.ts.net" }))).status).toBe(200);
     expect((await tailnet(req({ host: "other.example" }))).status).toBe(403);
+    const suffix = createHandler(funnel, { allowedHosts: [".example.ts.net"] });
+    expect((await suffix(req({ host: "devbox.example.ts.net" }))).status).toBe(200);
+    expect((await suffix(req({ host: "devbox.example.ts.net.evil.example" }))).status).toBe(403);
+    expect((await createHandler(funnel, { allowedHosts: ["*"] })(req({ host: "a.example", origin: "https://b.example" }))).status).toBe(200);
     const guarded = createHandler(funnel, { token: "s3cret" });
     expect((await guarded(req({ host: "devbox.example.ts.net", authorization: "Bearer s3cret" }))).status).toBe(200);
   });

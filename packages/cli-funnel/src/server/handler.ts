@@ -21,12 +21,17 @@ export interface HandlerOptions {
   basePath?: string;
   /**
    * Require `Authorization: Bearer <token>` on every request. Set this whenever the server is reachable by anyone but you.
-   * Without a token the handler only answers requests addressed to a loopback host and coming from a loopback page,
-   * so a website open in the user's browser cannot start runs.
+   * Without a token the handler only answers requests addressed to a loopback host, an IP address or a Tailscale name,
+   * from a page on the same host. A website open in the user's browser cannot start runs.
    */
   token?: string;
-  /** Host names accepted without a token besides loopback, for example a tailnet name. Applies to the Host and Origin headers. */
+  /**
+   * More host names to accept without a token, for the Host and Origin headers. ".example.com" also matches its subdomains.
+   * "*" accepts any host and turns the check off.
+   */
   allowedHosts?: string[];
+  /** Accept `*.ts.net` hosts on requests that `tailscale serve` signed with a tailnet user. Funnel requests carry none. Default true. */
+  tailscale?: boolean;
   /** Directories the folder picker may browse and runs may use as their project folder. Default: the home directory. */
   fsRoots?: string[];
   /** Defaults for the OpenAI-compatible endpoints, which cannot carry a full Selection. */
@@ -62,6 +67,11 @@ function isLoopback(hostname: string): boolean {
   return hostname === "localhost" || hostname.endsWith(".localhost") || hostname === "[::1]" || /^127(?:\.\d{1,3}){3}$/.test(hostname);
 }
 
+/** True for an IPv4 or IPv6 literal. DNS rebinding needs a domain name, so a literal is safe to accept as Host. */
+function isIpLiteral(hostname: string): boolean {
+  return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname) || hostname.startsWith("[");
+}
+
 export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
   const base = (options.basePath ?? "").replace(/\/$/, "");
   const roots = (options.fsRoots ?? [homedir()]).map((r) => real(r) ?? resolve(r));
@@ -76,17 +86,22 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
     const p = isAbsolute(cwd) ? real(cwd) : undefined;
     return !!p && insideRoots(p);
   };
-  // A Host header that is not loopback means DNS rebinding or a proxy. A foreign Origin means another website.
-  const allowedHosts = new Set((options.allowedHosts ?? []).map((h) => h.toLowerCase()));
-  const hostOk = (url: string) => {
-    const name = hostnameOf(url);
-    return !!name && (isLoopback(name) || allowedHosts.has(name));
-  };
+  // A Host that is a domain name we do not know means DNS rebinding. An Origin on another host means another website.
+  const allowed = (options.allowedHosts ?? []).map((h) => h.toLowerCase());
+  const listed = (name: string) => allowed.some((h) => h === "*" || h === name || (h.startsWith(".") && (name.endsWith(h) || name === h.slice(1))));
   const localOnly = (req: Request): string | undefined => {
-    const host = req.headers.get("host");
-    if (host && !hostOk(`http://${host}`)) return `Host ${host} is not a loopback address.`;
+    const host = req.headers.get("host")?.toLowerCase();
+    const name = host && hostnameOf(`http://${host}`);
+    if (host) {
+      // tailscale serve keeps the Host and overwrites Tailscale-User-Login, so a request that has it came from the tailnet.
+      const tailnet = options.tailscale !== false && !!name?.endsWith(".ts.net") && req.headers.has("tailscale-user-login");
+      if (!name || !(isLoopback(name) || isIpLiteral(name) || tailnet || listed(name))) return `Host ${host} is not a local address.`;
+    }
     const origin = req.headers.get("origin");
-    if (origin && !hostOk(origin)) return `Requests from ${origin} are refused.`;
+    if (!origin) return undefined;
+    const from = hostnameOf(origin);
+    const sameHost = !!host && origin.toLowerCase().replace(/^https?:\/\//, "") === host;
+    if (!from || !(sameHost || isLoopback(from) || listed(from))) return `Requests from ${origin} are refused.`;
     return undefined;
   };
   const tokenOk = (header: string | null) => {
