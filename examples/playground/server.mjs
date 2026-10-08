@@ -11,6 +11,9 @@ mkdirSync(sandbox, { recursive: true });
 // OpenAI-compatible servers, as JSON: [{"id":"lmstudio","name":"LM Studio","baseUrl":"http://127.0.0.1:1234/v1"}]
 const openaiCompatible = process.env.CLI_FUNNEL_OPENAI_COMPATIBLE ? JSON.parse(process.env.CLI_FUNNEL_OPENAI_COMPATIBLE) : undefined;
 
-const handler = createHandler(createFunnel({ openaiCompatible }), { basePath: "/api/funnel", fsRoots: [homedir()] });
+// Host names to accept besides localhost, comma-separated, for example a tailnet name. Anyone who can reach them can run agents.
+const allowedHosts = process.env.CLI_FUNNEL_ALLOWED_HOSTS?.split(",").map((h) => h.trim()).filter(Boolean);
+
+const handler = createHandler(createFunnel({ openaiCompatible }), { basePath: "/api/funnel", fsRoots: [homedir()], allowedHosts });
 const { url } = await serveNode(handler, { port: 4747 });
 console.log(`funnel server on ${url}  (default project folder: ${sandbox})`);

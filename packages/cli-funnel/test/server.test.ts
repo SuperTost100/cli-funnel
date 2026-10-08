@@ -103,4 +103,23 @@ describe("server", () => {
     expect((await guarded(new Request("http://x/providers"))).status).toBe(401);
     expect((await guarded(new Request("http://x/providers", { headers: { authorization: "Bearer s3cret" } }))).status).toBe(200);
   });
+  it("refuses other websites and rebound hosts when no token is set", async () => {
+    const at = (headers: Record<string, string>) => call("/providers", { headers });
+    expect((await at({ host: "127.0.0.1:4747", origin: "http://localhost:5173" })).status).toBe(200);
+    expect((await at({ host: "[::1]:4747" })).status).toBe(200);
+    expect((await at({ origin: "https://evil.example" })).status).toBe(403);
+    expect((await at({ origin: "null" })).status).toBe(403);
+    expect((await at({ host: "evil.example:4747" })).status).toBe(403);
+    const run = await call("/run", { method: "POST", headers: { "content-type": "text/plain", origin: "https://evil.example" }, body: "{}" });
+    expect(run.status).toBe(403);
+  });
+
+  it("accepts allowedHosts and any origin once a token is set", async () => {
+    const tailnet = createHandler(funnel, { allowedHosts: ["devbox.example.ts.net"] });
+    const req = (headers: Record<string, string>) => new Request("http://x/providers", { headers });
+    expect((await tailnet(req({ host: "devbox.example.ts.net", origin: "https://devbox.example.ts.net" }))).status).toBe(200);
+    expect((await tailnet(req({ host: "other.example" }))).status).toBe(403);
+    const guarded = createHandler(funnel, { token: "s3cret" });
+    expect((await guarded(req({ host: "devbox.example.ts.net", authorization: "Bearer s3cret" }))).status).toBe(200);
+  });
 });

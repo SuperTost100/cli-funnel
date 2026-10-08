@@ -21,6 +21,8 @@ Or run `npx cli-funnel serve`, which uses `node:http` on `127.0.0.1:4747`.
 
 The handler starts programs on the machine it runs on and can browse folders. Set `token` whenever anyone but you can reach it. `serve` refuses a public `--host` without `--token`.
 
+Without a token, the handler answers only requests whose `Host` is loopback (`localhost`, `127.x.x.x`, `::1`) and whose `Origin`, when the browser sends one, is loopback too. Anything else gets a 403. That keeps a website open in the same browser from starting runs, directly or through DNS rebinding. To reach the handler under another name without a token, for example a tailnet name, list it in `allowedHosts`. Anyone who can reach that name can then run agents. The playground server reads the list from `CLI_FUNNEL_ALLOWED_HOSTS`, comma-separated.
+
 The folder picker only lists directories inside `fsRoots`, which defaults to the home directory.
 
 ## Client
