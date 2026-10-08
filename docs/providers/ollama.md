@@ -31,7 +31,7 @@ The provider is always registered. `detect()` calls `/api/version`. When nothing
 | effort | no |
 | contextWindow | no |
 | fast | no |
-| resume | yes, history kept in process memory |
+| resume | yes, history kept like the API providers' |
 | approvals | no |
 | images | yes, for models that accept them |
 | system | native |

@@ -9,6 +9,7 @@ import {
   FunnelError,
   type AuthStatus,
   type FunnelEvent,
+  type HistoryStore,
   type Installation,
   type LoginSession,
   type ModelInfo,
@@ -33,6 +34,11 @@ export interface FunnelOptions {
   ollama?: OllamaOptions;
   /** OpenAI-compatible servers. Each becomes a provider with id `openai-compatible:<id>`. */
   openaiCompatible?: OpenAICompatibleEndpoint[];
+  /**
+   * Where the API providers, Ollama and OpenAI-compatible servers keep conversations. Default: in this process, up to
+   * 500 sessions. Pass `fileHistory(dir)` to keep them across restarts.
+   */
+  history?: HistoryStore;
 }
 
 export interface ProviderOverview {
@@ -80,7 +86,7 @@ export function createFunnel(options: FunnelOptions = {}) {
   function stream(input: RunInput): RunStream {
     const events = (async function* () {
       const p = await prepare(input);
-      yield* p.run(input);
+      yield* p.run(options.history && !input.history ? { ...input, history: options.history } : input);
     })();
     // Tee the stream so both `for await` and `.result` work without double-consuming.
     const buffered: FunnelEvent[] = [];
