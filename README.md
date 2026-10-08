@@ -83,6 +83,8 @@ npx cli-funnel login codex
 npx cli-funnel update claude
 ```
 
+`run` takes `--system`, `--max-tokens` and `--session <id>`. On the four CLIs it prints the session id on stderr. Pass that id to `--session` to continue the conversation. API providers and model servers keep history in memory, so their sessions do not carry over between commands.
+
 ## Use it from any language
 
 ```bash
