@@ -18,8 +18,7 @@ export async function* runWithHistory<M>(
   stream: (messages: M[]) => AsyncIterable<FunnelEvent>,
 ): AsyncGenerator<FunnelEvent> {
   const sessionId = input.sessionId ?? randomUUID();
-  const previous = (histories.get(sessionId) ?? []) as M[];
-  const messages = [...previous, user];
+  const messages = [...((histories.get(sessionId) ?? []) as M[]), user];
   yield { type: "session", sessionId, model: input.selection.model };
   let text = "";
   let completed = false;
@@ -29,9 +28,10 @@ export async function* runWithHistory<M>(
     if (e.type === "error") completed = false;
     yield e;
   }
-  const kept = completed && text ? [...messages, assistant(text)] : previous;
+  // A turn that did not finish leaves the map alone, so it cannot overwrite a turn that finished meanwhile.
+  if (!completed || !text) return;
   // Deleting first moves the session to the end of the map, which keeps it in least-recently-used order.
   histories.delete(sessionId);
-  if (kept.length) histories.set(sessionId, kept);
+  histories.set(sessionId, [...messages, assistant(text)]);
   while (histories.size > MAX_SESSIONS) histories.delete(histories.keys().next().value!);
 }
