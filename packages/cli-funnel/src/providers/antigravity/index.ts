@@ -30,10 +30,22 @@ export function toCliModel(selection: Selection, models: ModelInfo[] = []): { mo
   return { model: selection.model, effort };
 }
 
+/** Linux refuses a single argument over 128 KiB. Longer prompts go on stdin. */
+export const MAX_ARG_PROMPT = 100_000;
+
+/** The stdin line for a long prompt, or undefined when it fits in argv. The message shape is what agy 1.x decodes. */
+export function stdinPrompt(input: RunInput): string | undefined {
+  const prompt = composePrompt(input, { system: true, schema: false });
+  if (Buffer.byteLength(prompt) <= MAX_ARG_PROMPT) return undefined;
+  return `${JSON.stringify({ event: "user", message: { content: prompt } })}\n`;
+}
+
 export function buildArgs(input: RunInput, models: ModelInfo[] = []): string[] {
   const { selection } = input;
   const { model, effort } = toCliModel(selection, models);
-  const args = ["--print=" + composePrompt(input, { system: true, schema: false }), "--output-format", "stream-json", "--model", model];
+  // An empty --print with stream-json input reads one turn per stdin line.
+  const print = stdinPrompt(input) ? ["--print=", "--input-format", "stream-json"] : ["--print=" + composePrompt(input, { system: true, schema: false })];
+  const args = [...print, "--output-format", "stream-json", "--model", model];
   if (input.responseSchema) args.push("--json-schema", JSON.stringify(input.responseSchema.schema));
   if (effort) args.push("--effort", effort);
   if (selection.access === "accept-edits") args.push("--mode", "accept-edits");
@@ -117,7 +129,7 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
     cwd,
     env: input.env,
     signal: input.signal,
-    input: "",
+    input: stdinPrompt(input) ?? "",
   });
   const mapper = createMapper();
   try {

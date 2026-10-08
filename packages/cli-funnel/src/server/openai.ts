@@ -5,7 +5,10 @@ import { json, sse, sseHeaders } from "./sse.js";
 export interface OpenAIDefaults {
   /** Project directory the agent works in. Default: the server's cwd. */
   cwd?: string;
-  /** Access level for chat-completions calls. Default "accept-edits". "supervised" is denied here because the wire format has no approve button. */
+  /**
+   * Access level for chat-completions calls. Default "accept-edits". "supervised" is denied here because the wire format has no approve button.
+   * A provider that cannot enforce the default gets the next stricter level it can, for example "none" on Cursor Agent.
+   */
   access?: AccessLevel;
 }
 
@@ -77,11 +80,17 @@ export async function handleOpenAI(
   if (slash < 0 || !funnel.providers[provider]) {
     return json({ error: { message: 'model must look like "<provider>/<model>", for example "claude/claude-sonnet-5".' } }, 400);
   }
-  const access = body.x_funnel?.access ?? defaults.access ?? "accept-edits";
+  let access = body.x_funnel?.access ?? defaults.access ?? "accept-edits";
   if (!ACCESS_LEVELS.includes(access)) return json({ error: { message: `bad access "${access}"` } }, 400);
+  const supported = funnel.providers[provider]!.capabilities.access;
+  if (!body.x_funnel?.access && supported.length && !supported.includes(access)) {
+    // Never grant more than the default. ACCESS_LEVELS runs from strictest to most open.
+    const stricter = ACCESS_LEVELS.slice(0, ACCESS_LEVELS.indexOf(access)).filter((a) => a !== "supervised" && supported.includes(a));
+    if (stricter.length) access = stricter.at(-1)!;
+  }
 
   const cwd = body.x_funnel?.cwd ?? defaults.cwd ?? process.cwd();
-  if (body.x_funnel?.cwd && !cwdAllowed(cwd)) return json({ error: { message: "x_funnel.cwd is outside the allowed roots." } }, 403);
+  if (body.x_funnel?.cwd && !cwdAllowed(cwd)) return json({ error: { message: "x_funnel.cwd does not exist or is outside the allowed roots." } }, 403);
 
   const input: RunInput = {
     selection: {

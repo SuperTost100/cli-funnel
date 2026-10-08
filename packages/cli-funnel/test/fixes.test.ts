@@ -8,6 +8,7 @@ import { createApiProviders } from "../src/providers/api.js";
 import { parseClaudeMessage } from "../src/providers/claude/parser.js";
 import { Translator } from "../src/providers/codex/events.js";
 import { agentProvider } from "../src/providers/agent/index.js";
+import { buildArgs as agyArgs, stdinPrompt } from "../src/providers/antigravity/index.js";
 import { MAX_SESSIONS } from "../src/providers/history.js";
 import { serveNode } from "../src/server/node.js";
 import type { FunnelEvent, RunInput } from "../src/types.js";
@@ -134,6 +135,39 @@ describe("agent process", () => {
     await new Promise((r) => setTimeout(r, 200));
     const pid = Number(readFileSync(pidFile, "utf8"));
     expect(() => process.kill(pid, 0)).toThrow();
+  });
+});
+
+describe("long prompts", () => {
+  afterEach(() => {
+    delete process.env.CLI_FUNNEL_AGENT_BIN;
+  });
+  // Linux refuses a single argv string over 128 KiB with E2BIG.
+  const prompt = "x".repeat(200_000);
+
+  it("sends the agent prompt on stdin", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cf-agent-"));
+    const bin = join(dir, "agent");
+    // Reports the byte count it read from stdin as the answer.
+    writeFileSync(
+      bin,
+      `#!/bin/sh\n[ "$1" = "--list-models" ] && exit 0\nn=$(wc -c)\necho '{"type":"system","subtype":"init","session_id":"s1"}'\necho "{\\"type\\":\\"result\\",\\"subtype\\":\\"success\\",\\"result\\":\\"$n\\",\\"session_id\\":\\"s1\\"}"\n`,
+    );
+    chmodSync(bin, 0o755);
+    process.env.CLI_FUNNEL_AGENT_BIN = bin;
+    const input: RunInput = { selection: { provider: "agent", model: "m", cwd: dir, access: "full" }, prompt };
+    const r = await collect(agentProvider.run(input), input);
+    expect(Number(r.text.trim())).toBeGreaterThanOrEqual(200_000);
+  });
+
+  it("moves a long agy prompt to stdin and keeps a short one in argv", () => {
+    const sel = { provider: "antigravity", model: "m", cwd: "/tmp", access: "full" } as const;
+    const long = agyArgs({ selection: sel, prompt });
+    expect(long).toEqual(expect.arrayContaining(["--print=", "--input-format", "stream-json"]));
+    expect(long.every((a) => a.length < 1000)).toBe(true);
+    expect(JSON.parse(stdinPrompt({ selection: sel, prompt })!)).toEqual({ event: "user", message: { content: prompt } });
+    expect(agyArgs({ selection: sel, prompt: "hi" })[0]).toBe("--print=hi");
+    expect(stdinPrompt({ selection: sel, prompt: "hi" })).toBeUndefined();
   });
 });
 

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFunnel } from "../src/funnel.js";
 import { collect } from "../src/providers/base.js";
-import { buildArgs as agentArgs } from "../src/providers/agent/index.js";
+import { buildPrompt as agentPrompt } from "../src/providers/agent/index.js";
 import { buildArgs as agyArgs } from "../src/providers/antigravity/index.js";
 import { createMapper } from "../src/providers/antigravity/parser.js";
 import { buildArgs as claudeArgs, userContent } from "../src/providers/claude/index.js";
@@ -96,8 +96,7 @@ describe("codex", () => {
 
 describe("cursor agent", () => {
   it("puts the system prompt and the schema request into the prompt", () => {
-    const args = agentArgs(input({ provider: "agent", access: "auto" }, { system: "Be terse.", responseSchema: SCHEMA }), "m");
-    const prompt = args.at(-1)!;
+    const prompt = agentPrompt(input({ provider: "agent", access: "auto" }, { system: "Be terse.", responseSchema: SCHEMA }));
     expect(prompt).toContain("<instructions>\nBe terse.");
     expect(prompt).toContain("JSON Schema");
   });

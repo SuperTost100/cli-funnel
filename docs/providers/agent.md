@@ -1,6 +1,6 @@
 # Cursor Agent (`agent`)
 
-Provider id `agent`. Spawns the official `agent` binary in print mode and reads its `stream-json` output. Tested against 2026.09.26, 2026.09.28 and 2026.10.01. Minimum tested version is 2026.09.01.
+Provider id `agent`. Spawns the official `agent` binary in print mode, writes the prompt to its stdin and reads its `stream-json` output. A prompt on stdin has no argument size limit. Tested against 2026.09.26, 2026.09.28 and 2026.10.01. Minimum tested version is 2026.09.01.
 
 ## Capabilities
 
@@ -15,9 +15,9 @@ Provider id `agent`. Spawns the official `agent` binary in print mode and reads 
 
 ## Command line
 
-```
+```bash
 agent -p --output-format stream-json --stream-partial-output \
-  --model <id> --workspace <cwd> --trust [access flag] [--resume <sessionId>] -- <prompt>
+  --model <id> --workspace <cwd> --trust [access flag] [--resume <sessionId>] < prompt
 ```
 
 The process runs with `cwd` set to the selection's directory. At `none` both `cwd` and `--workspace` are the `none` folder described below. Aborting the signal sends SIGTERM and yields `done` with `finishReason: "cancelled"`.

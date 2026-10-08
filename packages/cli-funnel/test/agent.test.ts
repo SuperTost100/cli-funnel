@@ -159,10 +159,10 @@ describe("run arguments and access", () => {
     }
   });
 
-  it("passes resume, workspace and the prompt after --", () => {
+  it("passes resume and workspace, and keeps the prompt out of argv", () => {
     const args = buildArgs(input({ cwd: "/tmp/x" }, "chat-1"), "m1");
     expect(args).toEqual(expect.arrayContaining(["--resume", "chat-1", "--workspace", "/tmp/x", "--model", "m1", "--trust"]));
-    expect(args.slice(-2)).toEqual(["--", "-hi"]);
+    expect(args).not.toContain("-hi");
   });
 
   it("does not claim approvals", () => {

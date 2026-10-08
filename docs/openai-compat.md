@@ -38,7 +38,7 @@ Ids are `<provider>/<model>`, for example `claude/claude-sonnet-5`, `codex/gpt-5
 
 ## Extensions
 
-Chat completions cannot carry a folder or an access level, so the server takes them from its flags. Override per request with `x_funnel`:
+Chat completions cannot carry a folder or an access level, so the server takes them from its flags. When a provider cannot enforce the server's access level, it gets the next stricter one it can. Cursor Agent has no `accept-edits`, so it runs with `none` under the default. Override per request with `x_funnel`:
 
 ```json
 { "x_funnel": { "cwd": "/path", "access": "full", "sessionId": "abc", "fast": true, "contextWindow": 1000000 } }
