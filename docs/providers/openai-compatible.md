@@ -53,6 +53,14 @@ Ids are passed through as `/models` returns them, the same exception to the no-a
 
 ## Through the cli-funnel server
 
+The `cli-funnel` command reads endpoints from `CLI_FUNNEL_OPENAI_COMPATIBLE`, a JSON list in the same shape as `openaiCompatible`:
+
+```bash
+export CLI_FUNNEL_OPENAI_COMPATIBLE='[{"id":"lmstudio","name":"LM Studio","baseUrl":"http://127.0.0.1:1234/v1"}]'
+npx cli-funnel models openai-compatible:lmstudio
+npx cli-funnel serve
+```
+
 On `cli-funnel serve` and `createHandler`, model ids are `openai-compatible:<id>/<model>`, for example `openai-compatible:lmstudio/qwen/qwen3-8b`. The provider id ends at the first slash.
 
 ## Live test

@@ -5,6 +5,7 @@ import { parseArgs } from "node:util";
 import { createFunnel } from "../funnel.js";
 import { createHandler } from "../server/handler.js";
 import { serveNode } from "../server/node.js";
+import type { OpenAICompatibleEndpoint } from "../providers/openai-compatible.js";
 import { ACCESS_LEVELS, type AccessLevel, type ProviderId } from "../types.js";
 
 const HELP = `cli-funnel <command>
@@ -18,10 +19,16 @@ const HELP = `cli-funnel <command>
   rm <provider> <model>        Delete a downloaded model (Ollama)
   run <provider> <model> <prompt>
        [--effort x] [--fast] [--context tokens] [--cwd dir] [--access ${ACCESS_LEVELS.join("|")}]
+       [--system text] [--session id] [--max-tokens n]
+                               CLI providers print a session id on stderr. Pass it to --session to continue.
   serve [--port 4747] [--host 127.0.0.1] [--cwd dir] [--access level] [--token secret]
                                HTTP API, SSE streaming and OpenAI-compatible /v1 endpoints
 
-Providers: claude, codex, agent, antigravity, anthropic-api, openai-api, gemini-api, ollama`;
+Providers: claude, codex, agent, antigravity, anthropic-api, openai-api, gemini-api, ollama
+
+OpenAI-compatible servers come from CLI_FUNNEL_OPENAI_COMPATIBLE, a JSON list such as
+  [{"id":"lmstudio","name":"LM Studio","baseUrl":"http://127.0.0.1:1234/v1"}]
+Each one becomes the provider openai-compatible:<id>.`;
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -35,11 +42,27 @@ const { values, positionals } = parseArgs({
     host: { type: "string" },
     token: { type: "string" },
     json: { type: "boolean" },
+    system: { type: "string" },
+    session: { type: "string" },
+    "max-tokens": { type: "string" },
     help: { type: "boolean", short: "h" },
   },
 });
 
-const funnel = createFunnel();
+function openaiCompatible(): OpenAICompatibleEndpoint[] | undefined {
+  const raw = process.env.CLI_FUNNEL_OPENAI_COMPATIBLE;
+  if (!raw) return undefined;
+  try {
+    const list = JSON.parse(raw);
+    if (Array.isArray(list)) return list;
+  } catch {
+    /* reported below */
+  }
+  process.stderr.write("CLI_FUNNEL_OPENAI_COMPATIBLE must be a JSON list of { id, name, baseUrl, apiKey?, models? }.\n");
+  process.exit(2);
+}
+
+const funnel = createFunnel({ openaiCompatible: openaiCompatible() });
 const [command, providerArg, ...rest] = positionals;
 const out = (s: string) => process.stdout.write(s + "\n");
 const provider = (): ProviderId => {
@@ -150,6 +173,9 @@ async function main() {
         access,
       },
       prompt: words.join(" "),
+      system: values.system,
+      sessionId: values.session,
+      maxOutputTokens: values["max-tokens"] ? Number(values["max-tokens"]) : undefined,
       onApproval: async (r) => {
         const answer = await rl!.question(`\nAllow ${r.tool} ${JSON.stringify(r.input).slice(0, 200)}? [y/N] `);
         return answer.trim().toLowerCase().startsWith("y") ? "allow" : "deny";
@@ -161,6 +187,8 @@ async function main() {
     }
     const result = await stream.result;
     process.stdout.write("\n");
+    // CLIs keep sessions on disk. HTTP providers keep history in this process, which ends here.
+    if (result.sessionId && funnel.providers[result.provider]?.capabilities.access.length) process.stderr.write(`session ${result.sessionId}\n`);
     if (values.json) out(JSON.stringify(result, null, 2));
     rl?.close();
     return;
