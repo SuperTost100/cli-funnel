@@ -2,7 +2,7 @@
 
 Provider id `antigravity`. Binary `agy`. Tested against 1.2.11 through 1.3.0, minimum 1.2.0.
 
-Runs use `agy --print=<prompt> --output-format stream-json` with stdin closed. The stream carries an `init` event, `step_update` events (text deltas and tool steps) and a final `result` with token usage and `denied_actions`.
+Runs use `agy --print=<prompt> --output-format stream-json` with stdin closed. Linux refuses a single argument over 128 KiB, so a prompt over 100 KB goes on stdin instead: `--print= --input-format stream-json` and one line `{"event":"user","message":{"content":"..."}}`. agy does not document that message shape. It is what agy 1.x decodes. The stream carries an `init` event, `step_update` events (text deltas and tool steps) and a final `result` with token usage and `denied_actions`.
 
 ## Capabilities
 

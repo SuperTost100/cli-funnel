@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
@@ -38,6 +39,15 @@ interface PendingApproval {
   resolve: (d: ApprovalDecision) => void;
 }
 
+/** The path with symlinks resolved, or undefined when it does not exist. */
+function real(p: string): string | undefined {
+  try {
+    return realpathSync(p);
+  } catch {
+    return undefined;
+  }
+}
+
 /** The host name of a URL, or undefined when it does not parse. */
 function hostnameOf(url: string): string | undefined {
   try {
@@ -54,14 +64,18 @@ function isLoopback(hostname: string): boolean {
 
 export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
   const base = (options.basePath ?? "").replace(/\/$/, "");
-  const roots = (options.fsRoots ?? [homedir()]).map((r) => resolve(r));
+  const roots = (options.fsRoots ?? [homedir()]).map((r) => real(r) ?? resolve(r));
   const approvals = new Map<string, PendingApproval>();
   const earlyDecisions = new Map<string, ApprovalDecision>();
   const logins = new Map<string, LoginSession>();
   let seq = 0;
 
   const insideRoots = (p: string) => roots.some((r) => p === r || p.startsWith(r + sep));
-  const cwdAllowed = (cwd: string) => isAbsolute(cwd) && insideRoots(resolve(cwd));
+  // Checks the real path, so a symlink inside a root cannot point a run or the picker outside it.
+  const cwdAllowed = (cwd: string) => {
+    const p = isAbsolute(cwd) ? real(cwd) : undefined;
+    return !!p && insideRoots(p);
+  };
   // A Host header that is not loopback means DNS rebinding or a proxy. A foreign Origin means another website.
   const allowedHosts = new Set((options.allowedHosts ?? []).map((h) => h.toLowerCase()));
   const hostOk = (url: string) => {
@@ -86,7 +100,7 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
       selection: Selection;
     };
     if (!cwdAllowed(body.selection?.cwd ?? "")) {
-      return json({ error: "cwd is outside the allowed roots. Set fsRoots on the handler." }, 403);
+      return json({ error: "cwd does not exist or is outside the allowed roots. Set fsRoots on the handler." }, 403);
     }
     const runId = `run_${++seq}_${Date.now().toString(36)}`;
     const timeoutMs = (options.approvalTimeoutSec ?? 300) * 1000;
@@ -145,8 +159,12 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
 
   async function listDirs(url: URL): Promise<Response> {
     const raw = url.searchParams.get("path") || roots[0]!;
-    const path = resolve(isAbsolute(raw) ? raw : join(roots[0]!, raw));
-    if (!insideRoots(path)) return json({ error: "Path is outside the allowed roots." }, 403);
+    const asked = resolve(isAbsolute(raw) ? raw : join(roots[0]!, raw));
+    const path = real(asked);
+    // A missing path answers like an outside one unless it is inside, so the picker cannot probe the disk.
+    if (!path || !insideRoots(path)) {
+      return path || !insideRoots(asked) ? json({ error: "Path is outside the allowed roots." }, 403) : json({ error: "Cannot read directory." }, 404);
+    }
     const entries = await readdir(path, { withFileTypes: true }).catch(() => undefined);
     if (!entries) return json({ error: "Cannot read directory." }, 404);
     const dirs = entries

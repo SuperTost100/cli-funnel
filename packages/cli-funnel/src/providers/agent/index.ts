@@ -45,7 +45,10 @@ export function accessFlags(access: RunInput["selection"]["access"]): string[] {
   throw new FunnelError(`Cursor Agent cannot enforce access "${access}". Supported: none, auto, full.`, "invalid-selection");
 }
 
-/** `workspace` is the selection's folder, or the `none` workspace. */
+/** The prompt agent reads from stdin, with the system prompt and schema request folded in. */
+export const buildPrompt = (input: RunInput) => composePrompt(input, { system: true, schema: true });
+
+/** `workspace` is the selection's folder, or the `none` workspace. The prompt goes on stdin, so its size has no argv limit. */
 export function buildArgs(input: RunInput, model: string, workspace = input.selection.cwd): string[] {
   const { selection } = input;
   return [
@@ -60,8 +63,6 @@ export function buildArgs(input: RunInput, model: string, workspace = input.sele
     "--trust",
     ...accessFlags(selection.access),
     ...(input.sessionId ? ["--resume", input.sessionId] : []),
-    "--",
-    composePrompt(input, { system: true, schema: true }),
   ];
 }
 
@@ -82,7 +83,8 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   const model = toCliModel(input.selection, await knownIds());
   const cwd = input.selection.access === "none" ? await noneWorkspace() : input.selection.cwd;
   const args = buildArgs(input, model, cwd);
-  const proc = spawnStream(path, args, { cwd, env: input.env, signal: input.signal, closeStdin: true });
+  // agent reads the prompt from stdin when argv has none.
+  const proc = spawnStream(path, args, { cwd, env: input.env, signal: input.signal, input: buildPrompt(input) });
   const mapper = new StreamMapper();
   let finished = false;
   try {
