@@ -72,7 +72,7 @@ const anthropic: ApiSpec = {
       } else if (e.type === "error") return yield { type: "error", message: e.error?.message ?? "API error" };
     }
     yield { type: "usage", usage: { inputTokens: inTok, outputTokens: outTok, cachedInputTokens: cached, totalTokens: inTok + outTok } };
-    yield { type: "done", text: "", finishReason: stop === "refusal" ? "denied" : "stop" };
+    yield { type: "done", text: "", finishReason: stop === "refusal" ? "denied" : stop === "max_tokens" ? "length" : "stop" };
   },
   userContent(input) {
     if (!input.attachments?.length) return input.prompt;
@@ -149,7 +149,7 @@ export async function* streamChatCompletions(opts: ChatCompletionsOptions, input
       },
     };
   }
-  yield { type: "done", text: "", finishReason: stop === "content_filter" ? "denied" : "stop" };
+  yield { type: "done", text: "", finishReason: stop === "content_filter" ? "denied" : stop === "length" ? "length" : "stop" };
 }
 
 /** The user turn in Chat Completions format. */
@@ -261,7 +261,7 @@ const gemini: ApiSpec = {
         },
       };
     }
-    yield { type: "done", text: "", finishReason: GEMINI_BLOCKED.has(stop) ? "denied" : "stop" };
+    yield { type: "done", text: "", finishReason: GEMINI_BLOCKED.has(stop) ? "denied" : stop === "MAX_TOKENS" ? "length" : "stop" };
   },
   userContent(input) {
     if (!input.attachments?.length) return input.prompt;

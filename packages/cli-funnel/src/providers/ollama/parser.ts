@@ -53,7 +53,7 @@ export function mapChatLine(line: unknown): FunnelEvent[] {
   if (l.done) {
     const usage = toUsage(l);
     if (usage) events.push({ type: "usage", usage });
-    events.push({ type: "done", text: "", finishReason: "stop" });
+    events.push({ type: "done", text: "", finishReason: l.done_reason === "length" ? "length" : "stop" });
   }
   return events;
 }
