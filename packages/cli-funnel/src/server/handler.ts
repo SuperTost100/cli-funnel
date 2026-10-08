@@ -18,8 +18,14 @@ import { json, sse, sseHeaders } from "./sse.js";
 export interface HandlerOptions {
   /** Path prefix the routes live under, for example "/api/funnel". Default "". */
   basePath?: string;
-  /** Require `Authorization: Bearer <token>` on every request. Set this whenever the server is reachable by anyone but you. */
+  /**
+   * Require `Authorization: Bearer <token>` on every request. Set this whenever the server is reachable by anyone but you.
+   * Without a token the handler only answers requests addressed to a loopback host and coming from a loopback page,
+   * so a website open in the user's browser cannot start runs.
+   */
   token?: string;
+  /** Host names accepted without a token besides loopback, for example a tailnet name. Applies to the Host and Origin headers. */
+  allowedHosts?: string[];
   /** Directories the folder picker may browse and runs may use as their project folder. Default: the home directory. */
   fsRoots?: string[];
   /** Defaults for the OpenAI-compatible endpoints, which cannot carry a full Selection. */
@@ -32,6 +38,20 @@ interface PendingApproval {
   resolve: (d: ApprovalDecision) => void;
 }
 
+/** The host name of a URL, or undefined when it does not parse. */
+function hostnameOf(url: string): string | undefined {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
+}
+
+/** True for localhost, 127.0.0.0/8 and ::1. */
+function isLoopback(hostname: string): boolean {
+  return hostname === "localhost" || hostname.endsWith(".localhost") || hostname === "[::1]" || /^127(?:\.\d{1,3}){3}$/.test(hostname);
+}
+
 export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
   const base = (options.basePath ?? "").replace(/\/$/, "");
   const roots = (options.fsRoots ?? [homedir()]).map((r) => resolve(r));
@@ -42,6 +62,19 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
 
   const insideRoots = (p: string) => roots.some((r) => p === r || p.startsWith(r + sep));
   const cwdAllowed = (cwd: string) => isAbsolute(cwd) && insideRoots(resolve(cwd));
+  // A Host header that is not loopback means DNS rebinding or a proxy. A foreign Origin means another website.
+  const allowedHosts = new Set((options.allowedHosts ?? []).map((h) => h.toLowerCase()));
+  const hostOk = (url: string) => {
+    const name = hostnameOf(url);
+    return !!name && (isLoopback(name) || allowedHosts.has(name));
+  };
+  const localOnly = (req: Request): string | undefined => {
+    const host = req.headers.get("host");
+    if (host && !hostOk(`http://${host}`)) return `Host ${host} is not a loopback address.`;
+    const origin = req.headers.get("origin");
+    if (origin && !hostOk(origin)) return `Requests from ${origin} are refused.`;
+    return undefined;
+  };
   const tokenOk = (header: string | null) => {
     const a = Buffer.from(header ?? "");
     const b = Buffer.from(`Bearer ${options.token}`);
@@ -134,6 +167,8 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
     if (options.token && !tokenOk(req.headers.get("authorization"))) {
       return json({ error: "Unauthorized" }, 401);
     }
+    const refused = options.token ? undefined : localOnly(req);
+    if (refused) return json({ error: `${refused} Set a token or allowedHosts on the handler to accept it.` }, 403);
     try {
       const seg = path.split("/").filter(Boolean);
       const m = req.method;
