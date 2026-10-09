@@ -96,7 +96,8 @@ export interface ResponseSchema {
   schema: Record<string, unknown>;
 }
 
-export type FinishReason = "stop" | "cancelled" | "error" | "denied";
+/** `length` means the answer hit the output token limit and is cut off. Only API providers and model servers report it. */
+export type FinishReason = "stop" | "cancelled" | "error" | "denied" | "length";
 
 export interface ApprovalRequest {
   id: string;

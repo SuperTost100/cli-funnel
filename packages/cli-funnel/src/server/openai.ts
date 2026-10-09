@@ -51,7 +51,7 @@ function toPrompt(messages: ChatMessage[], resumed: boolean): string {
   return messages.map((m) => `${m.role.toUpperCase()}: ${text(m.content)}`).join("\n\n");
 }
 
-const finish = (r: FinishReason) => (r === "stop" ? "stop" : r === "cancelled" ? "stop" : r === "denied" ? "content_filter" : "stop");
+const finish = (r: FinishReason) => (r === "denied" ? "content_filter" : r === "length" ? "length" : "stop");
 
 const usageOut = (u?: Usage) =>
   u ? { prompt_tokens: u.inputTokens, completion_tokens: u.outputTokens, total_tokens: u.totalTokens } : undefined;

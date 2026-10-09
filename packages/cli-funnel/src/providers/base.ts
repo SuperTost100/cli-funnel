@@ -160,7 +160,7 @@ export async function collect(
         throw Object.assign(new Error(e.message), { code: e.code });
     }
   }
-  if (input.responseSchema && result.structured === undefined && result.finishReason === "stop") {
+  if (input.responseSchema && result.structured === undefined && (result.finishReason === "stop" || result.finishReason === "length")) {
     try {
       result.structured = parseJsonAnswer(result.text);
     } catch (err) {

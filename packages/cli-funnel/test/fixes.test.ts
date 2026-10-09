@@ -10,6 +10,7 @@ import { Translator } from "../src/providers/codex/events.js";
 import { agentProvider } from "../src/providers/agent/index.js";
 import { buildArgs as agyArgs, stdinPrompt } from "../src/providers/antigravity/index.js";
 import { MAX_SESSIONS } from "../src/providers/history.js";
+import { mapChatLine } from "../src/providers/ollama/parser.js";
 import { serveNode } from "../src/server/node.js";
 import type { FunnelEvent, RunInput } from "../src/types.js";
 
@@ -111,6 +112,28 @@ describe("API sessions", () => {
     for (let i = 0; i < MAX_SESSIONS; i++) await drain(provider().run(input()));
     await drain(provider().run(input({ prompt: "Still there?", sessionId: oldest.sessionId })));
     expect(bodies.at(-1).messages).toEqual([{ role: "user", content: "Still there?" }]);
+  });
+});
+
+describe("output limit", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const events = (lines: object[]) => sse(lines.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(""));
+  const run = async (provider: "anthropic-api" | "openai-api" | "gemini-api", body: Response) => {
+    vi.stubGlobal("fetch", vi.fn(async () => body));
+    const p = createApiProviders({ anthropic: "k", openai: "k", gemini: "k" })[provider];
+    const input: RunInput = { selection: { provider, model: "m", cwd: "/tmp", access: "full" }, prompt: "x", maxOutputTokens: 1 };
+    return (await drain(p.run(input))).at(-1);
+  };
+
+  it("ends a cut-off answer with finishReason length", async () => {
+    const anthropic = events([{ type: "message_delta", delta: { stop_reason: "max_tokens" }, usage: { output_tokens: 1 } }]);
+    expect(await run("anthropic-api", anthropic)).toMatchObject({ finishReason: "length" });
+    const openai = events([{ choices: [{ delta: { content: "a" }, finish_reason: "length" }] }]);
+    expect(await run("openai-api", openai)).toMatchObject({ finishReason: "length" });
+    const gemini = events([{ candidates: [{ content: { parts: [{ text: "a" }] }, finishReason: "MAX_TOKENS" }] }]);
+    expect(await run("gemini-api", gemini)).toMatchObject({ finishReason: "length" });
+    expect(mapChatLine({ done: true, done_reason: "length" }).at(-1)).toMatchObject({ finishReason: "length" });
+    expect(mapChatLine({ done: true, done_reason: "stop" }).at(-1)).toMatchObject({ finishReason: "stop" });
   });
 });
 

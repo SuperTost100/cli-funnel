@@ -35,6 +35,7 @@ Ids are `<provider>/<model>`, for example `claude/claude-sonnet-5`, `codex/gpt-5
 | `stream: true` | Server-sent events, ending with `[DONE]`. |
 | `reasoning_effort` | `selection.effort` |
 | `usage.prompt_tokens`, `completion_tokens`, `total_tokens` | From the CLI's usage report, when it gives one. |
+| `finish_reason` | `length` for `finishReason: "length"`, `content_filter` for `denied`, `stop` otherwise |
 
 ## Extensions
 
