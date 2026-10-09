@@ -11,3 +11,4 @@ export {
   openAICompatibleId,
   type OpenAICompatibleEndpoint,
 } from "./providers/openai-compatible.js";
+export { fileHistory, memoryHistory } from "./providers/history.js";

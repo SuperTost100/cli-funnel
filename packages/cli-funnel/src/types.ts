@@ -158,6 +158,17 @@ export interface RunInput {
   onApproval?: (request: ApprovalRequest) => Promise<ApprovalDecision> | ApprovalDecision;
   /** Extra environment for the CLI process. */
   env?: Record<string, string>;
+  /** Where providers without server-side sessions keep the conversation. Default: the funnel's `history` option. */
+  history?: HistoryStore;
+}
+
+/**
+ * Conversation storage for providers that keep no session on their side: the API providers, Ollama and
+ * OpenAI-compatible servers. Messages are in the provider's own wire format. Treat them as opaque.
+ */
+export interface HistoryStore {
+  get(sessionId: string): Promise<unknown[] | undefined> | unknown[] | undefined;
+  set(sessionId: string, messages: unknown[]): Promise<void> | void;
 }
 
 export interface Installation {

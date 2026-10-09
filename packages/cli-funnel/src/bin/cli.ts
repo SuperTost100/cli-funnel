@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import { createInterface } from "node:readline/promises";
 import { homedir } from "node:os";
+import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { createFunnel } from "../funnel.js";
 import { createHandler } from "../server/handler.js";
 import { serveNode } from "../server/node.js";
+import { fileHistory } from "../providers/history.js";
 import type { OpenAICompatibleEndpoint } from "../providers/openai-compatible.js";
 import { ACCESS_LEVELS, type AccessLevel, type ProviderId } from "../types.js";
 
@@ -20,7 +22,7 @@ const HELP = `cli-funnel <command>
   run <provider> <model> <prompt>
        [--effort x] [--fast] [--context tokens] [--cwd dir] [--access ${ACCESS_LEVELS.join("|")}]
        [--system text] [--session id] [--max-tokens n]
-                               CLI providers print a session id on stderr. Pass it to --session to continue.
+                               Prints a session id on stderr. Pass it to --session to continue.
   serve [--port 4747] [--host 127.0.0.1] [--cwd dir] [--access level] [--token secret]
                                HTTP API, SSE streaming and OpenAI-compatible /v1 endpoints
 
@@ -62,7 +64,9 @@ function openaiCompatible(): OpenAICompatibleEndpoint[] | undefined {
   process.exit(2);
 }
 
-const funnel = createFunnel({ openaiCompatible: openaiCompatible() });
+// Conversations with the API providers, Ollama and OpenAI-compatible servers, so --session works across commands.
+const sessions = join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "cli-funnel", "sessions");
+const funnel = createFunnel({ openaiCompatible: openaiCompatible(), history: fileHistory(sessions) });
 const [command, providerArg, ...rest] = positionals;
 const out = (s: string) => process.stdout.write(s + "\n");
 const provider = (): ProviderId => {
@@ -187,8 +191,7 @@ async function main() {
     }
     const result = await stream.result;
     process.stdout.write("\n");
-    // CLIs keep sessions on disk. HTTP providers keep history in this process, which ends here.
-    if (result.sessionId && funnel.providers[result.provider]?.capabilities.access.length) process.stderr.write(`session ${result.sessionId}\n`);
+    if (result.sessionId) process.stderr.write(`session ${result.sessionId}\n`);
     if (values.json) out(JSON.stringify(result, null, 2));
     rl?.close();
     return;

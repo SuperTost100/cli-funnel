@@ -28,7 +28,7 @@ These providers exist only when configured. Nothing is probed by default.
 
 ## Capabilities
 
-Same as the API providers: no machine access, history kept in process memory, native `system`, images and JSON schema. `cwd` and `access` are ignored.
+Same as the API providers: no machine access, history kept like the API providers' (see [API keys](../api-keys.md)), native `system`, images and JSON schema. `cwd` and `access` are ignored.
 
 | Input | Request |
 | --- | --- |

@@ -25,7 +25,17 @@ They stream text and report usage. They have no tools, no file access and no app
 
 Model lists come live from each vendor's `/models` endpoint, so they need a valid key.
 
-Conversation history for `sessionId` lives in the process memory. It is gone after a restart, and only the 500 most recently used sessions are kept. A turn that fails or is cancelled is not added, so the next turn in the session sends the same history again.
+Conversation history for `sessionId` lives in the process memory by default. It is gone after a restart, and only the 500 most recently used sessions are kept. A turn that fails or is cancelled is not added, so the next turn in the session sends the same history again.
+
+To keep sessions across restarts, pass a file store:
+
+```ts
+import { createFunnel, fileHistory } from "cli-funnel";
+
+const funnel = createFunnel({ history: fileHistory("/path/to/sessions") });
+```
+
+`fileHistory` writes one JSON file per session, readable by the owner only, and keeps the 500 most recently written. For a database, pass any object with `get(sessionId)` and `set(sessionId, messages)`. Both may return a promise. The messages are in the provider's own format, so store them as they are. `cli-funnel run` and `cli-funnel serve` use a file store in `$XDG_STATE_HOME/cli-funnel/sessions`, or `~/.local/state/cli-funnel/sessions` when that variable is unset.
 
 ## Gemini API
 
