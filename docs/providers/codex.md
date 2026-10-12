@@ -57,7 +57,7 @@ The context window is not selectable. The catalog reports `context_window` and `
 ## Login, logout, update
 
 - `authStatus()` parses `codex login status` (the text goes to stderr). It reads `Logged in using ChatGPT`, `Logged in using an API key` and `Not logged in`. The command has no JSON or account output, so `account` and `plan` are not set. API keys are never echoed.
-- `login()` runs `codex login --device-auth`, which prints a URL and a one-time code and needs no local callback port. The code appears in `log` events. The plain `codex login` opens a browser and listens on localhost, which fails on remote hosts. Device code login must be enabled in your ChatGPT security settings. `codex login --with-api-key` and `--with-access-token` read from stdin and are not used.
+- `login()` runs `codex login`. It opens the browser and waits for the callback on a local port, and on a headless machine Codex switches to a device code by itself. The callback URL it prints first (`http://localhost:1455`) is skipped, so the `open-url` event carries the sign-in link. `login({ device: true })` runs `codex login --device-auth` instead: it prints a URL and a one-time code in `log` events and needs no local port, but works only after device code login is enabled in your ChatGPT security settings. Over HTTP, `POST /providers/codex/login?device=1` does the same. `codex login --with-api-key` and `--with-access-token` read from stdin and are not used.
 - `logout()` runs `codex logout`. `update()` runs `codex update`. Both were implemented from `--help` and never executed during development.
 
 ## Known limits

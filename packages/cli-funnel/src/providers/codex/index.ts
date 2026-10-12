@@ -170,7 +170,8 @@ export const codexProvider: Provider = {
   },
   detect: () => detectInstallation(BINARY, TESTED_RANGE),
   authStatus,
-  login: (options) => spawnLogin(BINARY, ["login", "--device-auth"], authStatus, { signal: options?.signal }),
+  login: (options) =>
+    spawnLogin(BINARY, options?.device ? ["login", "--device-auth"] : ["login"], authStatus, { signal: options?.signal }),
   logout: () => runLogout(BINARY, ["logout"]),
   update: () => runUpdate(BINARY, ["update"]),
   models,

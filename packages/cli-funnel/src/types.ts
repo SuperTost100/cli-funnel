@@ -223,7 +223,11 @@ export interface Provider {
   readonly capabilities: Capabilities;
   detect(): Promise<Installation>;
   authStatus(): Promise<AuthStatus>;
-  login(options?: { signal?: AbortSignal }): LoginSession;
+  /**
+   * `device` asks for a device-code login where the CLI has one (Codex), for machines without a local browser. It
+   * needs device codes enabled in the account's security settings, so the default is the browser login.
+   */
+  login(options?: { signal?: AbortSignal; device?: boolean }): LoginSession;
   logout(): Promise<void>;
   update(): Promise<UpdateResult>;
   models(): Promise<ModelInfo[]>;
