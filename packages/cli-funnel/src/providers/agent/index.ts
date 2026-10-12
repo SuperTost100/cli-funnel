@@ -132,6 +132,7 @@ export const agentProvider: Provider = {
     spawnLogin(BINARY, ["login"], authStatus, {
       signal: options?.signal,
       env: process.env.CLI_FUNNEL_OPEN_BROWSER === "1" ? {} : { NO_OPEN_BROWSER: "1" },
+      opensBrowser: process.env.CLI_FUNNEL_OPEN_BROWSER === "1",
     }),
   logout: () => runLogout(BINARY, ["logout"]),
   update: () => runUpdate(BINARY, ["update"]),

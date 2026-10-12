@@ -193,8 +193,11 @@ export interface AuthStatus {
 }
 
 export type LoginEvent =
-  /** Show this URL to the user. The CLI usually opens it too. */
-  | { type: "open-url"; url: string }
+  /**
+   * The sign-in page. `opened` is true when the CLI has already opened it in the browser, so the host should only
+   * offer it as a link; otherwise the host opens it.
+   */
+  | { type: "open-url"; url: string; opened?: boolean }
   /** The CLI waits for a code the user copies from the browser. Answer with `LoginSession.sendCode`. */
   | { type: "code-prompt"; message: string }
   | { type: "log"; text: string }

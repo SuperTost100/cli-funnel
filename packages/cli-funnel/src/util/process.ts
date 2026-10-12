@@ -1,7 +1,7 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, accessSync, constants } from "node:fs";
+import { existsSync, accessSync, constants, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join, win32 } from "node:path";
 import { Channel } from "./channel.js";
 
 const EXTRA_DIRS = [
@@ -73,6 +73,55 @@ export function resolveBinary(name: string, envVar?: string): string | undefined
   return undefined;
 }
 
+// Characters cmd.exe treats specially. Each one is escaped with ^ once the argument is quoted.
+const CMD_META = /([()\][%!^"`<>&|;, *?])/g;
+
+/** Quotes one argument for `cmd.exe /d /s /c`, the way cross-spawn does. */
+export function cmdQuote(arg: string): string {
+  let out = arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, "$1$1");
+  out = `"${out}"`;
+  return out.replace(CMD_META, "^$1");
+}
+
+/**
+ * The script an npm `.cmd` shim runs, so it can be started with Node directly. npm writes
+ * `"%_prog%"  "%dp0%\node_modules\pkg\bin\cli.js" %*`; anything else returns undefined.
+ */
+export function shimTarget(shimPath: string, text?: string): string | undefined {
+  let body = text;
+  if (body === undefined) {
+    try {
+      body = readFileSync(shimPath, "utf8");
+    } catch {
+      return undefined;
+    }
+  }
+  const match = body.match(/"%dp0%\\([^"]+\.(?:c|m)?js)"\s+%\*/i);
+  return match ? win32.join(win32.dirname(shimPath), match[1]!) : undefined;
+}
+
+export interface Command {
+  file: string;
+  args: string[];
+  windowsVerbatimArguments?: boolean;
+}
+
+/**
+ * How to start a CLI. Node refuses to spawn `.cmd` and `.bat` files without a shell (CVE-2024-27980), and npm installs
+ * Codex and Claude Code on Windows as `.cmd` shims. A shim is run as `node script.js`, which also avoids cmd.exe's
+ * 8191-character line limit. Any other batch file goes through `cmd.exe /d /s /c` with every argument quoted.
+ */
+export function cliCommand(file: string, args: string[], platform: NodeJS.Platform = process.platform): Command {
+  if (platform !== "win32" || !/\.(cmd|bat)$/i.test(file)) return { file, args };
+  const script = shimTarget(file);
+  if (script) {
+    const bundled = win32.join(win32.dirname(file), "node.exe");
+    return { file: existsSync(bundled) ? bundled : (resolveBinary("node") ?? "node"), args: [script, ...args] };
+  }
+  const line = [file.replace(CMD_META, "^$1"), ...args.map(cmdQuote)].join(" ");
+  return { file: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", `"${line}"`], windowsVerbatimArguments: true };
+}
+
 export interface ExecResult {
   stdout: string;
   stderr: string;
@@ -90,7 +139,9 @@ export interface ExecOptions {
 /** Runs a command to completion. Never throws on a non-zero exit. */
 export function exec(file: string, args: string[], opts: ExecOptions = {}): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(file, args, {
+    const command = cliCommand(file, args);
+    const child = spawn(command.file, command.args, {
+      windowsVerbatimArguments: command.windowsVerbatimArguments,
       cwd: opts.cwd,
       env: childEnv(opts.env),
       stdio: ["pipe", "pipe", "pipe"],
@@ -132,7 +183,9 @@ export function spawnStream(
   args: string[],
   opts: ExecOptions & { closeStdin?: boolean } = {},
 ): Streamed {
-  const child = spawn(file, args, {
+  const command = cliCommand(file, args);
+  const child = spawn(command.file, command.args, {
+    windowsVerbatimArguments: command.windowsVerbatimArguments,
     cwd: opts.cwd,
     env: childEnv(opts.env),
     stdio: ["pipe", "pipe", "pipe"],
