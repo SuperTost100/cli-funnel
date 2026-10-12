@@ -160,7 +160,9 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
   }
 
   async function login(id: ProviderId, req: Request): Promise<Response> {
-    const session = funnel.login(id, { signal: req.signal });
+    // `?device=1` asks for a device-code login, for a server whose browser is on another machine.
+    const device = new URL(req.url).searchParams.get("device") === "1";
+    const session = funnel.login(id, { signal: req.signal, device });
     const loginId = `login_${++seq}_${Date.now().toString(36)}`;
     logins.set(loginId, session);
     const events = (async function* () {

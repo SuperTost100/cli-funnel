@@ -138,7 +138,7 @@ export function createFunnel(options: FunnelOptions = {}) {
 
     models: async (id: ProviderId): Promise<ModelInfo[]> => provider(id).models(),
     authStatus: async (id: ProviderId): Promise<AuthStatus> => provider(id).authStatus(),
-    login: (id: ProviderId, opts?: { signal?: AbortSignal }): LoginSession => provider(id).login(opts),
+    login: (id: ProviderId, opts?: { signal?: AbortSignal; device?: boolean }): LoginSession => provider(id).login(opts),
     logout: async (id: ProviderId): Promise<void> => provider(id).logout(),
     update: async (id: ProviderId): Promise<UpdateResult> => provider(id).update(),
     /** Downloads a model on providers with `capabilities.manageModels`. Throws `unsupported` elsewhere. */

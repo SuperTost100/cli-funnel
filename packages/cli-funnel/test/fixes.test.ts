@@ -7,6 +7,8 @@ import { collect } from "../src/providers/base.js";
 import { createApiProviders } from "../src/providers/api.js";
 import { parseClaudeMessage } from "../src/providers/claude/parser.js";
 import { Translator } from "../src/providers/codex/events.js";
+import { codexProvider } from "../src/providers/codex/index.js";
+import { firstUrl } from "../src/util/process.js";
 import { agentProvider } from "../src/providers/agent/index.js";
 import { buildArgs as agyArgs, stdinPrompt } from "../src/providers/antigravity/index.js";
 import { MAX_SESSIONS } from "../src/providers/history.js";
@@ -211,5 +213,55 @@ describe("serveNode", () => {
     } finally {
       server.close();
     }
+  });
+});
+
+describe("login links", () => {
+  it("skips the CLI's own loopback callback and returns the sign-in link", () => {
+    const text =
+      "Starting local login server on http://localhost:1455.\nIf your browser did not open, navigate to this URL to authenticate:\n\nhttps://auth.openai.com/oauth/authorize?client_id=x&state=y\n";
+    expect(firstUrl(text)).toBe("https://auth.openai.com/oauth/authorize?client_id=x&state=y");
+    expect(firstUrl("Listening on http://127.0.0.1:8080/callback")).toBeUndefined();
+    expect(firstUrl("Open https://claude.ai/oauth/authorize?code=true")).toBe("https://claude.ai/oauth/authorize?code=true");
+  });
+});
+
+describe.skipIf(process.platform === "win32")("codex login", () => {
+  afterEach(() => {
+    delete process.env.CLI_FUNNEL_CODEX_BIN;
+  });
+
+  // A stand-in codex that records its arguments and prints what `codex login` prints.
+  function fakeCodex() {
+    const dir = mkdtempSync(join(tmpdir(), "cf-codex-"));
+    const bin = join(dir, "codex");
+    const args = join(dir, "args");
+    writeFileSync(
+      bin,
+      `#!/bin/sh\nif [ "$1 $2" = "login status" ]; then echo "Not logged in" >&2; exit 1; fi\necho "$@" > ${args}\nprintf 'Starting local login server on http://localhost:1455.\\nIf your browser did not open, navigate to this URL to authenticate:\\n\\nhttps://auth.openai.com/oauth/authorize?state=z\\n' >&2\n`,
+    );
+    chmodSync(bin, 0o755);
+    process.env.CLI_FUNNEL_CODEX_BIN = bin;
+    return args;
+  }
+  async function events(device?: boolean) {
+    const seen = [];
+    for await (const e of codexProvider.login({ device })) if (e.type !== "log") seen.push(e);
+    return seen;
+  }
+
+  it("uses the browser login and reports the sign-in link, not the local callback", async () => {
+    const args = fakeCodex();
+    const seen = await events();
+    expect(readFileSync(args, "utf8").trim()).toBe("login");
+    expect(seen.filter((e) => e.type === "open-url")).toEqual([
+      { type: "open-url", url: "https://auth.openai.com/oauth/authorize?state=z" },
+    ]);
+  });
+
+  it("uses a device code only when asked", async () => {
+    const args = fakeCodex();
+    await events(true);
+    expect(readFileSync(args, "utf8").trim()).toBe("login --device-auth");
   });
 });

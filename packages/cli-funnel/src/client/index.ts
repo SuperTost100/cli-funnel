@@ -81,8 +81,12 @@ export function createClient(options: ClientOptions) {
     deleteModel: (id: ProviderId, name: string) => post(`/providers/${id}/models/delete`, { name }),
     listDirs: (path?: string) => request<DirListing>(`/fs${path ? `?path=${encodeURIComponent(path)}` : ""}`),
 
-    /** Streams login events. The first event is `{ type: "login", loginId }`. */
-    login: (id: ProviderId, signal?: AbortSignal) => events<LoginStreamEvent>(`/providers/${id}/login`, {}, signal),
+    /**
+     * Streams login events. The first event is `{ type: "login", loginId }`. `device` asks for a device-code login
+     * when the server runs on another machine.
+     */
+    login: (id: ProviderId, signal?: AbortSignal, options?: { device?: boolean }) =>
+      events<LoginStreamEvent>(`/providers/${id}/login${options?.device ? "?device=1" : ""}`, {}, signal),
     sendLoginCode: (loginId: string, code: string) => post(`/logins/${loginId}/code`, { code }),
     cancelLogin: (loginId: string) => post(`/logins/${loginId}/cancel`),
 

@@ -196,8 +196,18 @@ export function spawnStream(
   };
 }
 
+/**
+ * The first URL in a login prompt that a person should open. Loopback URLs are skipped: they are the CLI's own
+ * callback server, which `codex login` prints before the sign-in link.
+ */
 export function firstUrl(text: string): string | undefined {
-  return text.match(/https?:\/\/[^\s"'<>)\]]+/)?.[0];
+  for (const [match] of text.matchAll(/https?:\/\/[^\s"'<>)\]]+/g)) {
+    // A URL that ends a sentence keeps the sentence's full stop.
+    const url = match.replace(/[.,;:!?]+$/, "");
+    const host = URL.canParse(url) ? new URL(url).hostname : "";
+    if (!/^(localhost|127\.\d+\.\d+\.\d+|\[::1\])$/.test(host)) return url;
+  }
+  return undefined;
 }
 
 export function parseVersion(text: string): string | undefined {
