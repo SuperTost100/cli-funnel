@@ -1,6 +1,6 @@
 import { Channel } from "../util/channel.js";
 import { spawn, type ChildProcess } from "node:child_process";
-import { childEnv, compareVersions, exec, firstUrl, parseVersion, resolveBinary } from "../util/process.js";
+import { childEnv, cliCommand, compareVersions, exec, firstUrl, parseVersion, resolveBinary } from "../util/process.js";
 import type {
   AuthStatus,
   FunnelEvent,
@@ -38,52 +38,93 @@ export async function detectInstallation(
   return { installed: true, path, version, testedRange, withinTestedRange };
 }
 
+/** How long a login may wait for the user before it gives up. */
+export const LOGIN_TIMEOUT_MS = 10 * 60_000;
+
 /**
  * Login by spawning the CLI's own login command and watching its output for a URL.
  * Providers with a different flow return their own LoginSession instead.
+ * `opensBrowser` marks CLIs that open the sign-in page themselves, so `open-url` carries `opened: true`
+ * and a host app does not open a second tab.
  */
 export function spawnLogin(
   binary: string,
   args: string[],
   readStatus: () => Promise<AuthStatus>,
-  opts: { env?: Record<string, string>; signal?: AbortSignal } = {},
+  opts: { env?: Record<string, string>; signal?: AbortSignal; opensBrowser?: boolean; timeoutMs?: number } = {},
 ): LoginSession {
   const channel = new Channel<LoginEvent>();
   const path = findBinary(binary);
   let child: ChildProcess | undefined;
+  let cancelled = false;
+  let finished = false;
+  const finish = (event?: LoginEvent) => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(timer);
+    if (event && !cancelled) channel.push(event);
+    channel.end();
+  };
+  let timer: NodeJS.Timeout | undefined;
 
   if (!path) {
-    channel.push({ type: "error", message: `${binary} is not installed.` });
-    channel.end();
+    finish({ type: "error", message: `${binary} is not installed.` });
   } else {
-    child = spawn(path, args, { env: childEnv(opts.env), signal: opts.signal, stdio: ["pipe", "pipe", "pipe"] });
+    const command = cliCommand(path, args);
+    child = spawn(command.file, command.args, {
+      env: childEnv(opts.env),
+      signal: opts.signal,
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsVerbatimArguments: command.windowsVerbatimArguments,
+    });
     child.stdin?.on("error", () => {});
+    timer = setTimeout(() => {
+      child?.kill("SIGTERM");
+      finish({ type: "error", message: "Timed out waiting for sign-in." });
+    }, opts.timeoutMs ?? LOGIN_TIMEOUT_MS);
     const seen = new Set<string>();
-    const scan = (text: string) => {
-      channel.push({ type: "log", text });
-      const url = firstUrl(text);
+    // Output arrives in arbitrary chunks. URLs are read from whole lines so a link split across two chunks is not
+    // reported half-finished; a prompt waiting for input has no newline, so it is checked as it arrives.
+    const pending = { stdout: "", stderr: "" };
+    const scanLine = (line: string) => {
+      const url = firstUrl(line);
       if (url && !seen.has(url)) {
         seen.add(url);
-        channel.push({ type: "open-url", url });
+        channel.push(opts.opensBrowser ? { type: "open-url", url, opened: true } : { type: "open-url", url });
       }
+    };
+    const scan = (stream: "stdout" | "stderr", text: string) => {
+      channel.push({ type: "log", text });
+      pending[stream] += text;
+      const lines = pending[stream].split(/\r?\n/);
+      pending[stream] = lines.pop() ?? "";
+      for (const line of lines) scanLine(line);
       if (/paste|enter (the )?code|verification code/i.test(text)) {
         channel.push({ type: "code-prompt", message: text.trim() });
       }
     };
-    child.stdout?.on("data", (d) => scan(String(d)));
-    child.stderr?.on("data", (d) => scan(String(d)));
+    child.stdout?.on("data", (d) => scan("stdout", String(d)));
+    child.stderr?.on("data", (d) => scan("stderr", String(d)));
+    // Without this listener a CLI that fails to start (missing file, permissions) throws in the host process.
+    child.on("error", (error) => finish({ type: "error", message: error.message }));
     child.on("close", async (code) => {
+      scanLine(pending.stdout);
+      scanLine(pending.stderr);
+      if (finished) return;
       const status = await readStatus().catch((): AuthStatus => ({ loggedIn: false }));
-      if (status.loggedIn) channel.push({ type: "done", status });
-      else channel.push({ type: "error", message: `Login did not complete (exit ${code}).` });
-      channel.end();
+      finish(status.loggedIn ? { type: "done", status } : { type: "error", message: `Login did not complete (exit ${code}).` });
     });
   }
 
   return {
     [Symbol.asyncIterator]: () => channel[Symbol.asyncIterator](),
     sendCode: (code) => child?.stdin?.write(code + "\n"),
-    cancel: () => child?.kill("SIGTERM"),
+    // A cancelled login ends quietly: the caller asked for it, so it gets no error event.
+    cancel: () => {
+      cancelled = true;
+      child?.kill("SIGTERM");
+      finish();
+    },
   };
 }
 

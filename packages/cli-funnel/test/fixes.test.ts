@@ -3,12 +3,12 @@ import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { collect } from "../src/providers/base.js";
+import { collect, spawnLogin } from "../src/providers/base.js";
 import { createApiProviders } from "../src/providers/api.js";
 import { parseClaudeMessage } from "../src/providers/claude/parser.js";
 import { Translator } from "../src/providers/codex/events.js";
 import { codexProvider } from "../src/providers/codex/index.js";
-import { firstUrl } from "../src/util/process.js";
+import { cliCommand, cmdQuote, firstUrl, shimTarget } from "../src/util/process.js";
 import { agentProvider } from "../src/providers/agent/index.js";
 import { buildArgs as agyArgs, stdinPrompt } from "../src/providers/antigravity/index.js";
 import { MAX_SESSIONS } from "../src/providers/history.js";
@@ -255,7 +255,7 @@ describe.skipIf(process.platform === "win32")("codex login", () => {
     const seen = await events();
     expect(readFileSync(args, "utf8").trim()).toBe("login");
     expect(seen.filter((e) => e.type === "open-url")).toEqual([
-      { type: "open-url", url: "https://auth.openai.com/oauth/authorize?state=z" },
+      { type: "open-url", url: "https://auth.openai.com/oauth/authorize?state=z", opened: true },
     ]);
   });
 
@@ -263,5 +263,77 @@ describe.skipIf(process.platform === "win32")("codex login", () => {
     const args = fakeCodex();
     await events(true);
     expect(readFileSync(args, "utf8").trim()).toBe("login --device-auth");
+  });
+});
+
+describe("windows commands", () => {
+  it("quotes arguments for cmd.exe like cross-spawn", () => {
+    expect(cmdQuote("plain")).toBe('^"plain^"');
+    expect(cmdQuote('say "hi" & exit')).toBe('^"say^ \\^"hi\\^"^ ^&^ exit^"');
+    expect(cmdQuote("C:\\dir\\")).toBe('^"C:\\dir\\\\^"');
+  });
+
+  it("finds the script an npm shim runs", () => {
+    const shim = '@ECHO off\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*\r\n';
+    expect(shimTarget("C:\\npm\\codex.cmd", shim)).toBe("C:\\npm\\node_modules\\@openai\\codex\\bin\\codex.js");
+    expect(shimTarget("C:\\x\\run.cmd", "@echo off\r\nstart something")).toBeUndefined();
+  });
+
+  it("leaves executables alone and wraps other batch files in cmd.exe", () => {
+    expect(cliCommand("C:\\x\\codex.exe", ["login"], "win32")).toEqual({ file: "C:\\x\\codex.exe", args: ["login"] });
+    expect(cliCommand("/usr/bin/codex.cmd", ["login"], "linux")).toEqual({ file: "/usr/bin/codex.cmd", args: ["login"] });
+    const wrapped = cliCommand("C:\\missing dir\\tool.bat", ["a b"], "win32");
+    expect(wrapped.windowsVerbatimArguments).toBe(true);
+    expect(wrapped.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
+    expect(wrapped.args[3]).toBe('"C:\\missing^ dir\\tool.bat ^"a^ b^""');
+  });
+});
+
+describe.skipIf(process.platform === "win32")("sign-in process", () => {
+  afterEach(() => {
+    delete process.env.CLI_FUNNEL_CODEX_BIN;
+  });
+  function fake(body: string) {
+    const dir = mkdtempSync(join(tmpdir(), "cf-login-"));
+    const bin = join(dir, "codex");
+    writeFileSync(bin, `#!/bin/sh\nif [ "$1 $2" = "login status" ]; then echo "Not logged in" >&2; exit 1; fi\n${body}\n`);
+    chmodSync(bin, 0o755);
+    process.env.CLI_FUNNEL_CODEX_BIN = bin;
+    return bin;
+  }
+
+  it("marks the link as opened when the CLI opens the browser itself", async () => {
+    fake("printf 'https://auth.openai.com/oauth/au' >&2; sleep 0.2; printf 'thorize?state=z\\n' >&2");
+    const seen = [];
+    for await (const e of codexProvider.login()) if (e.type === "open-url") seen.push(e);
+    // The link arrived in two chunks; only the complete one is reported.
+    expect(seen).toEqual([{ type: "open-url", url: "https://auth.openai.com/oauth/authorize?state=z", opened: true }]);
+  });
+
+  it("ends quietly when cancelled", async () => {
+    fake("sleep 30");
+    const session = codexProvider.login();
+    const events: string[] = [];
+    const done = (async () => {
+      for await (const e of session) events.push(e.type);
+    })();
+    setTimeout(() => session.cancel(), 100);
+    await done;
+    expect(events).not.toContain("error");
+  });
+
+  it("reports a CLI that cannot start instead of throwing", async () => {
+    const bin = fake("exit 0");
+    chmodSync(bin, 0o644);
+    const events = [];
+    for await (const e of codexProvider.login()) events.push(e);
+    expect(events.at(-1)).toMatchObject({ type: "error" });
+  });
+
+  it("gives up after the login timeout", async () => {
+    fake("sleep 30");
+    const events = [];
+    for await (const e of spawnLogin("codex", ["login"], async () => ({ loggedIn: false }), { timeoutMs: 200 })) events.push(e);
+    expect(events.at(-1)).toEqual({ type: "error", message: "Timed out waiting for sign-in." });
   });
 });

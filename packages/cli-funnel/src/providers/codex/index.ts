@@ -171,7 +171,11 @@ export const codexProvider: Provider = {
   detect: () => detectInstallation(BINARY, TESTED_RANGE),
   authStatus,
   login: (options) =>
-    spawnLogin(BINARY, options?.device ? ["login", "--device-auth"] : ["login"], authStatus, { signal: options?.signal }),
+    // `codex login` opens the browser itself; the device-code flow only prints the page.
+    spawnLogin(BINARY, options?.device ? ["login", "--device-auth"] : ["login"], authStatus, {
+      signal: options?.signal,
+      opensBrowser: !options?.device,
+    }),
   logout: () => runLogout(BINARY, ["logout"]),
   update: () => runUpdate(BINARY, ["update"]),
   models,

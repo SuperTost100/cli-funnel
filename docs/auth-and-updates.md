@@ -27,11 +27,11 @@ for await (const event of login) {
 }
 ```
 
-The CLI usually opens the browser itself. `open-url` gives you the link for UIs that want to show it, or for machines with no browser.
+Claude Code and Codex open the browser themselves, and their `open-url` event carries `opened: true`: show the link as a fallback, don't open it again. Without `opened`, open the page yourself. Cursor Agent runs with `NO_OPEN_BROWSER=1`, so it never opens one.
 
 Some CLIs have no headless login. Antigravity is one. Its login emits `needs-terminal` with the command to run, then polls until the account is signed in.
 
-`login.cancel()` stops the flow.
+`login.cancel()` stops the flow without an `error` event. A login that gets no answer for 10 minutes ends with an `error`. On Windows, CLIs installed by npm as `.cmd` shims are started through Node, since Node refuses to spawn batch files directly.
 
 ## Sign out
 

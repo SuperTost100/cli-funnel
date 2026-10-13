@@ -126,7 +126,8 @@ export const claudeProvider: Provider = {
   capabilities,
   detect: () => detectInstallation(BIN, TESTED_RANGE),
   authStatus,
-  login: (options) => spawnLogin(BIN, ["auth", "login"], authStatus, { signal: options?.signal }),
+  // `claude auth login` opens the browser itself and prints a fallback link.
+  login: (options) => spawnLogin(BIN, ["auth", "login"], authStatus, { signal: options?.signal, opensBrowser: true }),
   logout: () => runLogout(BIN, ["auth", "logout"]),
   update: () => runUpdate(BIN, ["update"]),
   async models() {
