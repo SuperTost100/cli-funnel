@@ -1,6 +1,3 @@
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { fromManifest, loadBundledManifest, mergeModels } from "../../catalog/manifest.js";
 import { Channel } from "../../util/channel.js";
 import { exec, spawnStream } from "../../util/process.js";
@@ -20,7 +17,6 @@ import { createMapper, parseModels } from "./parser.js";
 import { composePrompt } from "../prompt.js";
 import { ownedWorkspace } from "../../util/workspace.js";
 
-const TOKEN_FILE = join(homedir(), ".gemini", "antigravity-cli", "antigravity-oauth-token");
 const TESTED = { min: "1.2.0" };
 
 /** Builds the `--model` / `--effort` pair. Base ids with effort variants need `--effort`. */
@@ -82,16 +78,37 @@ async function loadManifestModels(): Promise<ModelInfo[]> {
   return fromManifest(await loadBundledManifest(), "antigravity");
 }
 
-async function authStatus(): Promise<AuthStatus> {
+/** How often `login()` asks `agy models` whether the user has signed in. */
+const LOGIN_POLL_MS = 3000;
+
+/**
+ * agy keeps its OAuth token in the OS keyring (macOS Keychain, Windows Credential Manager, Secret Service) and writes
+ * a token file only when the keyring is unavailable. A missing file therefore says nothing about sign-in, so the only
+ * reliable check is to ask agy. `agy models` exits 0 with a model list when signed in and exits 1 with a sign-in
+ * message when not.
+ */
+async function checkAuth(): Promise<AuthStatus> {
   const path = findBinary("agy");
   if (!path) return { loggedIn: false, detail: "agy is not installed." };
-  const apiKey = !!process.env.GEMINI_API_KEY;
-  if (!apiKey && !existsSync(TOKEN_FILE)) return { loggedIn: false, detail: "Run agy in a terminal and sign in." };
-  const res = await exec(path, ["models"], { timeoutMs: 20_000 }).catch(() => undefined);
-  const ok = !!res && res.code === 0 && parseModels(res.stdout).length > 0;
-  return ok
-    ? { loggedIn: true, method: apiKey ? "Gemini API key" : "Google account" }
-    : { loggedIn: false, detail: "agy could not list models. Sign in again." };
+  const res = await exec(path, ["models"], { timeoutMs: 20_000 }).catch((e: unknown) => e as Error);
+  if (res instanceof Error) return { loggedIn: false, detail: `agy could not run: ${res.message}` };
+  if (res.code === 0 && parseModels(res.stdout).length > 0) {
+    return { loggedIn: true, method: process.env.GEMINI_API_KEY ? "Gemini API key" : "Google account" };
+  }
+  const output = (res.stderr + res.stdout).trim();
+  if (res.code !== null && /sign in/i.test(output)) return { loggedIn: false, detail: "Run agy in a terminal and sign in." };
+  // A timeout (code null), a crash or an empty list: agy did not answer, which is not the same as signed out.
+  const last = output.split("\n").at(-1) ?? "";
+  const why = res.code === null ? "agy did not answer in time" : res.code === 0 ? "agy listed no models" : `agy exited with code ${res.code}`;
+  return { loggedIn: false, detail: `${why}.${last ? ` ${last}` : ""}` };
+}
+
+let pending: Promise<AuthStatus> | undefined;
+
+/** One `agy models` at a time: callers that arrive while a check runs share its result. */
+function authStatus(): Promise<AuthStatus> {
+  pending ??= checkAuth().finally(() => (pending = undefined));
+  return pending;
 }
 
 function login(options: { signal?: AbortSignal } = {}): LoginSession {
@@ -106,7 +123,7 @@ function login(options: { signal?: AbortSignal } = {}): LoginSession {
   void (async () => {
     const deadline = Date.now() + 10 * 60_000;
     while (!cancelled && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 2000));
+      await new Promise((r) => setTimeout(r, LOGIN_POLL_MS));
       if (cancelled) return;
       const status = await authStatus();
       if (status.loggedIn) {
@@ -167,7 +184,7 @@ export const antigravityProvider: Provider = {
   login,
   async logout() {
     throw new FunnelError(
-      "agy has no sign-out command. Run agy, open its account menu to sign out, or delete the token file in ~/.gemini/antigravity-cli/.",
+      "agy has no sign-out command. Run agy and open its account menu to sign out.",
       "unsupported",
     );
   },

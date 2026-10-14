@@ -56,15 +56,15 @@ The `--model` string is the base id plus `--effort <effort>`. Passing a full id 
 
 ## Login
 
-`agy` has no login subcommand. Sign-in happens in the interactive `agy` screen, and the credentials are stored under `~/.gemini/antigravity-cli/`. Setting `GEMINI_API_KEY` is an alternative that uses API billing instead of the subscription.
+`agy` has no login subcommand. Sign-in happens in the interactive `agy` screen, and agy stores the credentials in the OS keyring (macOS Keychain, Windows Credential Manager, Secret Service on Linux). It writes a token file under `~/.gemini/antigravity-cli/` only when the keyring is unavailable. Setting `GEMINI_API_KEY` is an alternative that uses API billing instead of the subscription.
 
-`authStatus()` checks that the token file exists (or that `GEMINI_API_KEY` is set), then runs `agy models` to confirm it works. It does not read the token and does not spend quota.
+`authStatus()` runs `agy models`. Exit code 0 with at least one model means signed in, whether the token is in the keyring or in the file, so cli-funnel does not look for the file. A failure that asks you to sign in means signed out. Any other failure (a timeout, a crash, an empty list) also returns `loggedIn: false`, but `detail` says what went wrong instead of asking for a sign-in. Checks never overlap: a call that arrives while one is running shares its result. It does not read the token and does not spend quota.
 
-`login()` emits `needs-terminal` with command `["agy"]`, then polls `authStatus()` every two seconds for up to ten minutes and emits `done` once signed in.
+`login()` emits `needs-terminal` with command `["agy"]`, then polls `authStatus()` every three seconds for up to ten minutes and emits `done` once signed in.
 
 ## Logout and update
 
-`logout()` throws an `unsupported` error. `agy` has no sign-out command. Sign out from the interactive screen or delete the token file.
+`logout()` throws an `unsupported` error. `agy` has no sign-out command. Sign out from the interactive screen.
 
 `update()` runs `agy update`.
 
