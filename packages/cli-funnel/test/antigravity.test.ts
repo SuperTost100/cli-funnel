@@ -1,12 +1,22 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { collect } from "../src/providers/base.js";
 import { antigravityProvider, buildArgs, NONE_MATCHER, noneHooks, noneWorkspace } from "../src/providers/antigravity/index.js";
 import { createMapper, parseModels } from "../src/providers/antigravity/parser.js";
 import type { FunnelEvent, RunInput } from "../src/types.js";
+
+// agy keeps its token in the OS keyring, so no token file is the normal case. Start from a home without one, even on
+// a machine where agy is signed in with a file.
+vi.hoisted(() => {
+  const { mkdtempSync } = process.getBuiltinModule("node:fs");
+  const { tmpdir } = process.getBuiltinModule("node:os");
+  const home = mkdtempSync(`${tmpdir()}/cf-agy-home-`);
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+});
 
 const fx = (n: string) => readFileSync(new URL(`./fixtures/antigravity/${n}`, import.meta.url), "utf8");
 const events = (n: string): FunnelEvent[] => {
@@ -107,6 +117,67 @@ describe("antigravity none", () => {
       else process.env.XDG_CACHE_HOME = old;
     }
   });
+});
+
+describe.skipIf(process.platform === "win32")("antigravity sign-in", () => {
+  afterEach(() => {
+    delete process.env.CLI_FUNNEL_AGY_BIN;
+  });
+
+  /** A fake agy. `models` prints the fixture when `ok` exists in its folder, otherwise it fails with `failure`. */
+  function fakeAgy(failure = `echo "Error: Please sign in to view available models" >&2; exit 1`) {
+    const dir = mkdtempSync(join(tmpdir(), "cf-agy-"));
+    const bin = join(dir, "agy");
+    const calls = join(dir, "calls");
+    const models = join(dir, "models.txt");
+    writeFileSync(models, fx("models.txt"));
+    writeFileSync(
+      bin,
+      `#!/bin/sh\n[ "$1" = "models" ] || exit 2\necho x >> ${calls}\nsleep 0.3\nif [ -f ${join(dir, "ok")} ]; then cat ${models}; exit 0; fi\n${failure}\n`,
+    );
+    chmodSync(bin, 0o755);
+    process.env.CLI_FUNNEL_AGY_BIN = bin;
+    return { signIn: () => writeFileSync(join(dir, "ok"), ""), calls: () => readFileSync(calls, "utf8").trim().split("\n").length };
+  }
+
+  it("is signed in when models works and there is no token file", async () => {
+    fakeAgy().signIn();
+    expect(existsSync(join(process.env.HOME!, ".gemini", "antigravity-cli", "antigravity-oauth-token"))).toBe(false);
+    expect(await antigravityProvider.authStatus()).toEqual({ loggedIn: true, method: "Google account" });
+  });
+
+  it("is signed out when models asks for a sign-in", async () => {
+    fakeAgy();
+    expect(await antigravityProvider.authStatus()).toEqual({ loggedIn: false, detail: "Run agy in a terminal and sign in." });
+  });
+
+  it("reports a failure that is not a sign-in prompt as such", async () => {
+    fakeAgy(`echo "panic: boom" >&2; exit 2`);
+    const status = await antigravityProvider.authStatus();
+    expect(status.loggedIn).toBe(false);
+    expect(status.detail).toBe("agy exited with code 2. panic: boom");
+  });
+
+  it("runs one models check at a time", async () => {
+    const agy = fakeAgy();
+    agy.signIn();
+    const all = await Promise.all([antigravityProvider.authStatus(), antigravityProvider.authStatus(), antigravityProvider.authStatus()]);
+    expect(all.every((s) => s.loggedIn)).toBe(true);
+    expect(agy.calls()).toBe(1);
+    await antigravityProvider.authStatus();
+    expect(agy.calls()).toBe(2);
+  });
+
+  it("login finishes once agy starts working", async () => {
+    const agy = fakeAgy();
+    setTimeout(agy.signIn, 500);
+    const events = [];
+    for await (const e of antigravityProvider.login()) events.push(e);
+    expect(events).toEqual([
+      { type: "needs-terminal", command: ["agy"] },
+      { type: "done", status: { loggedIn: true, method: "Google account" } },
+    ]);
+  }, 15_000);
 });
 
 describe.skipIf(process.env.CLI_FUNNEL_LIVE !== "1")("antigravity live", () => {
