@@ -122,6 +122,55 @@ export function cliCommand(file: string, args: string[], platform: NodeJS.Platfo
   return { file: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", `"${line}"`], windowsVerbatimArguments: true };
 }
 
+/** How long a CLI gets to exit after SIGTERM before it gets SIGKILL. */
+export const KILL_GRACE_MS = 3000;
+
+const live = new Set<ChildProcess>();
+let exitHook = false;
+
+/** Spawn options that put a CLI in its own process group on POSIX, so `terminate` reaches the MCP servers and shells it started. */
+function groupOptions(): { detached: boolean } {
+  if (!exitHook) {
+    exitHook = true;
+    // A detached group does not die with the host on its own. Kill what is left when the host exits normally.
+    process.once("exit", () => {
+      for (const child of live) signal(child, "SIGKILL");
+    });
+  }
+  return { detached: process.platform !== "win32" };
+}
+
+function track(child: ChildProcess): void {
+  live.add(child);
+  child.once("close", () => live.delete(child));
+  child.once("error", () => live.delete(child));
+}
+
+const running = (child: ChildProcess) => child.exitCode === null && child.signalCode === null;
+
+function signal(child: ChildProcess, sig: NodeJS.Signals): void {
+  if (child.pid === undefined || !running(child)) return;
+  try {
+    if (process.platform !== "win32") process.kill(-child.pid, sig);
+    else child.kill(sig);
+  } catch {
+    // The group is gone already, or the child was not started in its own group.
+    child.kill(sig);
+  }
+}
+
+/**
+ * Stops a CLI and everything it started: SIGTERM to its process group, then SIGKILL if it is still running after
+ * `graceMs`. A CLI that traps SIGTERM, or a grandchild that holds stdout open, cannot keep the run alive.
+ */
+export function terminate(child: ChildProcess, graceMs = KILL_GRACE_MS): void {
+  if (!running(child)) return;
+  signal(child, "SIGTERM");
+  const timer = setTimeout(() => signal(child, "SIGKILL"), graceMs);
+  timer.unref();
+  child.once("close", () => clearTimeout(timer));
+}
+
 export interface ExecResult {
   stdout: string;
   stderr: string;
@@ -145,19 +194,27 @@ export function exec(file: string, args: string[], opts: ExecOptions = {}): Prom
       cwd: opts.cwd,
       env: childEnv(opts.env),
       stdio: ["pipe", "pipe", "pipe"],
-      signal: opts.signal,
+      ...groupOptions(),
     });
+    track(child);
     let stdout = "";
     let stderr = "";
-    const timer = opts.timeoutMs ? setTimeout(() => child.kill("SIGTERM"), opts.timeoutMs) : undefined;
+    const timer = opts.timeoutMs ? setTimeout(() => terminate(child), opts.timeoutMs) : undefined;
+    const onAbort = () => terminate(child);
+    if (opts.signal?.aborted) onAbort();
+    else opts.signal?.addEventListener("abort", onAbort, { once: true });
     child.stdout.on("data", (d) => (stdout += d));
     child.stderr.on("data", (d) => (stderr += d));
-    child.on("error", (e) => {
+    const cleanup = () => {
       clearTimeout(timer);
+      opts.signal?.removeEventListener("abort", onAbort);
+    };
+    child.on("error", (e) => {
+      cleanup();
       reject(e);
     });
     child.on("close", (code) => {
-      clearTimeout(timer);
+      cleanup();
       resolve({ stdout, stderr, code });
     });
     child.stdin.on("error", () => {});
@@ -175,9 +232,11 @@ export interface Streamed {
   exited: Promise<number | null>;
   write(line: string): void;
   closeStdin(): void;
+  /** Stops the CLI and its process group. See `terminate`. */
+  kill(): void;
 }
 
-/** Spawns a CLI and exposes stdout as an NDJSON stream. Aborting the signal sends SIGTERM. */
+/** Spawns a CLI and exposes stdout as an NDJSON stream. Aborting the signal stops it with `terminate`. */
 export function spawnStream(
   file: string,
   args: string[],
@@ -189,7 +248,9 @@ export function spawnStream(
     cwd: opts.cwd,
     env: childEnv(opts.env),
     stdio: ["pipe", "pipe", "pipe"],
+    ...groupOptions(),
   });
+  track(child);
   const channel = new Channel<unknown>();
   let buffer = "";
   let stderr = "";
@@ -217,24 +278,24 @@ export function spawnStream(
   child.stderr.on("data", (d: string) => (stderr += d));
   child.stdin.on("error", () => {});
 
+  const onAbort = () => terminate(child);
+  if (opts.signal?.aborted) onAbort();
+  else opts.signal?.addEventListener("abort", onAbort, { once: true });
+
   const exited = new Promise<number | null>((resolve) => {
     child.on("error", (e) => {
+      opts.signal?.removeEventListener("abort", onAbort);
       channel.fail(e);
       resolve(null);
     });
     child.on("close", (code) => {
+      opts.signal?.removeEventListener("abort", onAbort);
       flush(buffer);
       buffer = "";
       channel.end();
       resolve(code);
     });
   });
-
-  const onAbort = () => child.kill("SIGTERM");
-  if (opts.signal) {
-    if (opts.signal.aborted) onAbort();
-    else opts.signal.addEventListener("abort", onAbort, { once: true });
-  }
 
   if (opts.input !== undefined) child.stdin.write(opts.input);
   if (opts.closeStdin ?? opts.input !== undefined) child.stdin.end();
@@ -246,6 +307,7 @@ export function spawnStream(
     exited,
     write: (line) => child.stdin.write(line.endsWith("\n") ? line : line + "\n"),
     closeStdin: () => child.stdin.end(),
+    kill: () => terminate(child),
   };
 }
 

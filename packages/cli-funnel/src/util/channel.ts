@@ -1,25 +1,28 @@
 /** A push-based async queue. Producers call `push`/`end`, consumers `for await`. */
 export class Channel<T> implements AsyncIterable<T> {
   private queue: T[] = [];
-  private waiting: ((r: IteratorResult<T>) => void)[] = [];
+  private waiting: { resolve: (r: IteratorResult<T>) => void; reject: (e: unknown) => void }[] = [];
   private closed = false;
   private failure: unknown;
 
   push(value: T): void {
     if (this.closed) return;
     const waiter = this.waiting.shift();
-    if (waiter) waiter({ value, done: false });
+    if (waiter) waiter.resolve({ value, done: false });
     else this.queue.push(value);
   }
 
   end(): void {
     this.closed = true;
-    for (const w of this.waiting.splice(0)) w({ value: undefined as never, done: true });
+    for (const w of this.waiting.splice(0)) w.resolve({ value: undefined as never, done: true });
   }
 
+  /** Ends the stream with an error. A reader already waiting gets the error too, not a clean end. */
   fail(error: unknown): void {
+    if (this.closed) return;
     this.failure = error;
-    this.end();
+    this.closed = true;
+    for (const w of this.waiting.splice(0)) w.reject(error);
   }
 
   [Symbol.asyncIterator](): AsyncIterator<T> {
@@ -30,7 +33,7 @@ export class Channel<T> implements AsyncIterable<T> {
           if (this.failure) throw this.failure;
           return { value: undefined as never, done: true };
         }
-        return new Promise<IteratorResult<T>>((resolve) => this.waiting.push(resolve));
+        return new Promise<IteratorResult<T>>((resolve, reject) => this.waiting.push({ resolve, reject }));
       },
     };
   }

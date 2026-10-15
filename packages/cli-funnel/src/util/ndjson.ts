@@ -1,4 +1,7 @@
-/** Reads newline-delimited JSON from a fetch Response. Lines that are not JSON come back as `{ __raw }`. */
+/**
+ * Reads newline-delimited JSON from a fetch Response. Lines that are not JSON come back as `{ __raw }`.
+ * Stopping early cancels the body, so the download stops too.
+ */
 export async function* readNDJSON(res: Response): AsyncGenerator<unknown> {
   const reader = res.body!.pipeThrough(new TextDecoderStream()).getReader();
   let buffer = "";
@@ -9,16 +12,20 @@ export async function* readNDJSON(res: Response): AsyncGenerator<unknown> {
       return { __raw: line };
     }
   };
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += value;
-    let i: number;
-    while ((i = buffer.indexOf("\n")) >= 0) {
-      const line = buffer.slice(0, i).trim();
-      buffer = buffer.slice(i + 1);
-      if (line) yield parse(line);
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += value;
+      let i: number;
+      while ((i = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, i).trim();
+        buffer = buffer.slice(i + 1);
+        if (line) yield parse(line);
+      }
     }
+    if (buffer.trim()) yield parse(buffer.trim());
+  } finally {
+    await reader.cancel().catch(() => {});
   }
-  if (buffer.trim()) yield parse(buffer.trim());
 }

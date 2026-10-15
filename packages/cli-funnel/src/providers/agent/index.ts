@@ -96,7 +96,7 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
     }
   } finally {
     // Runs too when the caller stops reading early. The CLI must not keep working unattended.
-    if (proc.child.exitCode === null) proc.child.kill("SIGTERM");
+    proc.kill();
   }
   const code = await proc.exited;
   if (input.signal?.aborted) {
