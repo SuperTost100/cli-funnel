@@ -1,6 +1,6 @@
 # UI components
 
-`cli-funnel-react` has hooks for building your own UI and three small components. It talks to the HTTP handler from `cli-funnel/server`.
+`cli-funnel-react` has hooks for building your own UI and four small components. It talks to the HTTP handler from `cli-funnel/server`.
 
 ## Server side
 
@@ -104,6 +104,35 @@ const run = useRun(client);
 `useRun` keeps the session id between calls, so the next `send` continues the conversation. `newConversation()` ends the run in flight and clears the session. Calling `send` during a run cancels that run first. Leaving the page cancels it too.
 
 `run.result` has `text`, `provider`, `model`, `sessionId`, `usage`, `finishReason`, `toolCalls`, `deniedActions` and `structured`. `provider` and `model` are the ones you passed to `send`, even if the picker has changed since. If `approve` fails, the prompt stays and `run.error` has the message, so the user can press the button again.
+
+`run.result` summarizes the latest run in the shape of `funnel.run()`: `text`, `provider`, `model`, `sessionId`, `usage`, `finishReason`, `toolCalls`, `deniedActions` and `structured`. When you pass `responseSchema` to `send` and the provider does not report a parsed answer, `structured` is the answer text parsed as JSON, or `structuredError` says why that failed. Validate it against your schema yourself.
+
+## Transcript
+
+```tsx
+import { useRun, FunnelTranscript } from "cli-funnel-react";
+
+const run = useRun(client, { keepTranscript: true });
+
+<FunnelTranscript turns={run.turns} />
+```
+
+With `keepTranscript`, `run.turns` holds one entry per `send` since the last `newConversation()`. Without it, `turns` holds only the latest run. Each turn has:
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Unique number. Use it as the React key. |
+| `prompt` | The text you sent. |
+| `selection` | The `Selection` this turn ran with. Changing the picker later does not touch it. |
+| `model` | The model the CLI reported. Starts as `selection.model`. |
+| `text` | The answer so far. It grows while the run streams. |
+| `structured` | The parsed answer, when there is one. |
+| `toolCalls` | Each call with `name`, `input`, `output`, `error` and `running`. |
+| `deniedActions` | Names of the tool calls the CLI refused because nobody could approve them. |
+| `usage`, `finishReason` | As in `run.result`. |
+| `status` | `running`, `done` or `error`. `error` holds the message. |
+
+`FunnelTranscript` shows each prompt, its tool calls as closed `<details>` rows (open one for the input, output and error), the answer, and a line with provider, model and token counts. It renders nothing while `turns` is empty, so show your own empty state. It uses the same `--cf-` variables as the picker.
 
 ## Hooks only
 

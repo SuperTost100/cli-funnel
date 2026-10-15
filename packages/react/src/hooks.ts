@@ -11,8 +11,8 @@ import type {
   ProviderOverview,
   RunInput,
   Selection,
-  Usage,
 } from "cli-funnel/client";
+import { applyEvent, endTurn, startTurn, type Turn } from "./transcript.js";
 
 export type SelectionField = keyof Selection;
 
@@ -266,8 +266,14 @@ export function useAuth(client: FunnelClient, provider: Selection["provider"], o
   return { status, events, busy, message, login, sendCode, cancel, logout, update, refresh };
 }
 
-/** Runs prompts and exposes streaming text, tool calls and pending approvals. */
-export function useRun(client: FunnelClient) {
+/**
+ * Runs prompts and exposes streaming text, tool calls and pending approvals.
+ * `keepTranscript` makes `turns` hold every prompt of the conversation. Without it, `turns` holds the latest run only.
+ */
+export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } = {}) {
+  const keepTranscript = !!opts.keepTranscript;
+  const [turns, setTurns] = useState<Turn[]>([]);
+  const turnCount = useRef(0);
   const [text, setText] = useState("");
   const [events, setEvents] = useState<FunnelEvent[]>([]);
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
@@ -293,17 +299,27 @@ export function useRun(client: FunnelClient) {
       setError(undefined);
       setStarted({ provider: chosen.provider, model: chosen.model });
       setStatus("running");
+      const turnId = ++turnCount.current;
+      const start = startTurn(turnId, prompt, selection);
+      setTurns((ts) => (keepTranscript ? [...ts, start] : [start]));
+      const patch = (fn: (t: Turn) => Turn) => setTurns((ts) => ts.map((t) => (t.id === turnId ? fn(t) : t)));
+      // A run that was superseded, reset or stopped still closes its own turn.
+      const end = (o: { aborted?: boolean; error?: string }) => patch((t) => endTurn(t, { ...o, responseSchema: !!options.responseSchema }));
       try {
         // A session belongs to one provider and folder. Resuming it anywhere else fails inside the CLI.
         const resume = session && session.provider === chosen.provider && session.cwd === chosen.cwd ? session.id : undefined;
         for await (const e of client.run({ ...options, prompt, selection: chosen, sessionId: resume }, ctl.signal)) {
-          if (abort.current !== ctl) return;
+          if (abort.current !== ctl) {
+            end({ aborted: true });
+            return;
+          }
           if (ctl.signal.aborted) break;
           if (e.type === "run") {
             runId.current = e.runId;
             continue;
           }
           setEvents((prev) => [...prev, e]);
+          patch((t) => applyEvent(t, e));
           if (e.type === "text.delta") setText((t) => t + e.text);
           else if (e.type === "done" && e.text) setText(e.text);
           else if (e.type === "session") setSession({ id: e.sessionId, provider: chosen.provider, cwd: chosen.cwd });
@@ -313,18 +329,27 @@ export function useRun(client: FunnelClient) {
             setStatus("error");
           }
         }
-        if (abort.current !== ctl) return;
+        if (abort.current !== ctl) {
+          end({ aborted: true });
+          return;
+        }
         setStatus((s) => (s === "error" ? s : "done"));
+        end({ aborted: ctl.signal.aborted });
       } catch (e) {
-        if (abort.current !== ctl) return;
-        if (ctl.signal.aborted) setStatus("done");
+        if (abort.current !== ctl) {
+          end({ aborted: true });
+          return;
+        }
+        const aborted = ctl.signal.aborted;
+        if (aborted) setStatus("done");
         else {
           setError(messageOf(e));
           setStatus("error");
         }
+        end({ aborted, error: aborted ? undefined : messageOf(e) });
       }
     },
-    [client, session],
+    [client, session, keepTranscript],
   );
 
   const approve = useCallback(
@@ -376,8 +401,11 @@ export function useRun(client: FunnelClient) {
         out.finishReason = e.finishReason;
       }
     }
-    return out;
-  }, [events, started]);
+    // A turn holds the parsed JSON answer and the reason it failed. The event fold above only sees what the provider reported.
+    const last = turns[turns.length - 1];
+    out.structured ??= last?.structured;
+    return { ...out, structuredError: last?.structuredError };
+  }, [events, started, turns]);
 
   const cancel = useCallback(() => abort.current?.abort(), []);
   // Starting over ends the run in flight, so its late events cannot bring the old session back.
@@ -387,7 +415,8 @@ export function useRun(client: FunnelClient) {
     setApprovals([]);
     setStatus((s) => (s === "running" ? "done" : s));
     setSession(undefined);
-  }, []);
+    if (keepTranscript) setTurns([]);
+  }, [keepTranscript]);
 
   // Leaving the page ends the run instead of letting it stream into nothing.
   useEffect(
@@ -401,6 +430,8 @@ export function useRun(client: FunnelClient) {
   return {
     text,
     events,
+    /** Every turn of the conversation when `keepTranscript` is set, else the latest run only. Pass it to `FunnelTranscript`. */
+    turns,
     result,
     approvals,
     status,

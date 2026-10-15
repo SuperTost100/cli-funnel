@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { createClient } from "cli-funnel/client";
-import { ApprovalPrompt, FunnelLogin, FunnelPickerView, useRun, useSelection } from "cli-funnel-react";
+import { ApprovalPrompt, FunnelLogin, FunnelPickerView, FunnelTranscript, useRun, useSelection } from "cli-funnel-react";
 import { PatchBay } from "./PatchBay";
 
 declare const __SANDBOX__: string;
@@ -20,7 +20,7 @@ export function App() {
     defaults: { cwd: __SANDBOX__, access: "supervised" },
     pick: (provider) => ({ model: CHEAPEST[provider], effort: CHEAP_EFFORT[provider] }),
   });
-  const run = useRun(client);
+  const run = useRun(client, { keepTranscript: true });
   const [prompt, setPrompt] = useState("Reply with exactly: funnel ok");
   const { selection, providers } = state;
   const continuing = run.session && run.session.provider === selection.provider && run.session.cwd === selection.cwd ? run.session : undefined;
@@ -72,23 +72,11 @@ export function App() {
             <ApprovalPrompt key={r.id} request={r} onDecide={run.approve} />
           ))}
 
-          <h3>Output</h3>
-          <pre className={run.text ? "out" : "out empty"}>{run.text || (running ? "Waiting for the first token…" : "The answer streams in here.")}</pre>
-          {run.error && <p className="error" role="alert">{run.error}</p>}
-
-          {run.result.toolCalls.length > 0 && (
-            <>
-              <h3>Tool calls</h3>
-              <ul className="tools mono">
-                {run.result.toolCalls.map((t) => (
-                  <li key={t.id} data-failed={!!t.error}>{t.name}{t.error ? ` · ${t.error.slice(0, 80)}` : ""}</li>
-                ))}
-              </ul>
-            </>
-          )}
+          <h3>Conversation</h3>
+          {run.turns.length > 0 ? <FunnelTranscript turns={run.turns} /> : <p className="hint">Prompts and answers stack up here, one turn each, until you start a new conversation.</p>}
 
           <h3>Result</h3>
-          <pre className="json mono">{run.result.finishReason ? JSON.stringify({ provider: selection.provider, ...run.result }, null, 2) : "Same shape from every provider: text, usage, sessionId, finishReason, toolCalls."}</pre>
+          <pre className="json mono">{run.result.finishReason ? JSON.stringify(run.result, null, 2) : "Same shape from every provider: text, provider, model, usage, sessionId, finishReason, toolCalls, deniedActions, structured."}</pre>
         </section>
       </div>
     </div>

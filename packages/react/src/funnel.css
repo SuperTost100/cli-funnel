@@ -59,3 +59,30 @@
 .cf-approval { display: grid; gap: 8px; padding: 12px 14px; border: 1px solid var(--cf-accent); border-radius: var(--cf-radius); }
 .cf-approval pre { margin: 0; max-height: 160px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .cf-folder { grid-column: 1 / -1; }
+.cf-transcript { display: grid; gap: 22px; }
+.cf-turn { display: grid; gap: 10px; min-width: 0; }
+.cf-prompt { margin: 0; padding: 8px 12px; white-space: pre-wrap; overflow-wrap: anywhere; border-radius: var(--cf-radius); background: color-mix(in srgb, var(--cf-fg) 6%, var(--cf-bg)); }
+.cf-answer { display: grid; gap: 10px; min-width: 0; }
+.cf-answer > p { margin: 0; }
+.cf-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.cf-quiet, .cf-meta { color: var(--cf-muted); font-size: 12.5px; }
+.cf-note { padding-left: 10px; border-left: 2px solid var(--cf-line); }
+.cf-tools { display: grid; gap: 6px; }
+.cf-tool { border: 1px solid var(--cf-line); border-radius: var(--cf-radius); min-width: 0; }
+.cf-tool > summary {
+  display: flex; gap: 10px; align-items: center; min-height: 36px; padding: 6px 12px; cursor: pointer;
+  list-style: none; border-radius: var(--cf-radius);
+}
+.cf-tool > summary::-webkit-details-marker { display: none; }
+.cf-tool > summary::before { content: ""; flex: none; width: 6px; height: 6px; margin-right: 2px; border-right: 1.5px solid var(--cf-muted); border-bottom: 1.5px solid var(--cf-muted); transform: rotate(-45deg); }
+.cf-tool[open] > summary::before { transform: rotate(45deg); }
+.cf-tool > summary:hover { background: color-mix(in srgb, var(--cf-fg) 4%, var(--cf-bg)); }
+.cf-tool > summary:focus-visible { outline: 2px solid var(--cf-accent); outline-offset: 1px; }
+.cf-tool-name { flex: none; font-weight: 600; font-size: 13px; }
+.cf-tool-preview { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--cf-muted); }
+.cf-tool-state { flex: none; margin-left: auto; color: var(--cf-muted); font-size: 12.5px; }
+.cf-tool[data-state="failed"] .cf-tool-state { color: var(--cf-danger); }
+.cf-tool-body { display: grid; gap: 4px; padding: 4px 12px 12px; border-top: 1px solid var(--cf-line); }
+.cf-tool-body h4 { margin: 8px 0 0; font-size: 12px; font-weight: 600; color: var(--cf-muted); }
+.cf-tool-body pre { margin: 0; max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.cf-tool-body p { margin: 0; }

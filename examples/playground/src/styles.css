@@ -35,7 +35,7 @@ body { margin: 0; background: var(--enamel); color: var(--ink); font: 15px/1.5 v
 .panel h3 { margin: 6px 0 -6px; font: 600 12px var(--mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
 .accounts { display: grid; gap: 12px; }
 .hint, .muted { color: var(--muted); font-size: 13px; margin: 0; }
-.mono, code, .json, .tools { font-family: var(--mono); font-size: 12.5px; }
+.mono, code, .json { font-family: var(--mono); font-size: 12.5px; }
 .stack { display: grid; gap: 6px; font-weight: 600; font-size: 13px; }
 textarea { width: 100%; padding: 10px 12px; font: 14px var(--mono); color: inherit; background: #fff; border: 1px solid var(--line); border-radius: 8px; resize: vertical; }
 textarea:focus-visible, button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
@@ -44,11 +44,8 @@ textarea:focus-visible, button:focus-visible { outline: 2px solid var(--ink); ou
 .bench button:hover:not(:disabled) { border-color: var(--ink); }
 .bench button:disabled { opacity: 0.5; cursor: default; }
 .bench button.primary { background: var(--ink); color: #fff; border-color: var(--ink); }
-.out, .json { margin: 0; padding: 12px 14px; background: #fff; border: 1px solid var(--line); border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; }
-.out.empty, .json:not(:has(*)) { color: var(--muted); }
-.tools { margin: 0; padding-left: 18px; }
-.tools li[data-failed="true"] { color: #a4291f; }
-.error { color: #a4291f; margin: 0; }
+.json { margin: 0; padding: 12px 14px; background: #fff; border: 1px solid var(--line); border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; }
+.json:not(:has(*)) { color: var(--muted); }
 
 /* Library components inherit the bench palette and type. */
 .bench .cf { --cf-bg: #fff; --cf-fg: var(--ink); --cf-muted: var(--muted); --cf-line: var(--line); --cf-accent: var(--ink); --cf-accent-fg: #fff; --cf-danger: #a4291f; font-family: var(--body); }
