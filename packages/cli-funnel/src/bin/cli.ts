@@ -156,7 +156,14 @@ async function main() {
   }
 
   if (command === "logout") {
-    await funnel.logout(provider());
+    const id = provider();
+    await funnel.logout(id);
+    // The CLI can exit 0 and still keep the account, so ask it again before reporting success.
+    if ((await funnel.authStatus(id)).loggedIn) {
+      process.stderr.write(`${id} still reports a signed-in account after logout.\n`);
+      process.exitCode = 1;
+      return;
+    }
     return out("Signed out.");
   }
 
