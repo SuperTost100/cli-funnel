@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { createInterface } from "node:readline/promises";
+import type { AddressInfo } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
@@ -21,8 +22,10 @@ const HELP = `cli-funnel <command>
   rm <provider> <model>        Delete a downloaded model (Ollama)
   run <provider> <model> <prompt>
        [--effort x] [--fast] [--context tokens] [--cwd dir] [--access ${ACCESS_LEVELS.join("|")}]
-       [--system text] [--session id] [--max-tokens n]
+       [--system text] [--session id] [--max-tokens n] [--json]
                                Prints a session id on stderr. Pass it to --session to continue.
+                               --json prints the full result as JSON on stdout and nothing else.
+                               Exits 1 when the run gives no text and does not finish with "stop".
   serve [--port 4747] [--host 127.0.0.1] [--cwd dir] [--access level] [--token secret]
                                HTTP API, SSE streaming and OpenAI-compatible /v1 endpoints
 
@@ -72,16 +75,25 @@ const sessions = join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "s
 const funnel = createFunnel({ openaiCompatible: openaiCompatible(), history: fileHistory(sessions) });
 const [command, providerArg, ...rest] = positionals;
 const out = (s: string) => process.stdout.write(s + "\n");
+/** Prints a usage error on stderr and exits with 2. */
+const usage = (s: string): never => {
+  process.stderr.write(s + "\n");
+  return process.exit(2);
+};
 const provider = (): ProviderId => {
-  if (!providerArg || !(providerArg in funnel.providers)) {
-    out(`Pick a provider: ${Object.keys(funnel.providers).join(", ")}`);
-    process.exit(2);
-  }
+  if (!providerArg || !(providerArg in funnel.providers)) return usage(`Pick a provider: ${Object.keys(funnel.providers).join(", ")}`);
   return providerArg as ProviderId;
 };
+const wholeNumber = (flag: string, raw: string | undefined): number | undefined => {
+  if (raw === undefined) return undefined;
+  if (!/^[1-9]\d*$/.test(raw)) return usage(`--${flag} must be a whole number above 0, got "${raw}".`);
+  return Number(raw);
+};
+const LOCAL_HOSTS = ["127.0.0.1", "localhost", "::1"];
 
 async function main() {
-  if (!command || values.help) return out(HELP);
+  if (values.help) return out(HELP);
+  if (!command) return usage(HELP);
 
   if (command === "doctor") {
     const rows = await funnel.overview();
@@ -140,7 +152,7 @@ async function main() {
 
   if (command === "pull") {
     const [model] = rest;
-    if (!model) return out("Usage: cli-funnel pull <provider> <model>");
+    if (!model) return usage("Usage: cli-funnel pull <provider> <model>");
     let last = "";
     for await (const e of funnel.pullModel(provider(), model)) {
       if (e.type === "progress") {
@@ -159,44 +171,57 @@ async function main() {
 
   if (command === "rm") {
     const [model] = rest;
-    if (!model) return out("Usage: cli-funnel rm <provider> <model>");
+    if (!model) return usage("Usage: cli-funnel rm <provider> <model>");
     await funnel.deleteModel(provider(), model);
     return out(`Deleted ${model}.`);
   }
 
   if (command === "run") {
     const [model, ...words] = rest;
-    if (!model || !words.length) return out("Usage: cli-funnel run <provider> <model> <prompt>");
+    if (!model || !words.length) return usage("Usage: cli-funnel run <provider> <model> <prompt>");
     const access = (values.access ?? "accept-edits") as AccessLevel;
-    const rl = access === "supervised" ? createInterface({ input: process.stdin, output: process.stdout }) : undefined;
+    const contextWindow = wholeNumber("context", values.context);
+    const maxOutputTokens = wholeNumber("max-tokens", values["max-tokens"]);
+    // Questions go to stderr so that stdout carries only the answer, or only the JSON with --json.
+    const rl = access === "supervised" ? createInterface({ input: process.stdin, output: process.stderr }) : undefined;
     const stream = funnel.stream({
       selection: {
         provider: provider(),
         model,
         effort: values.effort,
         fast: values.fast,
-        contextWindow: values.context ? Number(values.context) : undefined,
+        contextWindow,
         cwd: values.cwd ?? process.cwd(),
         access,
       },
       prompt: words.join(" "),
       system: values.system,
       sessionId: values.session,
-      maxOutputTokens: values["max-tokens"] ? Number(values["max-tokens"]) : undefined,
-      onApproval: async (r) => {
-        const answer = await rl!.question(`\nAllow ${r.tool} ${JSON.stringify(r.input).slice(0, 200)}? [y/N] `);
-        return answer.trim().toLowerCase().startsWith("y") ? "allow" : "deny";
-      },
+      maxOutputTokens,
+      // Without a terminal prompt the CLI denies tools that need approval on its own.
+      onApproval: rl
+        ? async (r) => {
+            const answer = await rl.question(`\nAllow ${r.tool} ${JSON.stringify(r.input).slice(0, 200)}? [y/N] `);
+            return answer.trim().toLowerCase().startsWith("y") ? "allow" : "deny";
+          }
+        : undefined,
     });
     for await (const e of stream) {
-      if (e.type === "text.delta") process.stdout.write(e.text);
+      if (e.type === "text.delta" && !values.json) process.stdout.write(e.text);
       else if (e.type === "tool.start") process.stderr.write(`\n[tool] ${e.name}\n`);
     }
     const result = await stream.result;
-    process.stdout.write("\n");
-    if (result.sessionId) process.stderr.write(`session ${result.sessionId}\n`);
-    if (values.json) out(JSON.stringify(result, null, 2));
     rl?.close();
+    if (!values.json) process.stdout.write("\n");
+    if (result.sessionId) process.stderr.write(`session ${result.sessionId}\n`);
+    if (result.deniedActions.length) {
+      process.stderr.write(`Denied: ${[...new Set(result.deniedActions)].join(", ")}. Use --access supervised to approve tools one by one.\n`);
+    }
+    if (values.json) out(JSON.stringify(result, null, 2));
+    if (!result.text && result.finishReason !== "stop") {
+      process.stderr.write(`The run ended without text. Finish reason: ${result.finishReason}\n`);
+      process.exitCode = 1;
+    }
     return;
   }
 
@@ -207,19 +232,17 @@ async function main() {
       fsRoots: [homedir(), values.cwd ?? process.cwd()],
       openai: { cwd: values.cwd ?? process.cwd(), access: (values.access as AccessLevel) ?? "accept-edits" },
     });
-    const host = values.host ?? "127.0.0.1";
-    if (host !== "127.0.0.1" && host !== "localhost" && !values.token) {
-      out("Refusing to listen on a public address without --token.");
-      process.exit(2);
-    }
-    const { url } = await serveNode(handler, { port: values.port ? Number(values.port) : 4747, host });
+    // [::1] is how an IPv6 address is written in a URL. The socket wants it without brackets.
+    const host = (values.host ?? "127.0.0.1").replace(/^\[(.*)\]$/, "$1");
+    if (!LOCAL_HOSTS.includes(host) && !values.token) return usage("Refusing to listen on a public address without --token.");
+    const { server } = await serveNode(handler, { port: values.port ? Number(values.port) : 4747, host });
+    const url = `http://${host.includes(":") ? `[${host}]` : host}:${(server.address() as AddressInfo).port}`;
     out(`cli-funnel listening on ${url}`);
     out(`OpenAI-compatible base URL: ${url}/v1   (model ids look like claude/claude-sonnet-5)`);
     return;
   }
 
-  out(HELP);
-  process.exitCode = 2;
+  usage(HELP);
 }
 
 main().catch((err) => {

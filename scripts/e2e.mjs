@@ -23,14 +23,25 @@ const funnel = createFunnel();
 const rows = [];
 const TIMEOUT = 180_000;
 
+// `fn` gets an AbortSignal. Pass it to every run so a timeout stops the CLI instead of leaving it generating.
 async function check(provider, name, fn) {
   const t0 = Date.now();
+  const ac = new AbortController();
+  let timer;
   try {
-    const note = await Promise.race([fn(), new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), TIMEOUT))]);
+    const timeout = new Promise((_, rej) => {
+      timer = setTimeout(() => {
+        ac.abort();
+        rej(new Error("timeout"));
+      }, TIMEOUT);
+    });
+    const note = await Promise.race([fn(ac.signal), timeout]);
     rows.push({ provider, name, status: "PASS", note: note ?? "", ms: Date.now() - t0 });
   } catch (e) {
     const skip = e?.skip;
     rows.push({ provider, name, status: skip ? "SKIP" : "FAIL", note: String(e?.message ?? e).split("\n")[0].slice(0, 140), ms: Date.now() - t0 });
+  } finally {
+    clearTimeout(timer);
   }
   const r = rows.at(-1);
   console.log(`${r.status.padEnd(5)} ${provider.padEnd(12)} ${name.padEnd(34)} ${(r.ms / 1000).toFixed(1)}s ${r.note}`);
@@ -75,8 +86,8 @@ for (const provider of providers) {
 
   const fullAccess = cap.access.includes("full") ? "full" : cap.access[0];
 
-  await check(provider, "run returns text and usage", async () => {
-    const r = await funnel.run({ selection: sel(provider, fullAccess, dir(provider, "text")), prompt: "Reply with exactly: e2e ok" });
+  await check(provider, "run returns text and usage", async (signal) => {
+    const r = await funnel.run({ selection: sel(provider, fullAccess, dir(provider, "text")), prompt: "Reply with exactly: e2e ok", signal });
     assert(/e2e ok/i.test(r.text), `text was "${r.text.slice(0, 60)}"`);
     assert(r.finishReason === "stop", `finishReason ${r.finishReason}`);
     assert(r.sessionId, "no sessionId");
@@ -84,8 +95,8 @@ for (const provider of providers) {
     return `${r.usage.totalTokens} tokens`;
   });
 
-  await check(provider, "stream emits deltas then done", async () => {
-    const s = funnel.stream({ selection: sel(provider, fullAccess, dir(provider, "stream")), prompt: "Count from 1 to 5 separated by spaces." });
+  await check(provider, "stream emits deltas then done", async (signal) => {
+    const s = funnel.stream({ selection: sel(provider, fullAccess, dir(provider, "stream")), prompt: "Count from 1 to 5 separated by spaces.", signal });
     const types = [];
     for await (const e of s) types.push(e.type);
     assert(types.includes("session") && types.includes("text.delta") && types.at(-1) === "done", `events: ${[...new Set(types)].join(",")}`);
@@ -94,19 +105,19 @@ for (const provider of providers) {
     return `${types.filter((t) => t === "text.delta").length} deltas`;
   });
 
-  await check(provider, "resume keeps the conversation", async () => {
+  await check(provider, "resume keeps the conversation", async (signal) => {
     const cwd = dir(provider, "resume");
-    const a = await funnel.run({ selection: sel(provider, fullAccess, cwd), prompt: "Remember this word: pineapple. Reply only: noted" });
+    const a = await funnel.run({ selection: sel(provider, fullAccess, cwd), prompt: "Remember this word: pineapple. Reply only: noted", signal });
     assert(a.sessionId, "no sessionId");
-    const b = await funnel.run({ selection: sel(provider, fullAccess, cwd), prompt: "What word did I ask you to remember? Reply with the word only.", sessionId: a.sessionId });
+    const b = await funnel.run({ selection: sel(provider, fullAccess, cwd), prompt: "What word did I ask you to remember? Reply with the word only.", sessionId: a.sessionId, signal });
     assert(/pineapple/i.test(b.text), `second answer "${b.text.slice(0, 60)}"`);
   });
 
   if (cap.access.includes("none")) {
-    await check(provider, "none: answers and blocks a write", async () => {
+    await check(provider, "none: answers and blocks a write", async (signal) => {
       const cwd = dir(provider, "none");
       const target = join(cwd, "out.txt");
-      const r = await funnel.run({ selection: sel(provider, "none", cwd), prompt: `Run the shell command "touch ${target}", then reply "done".` });
+      const r = await funnel.run({ selection: sel(provider, "none", cwd), prompt: `Run the shell command "touch ${target}", then reply "done".`, signal });
       assert(!existsSync(target), "file was written");
       assert(r.text.trim(), "no text");
       return `${r.toolCalls.length} tool calls, ${r.deniedActions.length} denied`;
@@ -115,11 +126,12 @@ for (const provider of providers) {
 
   for (const access of ["accept-edits", "auto", "full"]) {
     if (!cap.access.includes(access)) continue;
-    await check(provider, `${access}: writes a file`, async () => {
+    await check(provider, `${access}: writes a file`, async (signal) => {
       const cwd = dir(provider, access);
       const r = await funnel.run({
         selection: sel(provider, access, cwd),
         prompt: WRITE("out.txt"),
+        signal,
         onApproval: () => "allow",
       });
       const wrote = existsSync(join(cwd, "out.txt")) && /hello/i.test(readFileSync(join(cwd, "out.txt"), "utf8"));
@@ -130,26 +142,26 @@ for (const provider of providers) {
   }
 
   if (cap.access.includes("supervised")) {
-    await check(provider, "supervised: approve writes the file", async () => {
+    await check(provider, "supervised: approve writes the file", async (signal) => {
       const cwd = dir(provider, "sup-allow");
       let asked = 0;
-      await funnel.run({ selection: sel(provider, "supervised", cwd), prompt: WRITE("out.txt"), onApproval: () => (asked++, "allow") });
+      await funnel.run({ selection: sel(provider, "supervised", cwd), prompt: WRITE("out.txt"), onApproval: () => (asked++, "allow"), signal });
       assert(asked > 0, "onApproval never called");
       assert(existsSync(join(cwd, "out.txt")), "file missing after allow");
       return `${asked} approval(s)`;
     });
-    await check(provider, "supervised: deny blocks the write", async () => {
+    await check(provider, "supervised: deny blocks the write", async (signal) => {
       const cwd = dir(provider, "sup-deny");
       let asked = 0;
-      await funnel.run({ selection: sel(provider, "supervised", cwd), prompt: WRITE("out.txt"), onApproval: () => (asked++, "deny") });
+      await funnel.run({ selection: sel(provider, "supervised", cwd), prompt: WRITE("out.txt"), onApproval: () => (asked++, "deny"), signal });
       assert(asked > 0, "onApproval never called");
       assert(!existsSync(join(cwd, "out.txt")), "file exists after deny");
       return `${asked} denial(s)`;
     });
   } else {
-    await check(provider, "supervised is rejected up front", async () => {
+    await check(provider, "supervised is rejected up front", async (signal) => {
       try {
-        await funnel.run({ selection: sel(provider, "supervised", dir(provider, "rej")), prompt: "hi", onApproval: () => "allow" });
+        await funnel.run({ selection: sel(provider, "supervised", dir(provider, "rej")), prompt: "hi", onApproval: () => "allow", signal });
       } catch (e) {
         assert(e.code === "invalid-selection", `code ${e.code}`);
         return "invalid-selection";
@@ -158,9 +170,9 @@ for (const provider of providers) {
     });
   }
 
-  await check(provider, "unknown model is rejected", async () => {
+  await check(provider, "unknown model is rejected", async (signal) => {
     try {
-      await funnel.run({ selection: { ...sel(provider, fullAccess, root), model: "not-a-model" }, prompt: "hi" });
+      await funnel.run({ selection: { ...sel(provider, fullAccess, root), model: "not-a-model" }, prompt: "hi", signal });
     } catch (e) {
       assert(e.code === "invalid-selection", `code ${e.code}`);
       return;
@@ -174,8 +186,9 @@ const { server, url } = await serveNode(createHandler(funnel, { fsRoots: [homedi
 const client = createClient({ baseUrl: url });
 
 for (const provider of providers) {
-  await check(provider, "HTTP /v1/chat/completions", async () => {
+  await check(provider, "HTTP /v1/chat/completions", async (signal) => {
     const res = await fetch(`${url}/v1/chat/completions`, {
+      signal,
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: `${provider}/${CHEAP[provider].model}`, reasoning_effort: CHEAP[provider].effort, messages: [{ role: "user", content: "Reply with exactly: http ok" }] }),
@@ -186,8 +199,9 @@ for (const provider of providers) {
     assert(body.usage?.total_tokens > 0, "no usage");
   });
 
-  await check(provider, "HTTP /v1 streaming ends with [DONE]", async () => {
+  await check(provider, "HTTP /v1 streaming ends with [DONE]", async (signal) => {
     const res = await fetch(`${url}/v1/chat/completions`, {
+      signal,
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: `${provider}/${CHEAP[provider].model}`, reasoning_effort: CHEAP[provider].effort, stream: true, messages: [{ role: "user", content: "Reply with exactly: sse ok" }] }),
@@ -198,11 +212,11 @@ for (const provider of providers) {
 }
 
 for (const provider of providers.filter((p) => funnel.providers[p].capabilities.access.includes("supervised"))) {
-  await check(provider, "HTTP /run approval round trip", async () => {
+  await check(provider, "HTTP /run approval round trip", async (signal) => {
     const cwd = dir(provider, "http-sup");
     let runId;
     let approved = 0;
-    for await (const e of client.run({ selection: sel(provider, "supervised", cwd), prompt: WRITE("out.txt") })) {
+    for await (const e of client.run({ selection: sel(provider, "supervised", cwd), prompt: WRITE("out.txt") }, signal)) {
       if (e.type === "run") runId = e.runId;
       if (e.type === "approval.request") {
         await client.approve(runId, e.request.id, "allow");
@@ -215,8 +229,8 @@ for (const provider of providers.filter((p) => funnel.providers[p].capabilities.
   });
 }
 
-await check("server", "rejects a folder outside allowed roots", async () => {
-  const res = await fetch(`${url}/run`, { method: "POST", body: JSON.stringify({ selection: { provider: providers[0], model: "x", cwd: "/etc", access: "full" }, prompt: "hi" }) });
+await check("server", "rejects a folder outside allowed roots", async (signal) => {
+  const res = await fetch(`${url}/run`, { signal, method: "POST", body: JSON.stringify({ selection: { provider: providers[0], model: "x", cwd: "/etc", access: "full" }, prompt: "hi" }) });
   assert(res.status === 403, `status ${res.status}`);
 });
 

@@ -21,8 +21,15 @@ jobs:
           npm install -g @anthropic-ai/claude-code @openai/codex || true
           curl -fsS https://cursor.com/install | bash || true
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      # Antigravity has no documented non-interactive installer, so the job skips it and says so in the log.
+      # A failed install of the other three fails the check instead of being skipped.
       - id: drift
-        run: node scripts/check-drift.mjs | tee drift.txt
+        shell: bash
+        env:
+          DRIFT_REQUIRE: claude,codex,agent
+        run: |
+          set -o pipefail
+          node scripts/check-drift.mjs | tee drift.txt
         continue-on-error: true
       - name: Open an issue when a flag disappeared
         if: steps.drift.outcome == 'failure'

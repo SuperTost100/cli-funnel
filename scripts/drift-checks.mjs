@@ -1,0 +1,32 @@
+// What cli-funnel needs from each CLI. For each CLI, a list of [arguments, text that must appear in the output].
+// Every "--flag" string in packages/cli-funnel/src/providers must be listed here. test/drift-checks.test.ts enforces it.
+export const CHECKS = {
+  claude: {
+    bin: "claude",
+    help: [
+      [["--help"], ["--output-format", "--input-format", "--include-partial-messages", "--permission-mode", "--permission-prompt-tool", "--model", "--effort", "--resume", "--verbose", "--tools", "--strict-mcp-config", "--setting-sources", "--json-schema", "--system-prompt", "--append-system-prompt"]],
+      [["auth", "--help"], ["login", "logout", "status"]],
+    ],
+  },
+  codex: {
+    bin: "codex",
+    help: [
+      [["app-server", "--help"], ["generate-json-schema"]],
+      [["login", "--help"], ["--device-auth", "status"]],
+      [["debug", "--help"], ["models"]],
+      [["mcp", "list", "--help"], ["--json"]],
+    ],
+  },
+  agent: {
+    bin: "agent",
+    help: [
+      [["--help"], ["--output-format", "--stream-partial-output", "--model", "--list-models", "--force", "--auto-review", "--mode", "--workspace", "--trust", "--resume"]],
+      [["status", "--help"], ["--format"]],
+      [["about", "--help"], ["--format"]],
+    ],
+  },
+  antigravity: {
+    bin: "agy",
+    help: [[["--help"], ["--output-format", "--model", "--effort", "--mode", "--conversation", "--dangerously-skip-permissions", "--print", "--input-format", "--json-schema", "models"]]],
+  },
+};
