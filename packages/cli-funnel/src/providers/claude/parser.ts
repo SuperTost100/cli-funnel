@@ -20,6 +20,8 @@ export function parseClaudeMessage(raw: unknown): FunnelEvent[] {
     return [{ type: "session", sessionId: raw.session_id, model: typeof raw.model === "string" ? raw.model : undefined }];
   }
 
+  if (type === "rate_limit_event" && isObj(raw.rate_limit_info)) return parseRateLimit(raw.rate_limit_info);
+
   // Subagent traffic carries a parent id. Only the main thread is surfaced.
   if (raw.parent_tool_use_id) return [];
 
@@ -55,11 +57,37 @@ export function parseClaudeMessage(raw: unknown): FunnelEvent[] {
   return [];
 }
 
+/** Names of Claude's subscription windows, for the limit's detail text. */
+const WINDOWS: Record<string, string> = {
+  five_hour: "five-hour",
+  seven_day: "weekly",
+  seven_day_opus: "weekly Opus",
+  seven_day_sonnet: "weekly Sonnet",
+  seven_day_overage_included: "weekly",
+  overage: "extra usage",
+};
+
+/**
+ * `rate_limit_event` reports the subscription's usage windows on every turn. Only `rejected` means a limit was hit.
+ * The five-hour window counts as a rate limit, the weekly windows and extra usage as a quota.
+ */
+function parseRateLimit(info: Obj): FunnelEvent[] {
+  if (info.status !== "rejected") return [];
+  const window = typeof info.rateLimitType === "string" ? info.rateLimitType : undefined;
+  const name = (window && WINDOWS[window]) ?? "usage";
+  const resetAt = typeof info.resetsAt === "number" ? new Date(info.resetsAt * 1000).toISOString() : undefined;
+  return [{ type: "limit", kind: window === "five_hour" ? "rate" : "quota", detail: `Claude ${name} limit reached.`, ...(resetAt ? { resetAt } : {}) }];
+}
+
 function parseResult(r: Obj): FunnelEvent[] {
   const text = typeof r.result === "string" ? r.result : "";
   if (r.is_error === true || (typeof r.subtype === "string" && r.subtype.startsWith("error"))) {
     const status = r.api_error_status;
-    return [{ type: "error", message: text || `Claude Code failed (${String(r.subtype)}).`, code: status ? String(status) : undefined }];
+    const error: FunnelEvent = { type: "error", message: text || `Claude Code failed (${String(r.subtype)}).`, code: status ? String(status) : undefined };
+    if (status !== 429) return [error];
+    // A 429 is a limit. Running out of usage credits does not clear by waiting.
+    const quota = /credit/i.test(String(r.api_error_code ?? ""));
+    return [{ type: "limit", kind: quota ? "quota" : "rate", detail: text || "Claude Code hit a rate limit." }, error];
   }
   const events: FunnelEvent[] = [];
   if (isObj(r.usage)) {

@@ -93,6 +93,11 @@ export async function renderRun(
 ): Promise<{ result: RunResult; structured: boolean }> {
   const data = opts.json || opts.schema;
   for await (const e of stream) {
+    // A limit explains why the run failed or stalls, so it shows even with --quiet.
+    if (e.type === "limit") {
+      const when = e.resetAt ? ` Resets at ${e.resetAt}.` : e.retryAfterMs !== undefined ? ` Retry in ${Math.ceil(e.retryAfterMs / 1000)} s.` : "";
+      opts.stderr(`\n[${e.kind} limit] ${e.detail}${when}\n`);
+    }
     if (opts.quiet) continue;
     if (e.type === "text.delta" && !data) opts.stdout(e.text);
     else if (e.type === "tool.start") opts.stderr(`\n[tool] ${e.name}\n`);

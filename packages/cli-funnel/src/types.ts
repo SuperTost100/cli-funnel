@@ -119,6 +119,20 @@ export interface ApprovalRequest {
 
 export type ApprovalDecision = "allow" | "deny";
 
+/**
+ * A rate limit or quota the provider hit or reported. `rate` clears within hours: requests per minute, or the
+ * five-hour window of a subscription. `quota` lasts longer: a weekly window, used-up credits or a billing cap.
+ */
+export interface Limit {
+  kind: "rate" | "quota";
+  /** How long the provider asked to wait before the next request. */
+  retryAfterMs?: number;
+  /** When the limit resets, as an ISO 8601 timestamp. */
+  resetAt?: string;
+  /** The provider's own words, for showing to the user. */
+  detail: string;
+}
+
 export type FunnelEvent =
   /** The run waits for a slot under `maxConcurrentRuns`. `ahead` is the number of runs waiting before it. */
   | { type: "queue.position"; ahead: number }
@@ -130,6 +144,8 @@ export type FunnelEvent =
   /** A provider yields this, then awaits `onApproval` for the answer. */
   | { type: "approval.request"; request: ApprovalRequest }
   | { type: "usage"; usage: Usage }
+  /** The provider hit or reported a limit. An `error` event usually follows when the run could not finish. */
+  | ({ type: "limit" } & Limit)
   /** An API provider got a 429 or 5xx before any output and will send the request again after `delayMs`. `attempt` counts retries from 1. */
   | { type: "retry"; attempt: number; status: number; delayMs: number }
   /** The parsed answer when the provider reports structured output itself. */
@@ -177,6 +193,8 @@ export interface RunResult {
   structuredError?: string;
   /** True when the run hit `RunInput.timeoutMs`. `finishReason` is then "cancelled". */
   timeout?: true;
+  /** The first limit the provider reported during the run. A run that failed on it throws an error that carries it too. */
+  limit?: Limit;
 }
 
 /** Sampling controls. Each provider sends the fields its vendor accepts and ignores the rest. */
