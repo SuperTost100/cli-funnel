@@ -23,6 +23,14 @@ export interface OpenAIDefaults {
   access?: AccessLevel;
 }
 
+/** A run the handler can cancel by id. `end` removes it once the run is over. */
+export interface TrackedRun {
+  id: string;
+  /** Aborts when the request closes or the run is cancelled by id. */
+  signal: AbortSignal;
+  end: () => void;
+}
+
 interface ChatMessage {
   role: string;
   content: string | { type: string; text?: string; image_url?: { url: string } }[] | null;
@@ -131,6 +139,7 @@ export async function handleOpenAI(
   defaults: OpenAIDefaults = {},
   cwdAllowed: (cwd: string) => boolean = () => true,
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
+  startRun: (signal: AbortSignal) => TrackedRun = (signal) => ({ id: `run_${Date.now().toString(36)}`, signal, end: () => {} }),
 ): Promise<Response> {
   // Only providers that are installed and signed in, so a client never sees a model it cannot run.
   const listModels = async () => {
@@ -198,7 +207,9 @@ export async function handleOpenAI(
   }
 
   const system = body.messages.filter((m) => m.role === "system").map((m) => text(m.content)).join("\n\n");
+  const run = startRun(req.signal);
   const input: RunInput = {
+    runId: run.id,
     selection: {
       provider,
       model,
@@ -218,7 +229,7 @@ export async function handleOpenAI(
         : undefined,
     maxOutputTokens: body.max_completion_tokens ?? body.max_tokens,
     sessionId: body.x_funnel?.sessionId,
-    signal: req.signal,
+    signal: run.signal,
     onApproval: () => "deny",
   };
 
@@ -237,6 +248,7 @@ export async function handleOpenAI(
   // With a schema the answer is the structured data, not the prose around it.
   const answerOf = (r: { text: string; structured?: unknown }) => (input.responseSchema && r.structured !== undefined ? JSON.stringify(r.structured) : r.text);
 
+  let streaming = false;
   try {
     if (!body.stream) {
       const r = await funnel.run(input);
@@ -247,7 +259,7 @@ export async function handleOpenAI(
         model: body.model,
         choices: [{ index: 0, message: { role: "assistant", content: answerOf(r) }, finish_reason: finish(r.finishReason) }],
         usage: usageOut(r.usage),
-        x_funnel: { sessionId: r.sessionId, toolCalls: r.toolCalls, deniedActions: r.deniedActions },
+        x_funnel: { runId: run.id, sessionId: r.sessionId, toolCalls: r.toolCalls, deniedActions: r.deniedActions },
       });
     }
 
@@ -260,7 +272,7 @@ export async function handleOpenAI(
       return json(failure(Object.assign(new Error(first.value.message), { code: first.value.code })), statusOf(first.value.code));
     }
     const chunks = (async function* () {
-      yield chunk({ role: "assistant" });
+      yield chunk({ role: "assistant" }, null, { x_funnel: { runId: run.id } });
       try {
         let streamed = "";
         for await (const e of replay(first, it)) {
@@ -273,7 +285,7 @@ export async function handleOpenAI(
         // Codex and Antigravity send the answer in `done.text`, not as deltas. Send whatever the deltas did not cover.
         const rest = input.responseSchema ? answerOf(r) : r.text.startsWith(streamed) ? r.text.slice(streamed.length) : "";
         if (rest) yield chunk({ content: rest });
-        yield chunk({}, finish(r.finishReason), { x_funnel: { sessionId: r.sessionId, toolCalls: r.toolCalls, deniedActions: r.deniedActions } });
+        yield chunk({}, finish(r.finishReason), { x_funnel: { runId: run.id, sessionId: r.sessionId, toolCalls: r.toolCalls, deniedActions: r.deniedActions } });
         // OpenAI sends usage in a last chunk with no choices, and only to clients that ask for it.
         if (body.stream_options?.include_usage && r.usage) {
           yield { id, object: "chat.completion.chunk", created, model: body.model, choices: [], usage: usageOut(r.usage) };
@@ -282,8 +294,19 @@ export async function handleOpenAI(
         yield failure(err);
       }
     })();
-    return new Response(sse(chunks, { done: "[DONE]" }), { headers: sseHeaders });
+    // The run stays cancellable until its body ends.
+    const tracked = (async function* () {
+      try {
+        yield* chunks;
+      } finally {
+        run.end();
+      }
+    })();
+    streaming = true;
+    return new Response(sse(tracked, { done: "[DONE]", onCancel: run.end }), { headers: sseHeaders });
   } catch (err) {
     return json(failure(err), err instanceof FunnelError ? statusOf(err.code) : 500);
+  } finally {
+    if (!streaming) run.end();
   }
 }

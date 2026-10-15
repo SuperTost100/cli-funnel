@@ -153,6 +153,19 @@ describe("useRun", () => {
     expect(signal.aborted).toBe(true);
   });
 
+  it("cancels the run on the server and closes the stream", async () => {
+    const a = stream<RunEvent>();
+    let signal!: AbortSignal;
+    const client = fakeClient({ run: vi.fn((_input: unknown, s: AbortSignal) => ((signal = s), a.gen)), cancelRun: vi.fn(async () => ({ ok: true })) });
+    const { result } = renderHook(() => useRun(client));
+    act(() => void result.current.send("one", SEL));
+    act(() => a.push({ type: "run", runId: "A" }));
+    await act(async () => {});
+    act(() => result.current.cancel());
+    expect(client.cancelRun).toHaveBeenCalledWith("A");
+    expect(signal.aborted).toBe(true);
+  });
+
   it("labels the result with the selection from send time and keeps done.text, structured and denied actions", async () => {
     const a = stream<RunEvent>();
     const client = fakeClient({ run: vi.fn(() => a.gen) });
