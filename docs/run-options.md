@@ -1,6 +1,6 @@
 # Run options
 
-Besides `selection` and `prompt`, a run takes four optional fields. They cover what an app needs when it uses a CLI as a plain model: instructions, images, JSON answers and an output limit.
+Besides `selection` and `prompt`, a run takes a few optional fields. They cover what an app needs when it uses a CLI as a plain model: instructions, images, JSON answers, an output limit and sampling.
 
 ```ts
 const result = await funnel.run({
@@ -10,6 +10,7 @@ const result = await funnel.run({
   attachments: [{ type: "image", mediaType: "image/png", data: base64Png }],
   responseSchema: { schema: { type: "object", properties: { color: { type: "string" } }, required: ["color"], additionalProperties: false } },
   maxOutputTokens: 2000,
+  sampling: { temperature: 0.2, stop: ["###"] },
 });
 
 result.structured; // { color: "rosso" }
@@ -23,12 +24,36 @@ result.structured; // { color: "rosso" }
 | `attachments` | image blocks in the stream-json message | `image` input items | refused | refused | image blocks | `image_url` parts | `inlineData` parts | `images` on the message |
 | `responseSchema` | `--json-schema` | `outputSchema` | asked for in the prompt | `--json-schema` | `output_config.format` | `response_format` | `responseJsonSchema` | `format` |
 | `maxOutputTokens` | ignored | ignored | ignored | ignored | `max_tokens` | `max_completion_tokens` | `maxOutputTokens` | `options.num_predict` |
+| `sampling.temperature` | refused | refused | refused | refused | `temperature` | `temperature` | `generationConfig.temperature` | not yet |
+| `sampling.topP` | refused | refused | refused | refused | `top_p` | `top_p` | `generationConfig.topP` | not yet |
+| `sampling.stop` | refused | refused | refused | refused | `stop_sequences` | `stop` | `generationConfig.stopSequences` | not yet |
+| `sampling.seed` | refused | refused | refused | refused | ignored, the API has no seed | `seed` | `generationConfig.seed` | not yet |
 
 When an API provider or model server stops because it hit the output limit, the run ends with `finishReason: "length"` and `text` is cut off. With `responseSchema`, a cut-off answer usually fails to parse and `structuredError` says so. The CLIs never report `length`.
 
 OpenAI-compatible servers send the same fields as the OpenAI API, except `max_tokens` for the output limit. See [OpenAI-compatible servers](providers/openai-compatible.md).
 
-`capabilities.system`, `capabilities.images` and `capabilities.schema` say the same thing in code. A run with attachments on a provider without `images` fails with `unsupported` before the CLI starts.
+`capabilities.system`, `capabilities.images`, `capabilities.schema` and `capabilities.sampling` say the same thing in code. A run with attachments on a provider without `images`, or with `sampling` on a provider without `sampling`, fails with `unsupported` before the CLI starts.
+
+## Sampling
+
+`sampling` is `{ temperature, topP, stop, seed }`, all optional. Fields you leave out are not sent, so the vendor default applies. A value of `0` is sent as `0`.
+
+cli-funnel does not check values against what a model allows. The vendor does, and its error comes back as an `error` event. Recent Claude models (Opus 4.7 and later, Sonnet 5 and later, Haiku 5.5, Fable, Mythos) reject a non-default `temperature` or `top_p`. OpenAI reasoning models reject `temperature` other than the default. Leave `sampling` out for them.
+
+## Effort on the API providers
+
+Set `selection.effort` to one of the ids in `model.efforts`. The vendor model lists carry no effort data, so `src/providers/efforts.ts` holds a small table by model id:
+
+| Provider | Models with effort | Levels | Request |
+|---|---|---|---|
+| `anthropic-api` | Opus 4.5 and later, Sonnet 4.6 and later, Haiku 5 and later, Fable, Mythos | `low`, `medium`, `high`, plus `xhigh` and `max` where the model has them | `output_config.effort`, and `thinking: { type: "adaptive", display: "summarized" }` |
+| `openai-api` | the o-series (not `o1-mini`, `o1-preview`) and `gpt-5` onward (not chat or search variants) | `low`, `medium`, `high` | `reasoning_effort` |
+| `gemini-api` | Gemini 3 and later | `low`, `medium`, `high` (`low`, `high` on Gemini 3 Pro) | `generationConfig.thinkingConfig` with `thinkingLevel` and `includeThoughts` |
+
+A model that is not in the table, such as a release newer than this version, has no effort setting. Pass `allowUnlistedModels: true` to `createFunnel` to skip the per-model check. The effort string then goes to the vendor as you wrote it, so `minimal` or a level added later works.
+
+Thinking text arrives as `reasoning.delta` events. The Anthropic API returns it only when you set an effort, because the newest models hide it by default (`display: "omitted"`). Opus 4.5 takes `effort` but not adaptive thinking, so it sends no thinking text. Gemini 2.5 models take a token budget, not a level, and get no effort setting. Chat Completions does not stream reasoning summaries, so OpenAI sends no `reasoning.delta`.
 
 ## Structured answers
 

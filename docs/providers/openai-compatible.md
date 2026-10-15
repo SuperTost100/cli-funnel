@@ -23,6 +23,7 @@ await funnel.run({
 | `baseUrl` | What you would give an OpenAI SDK, usually ending in `/v1`. cli-funnel adds `/models` and `/chat/completions`. |
 | `apiKey` | Optional. Sent as `Authorization: Bearer`. |
 | `models` | Optional. Used only when the server's `/models` fails or lists nothing. |
+| `efforts` | Optional. Levels the server accepts as `reasoning_effort`, for example `["low", "high"]`. A server cannot say which models reason, so they apply to every model of the endpoint. Without it the endpoint offers no effort. |
 
 These providers exist only when configured. Nothing is probed by default.
 
@@ -36,6 +37,8 @@ Same as the API providers: no machine access, history kept like the API provider
 | `attachments` | `image_url` parts with a `data:` URL |
 | `responseSchema` | `response_format` of type `json_schema` |
 | `maxOutputTokens` | `max_tokens`, which more servers accept than `max_completion_tokens` |
+| `sampling` | `temperature`, `top_p`, `stop` and `seed` |
+| `selection.effort` | `reasoning_effort`, when `efforts` is set |
 
 Whether the server honours images or the schema depends on the server and the model. cli-funnel sends them and reports what comes back.
 

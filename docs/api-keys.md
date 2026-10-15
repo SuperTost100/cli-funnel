@@ -51,7 +51,7 @@ const funnel = createFunnel({ history: fileHistory("/path/to/sessions") });
 - `responseSchema` goes to `generationConfig.responseJsonSchema`. Gemini supports a subset of JSON Schema: `$ref`, `anyOf`, `enum`, `properties`, `additionalProperties`, `required` and the usual type keywords.
 - Thought parts, when the model sends them, become `reasoning.delta` events. Thinking tokens count as output tokens and also appear as `reasoningTokens`.
 - A `SAFETY`, `RECITATION`, `BLOCKLIST`, `PROHIBITED_CONTENT` or `SPII` stop, or a blocked prompt, ends the run with `finishReason: "denied"`.
-- Effort is not offered. The model's default thinking level applies.
+- Gemini 3 and later take an effort, sent as `thinkingLevel`. Gemini 2.5 models get none. See [Run options](run-options.md).
 - The answer is stored with its `thoughtSignature`, and sent back on the next turn so the model keeps its reasoning.
 - A `MALFORMED_FUNCTION_CALL` or `OTHER` stop ends the run with an `error` event.
 

@@ -1,4 +1,4 @@
-import { FunnelError, type AuthStatus, type Installation, type ModelInfo, type Provider, type ProviderId } from "../types.js";
+import { FunnelError, type AuthStatus, type EffortOption, type Installation, type ModelInfo, type Provider, type ProviderId } from "../types.js";
 import { chatUserContent, streamChatCompletions, type Msg } from "./api.js";
 import { redact, redactErrors } from "../util/redact.js";
 import { runWithHistory } from "./history.js";
@@ -15,6 +15,11 @@ export interface OpenAICompatibleEndpoint {
   apiKey?: string;
   /** Model ids to offer when the server has no working `/models` endpoint. Ignored when it lists models. */
   models?: string[];
+  /**
+   * Reasoning effort levels the server accepts as `reasoning_effort`, for example `["low", "medium", "high"]`. A
+   * server cannot say which models reason, so the levels apply to every model of this endpoint. Leave it out to offer no effort setting.
+   */
+  efforts?: string[];
 }
 
 const ID = /^[a-z0-9][a-z0-9-]*$/;
@@ -25,12 +30,12 @@ export function openAICompatibleId(endpoint: Pick<OpenAICompatibleEndpoint, "id"
 }
 
 /** Ids are passed through as the server reports them. */
-export function parseModelList(body: unknown, provider: ProviderId): ModelInfo[] {
+export function parseModelList(body: unknown, provider: ProviderId, efforts: EffortOption[] = []): ModelInfo[] {
   const data = (body as { data?: { id?: unknown }[] })?.data;
   if (!Array.isArray(data)) return [];
   return data
     .filter((m) => typeof m.id === "string" && m.id)
-    .map((m) => ({ id: m.id as string, name: m.id as string, provider, efforts: [], contextWindows: [], fast: false, source: "cli" as const }))
+    .map((m) => ({ id: m.id as string, name: m.id as string, provider, efforts, contextWindows: [], fast: false, source: "cli" as const }))
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
@@ -40,11 +45,12 @@ export function createOpenAICompatibleProvider(endpoint: OpenAICompatibleEndpoin
   const base = endpoint.baseUrl.trim().replace(/\/+$/, "");
   // Gateways sometimes take the key in the query string, so the URL is not safe to show.
   const shown = redact(base, [endpoint.apiKey]);
+  const efforts: EffortOption[] = (endpoint.efforts ?? []).map((e) => ({ id: e, label: e.charAt(0).toUpperCase() + e.slice(1) }));
   const headers = (): Record<string, string> => (endpoint.apiKey ? { authorization: `Bearer ${endpoint.apiKey}` } : {});
   const listing = (timeoutMs = PROBE_MS) => fetch(`${base}/models`, { headers: headers(), signal: AbortSignal.timeout(timeoutMs) }).catch(() => undefined);
   const notReachable = () => `${endpoint.name} is not reachable at ${shown}.`;
   const configured = (): ModelInfo[] =>
-    (endpoint.models ?? []).map((m) => ({ id: m, name: m, provider: id, efforts: [], contextWindows: [], fast: false, source: "manifest" as const }));
+    (endpoint.models ?? []).map((m) => ({ id: m, name: m, provider: id, efforts, contextWindows: [], fast: false, source: "manifest" as const }));
 
   async function detect(): Promise<Installation> {
     // Any HTTP answer means the server is up. Some servers have no /models route and answer 404.
@@ -62,7 +68,7 @@ export function createOpenAICompatibleProvider(endpoint: OpenAICompatibleEndpoin
   async function models(): Promise<ModelInfo[]> {
     const res = await listing(PROBE_MS * 5);
     if (res?.status === 401 || res?.status === 403) throw new FunnelError(`${endpoint.name} refused the request. Check its apiKey.`, "not-logged-in");
-    const listed = res?.ok ? parseModelList(await res.json().catch(() => undefined), id) : [];
+    const listed = res?.ok ? parseModelList(await res.json().catch(() => undefined), id, efforts) : [];
     if (listed.length) return listed;
     if (endpoint.models?.length) return configured();
     if (!res) throw new FunnelError(notReachable(), "not-installed");
@@ -75,7 +81,7 @@ export function createOpenAICompatibleProvider(endpoint: OpenAICompatibleEndpoin
     binary: "http",
     capabilities: {
       access: [],
-      effort: false,
+      effort: efforts.length > 0,
       contextWindow: false,
       fast: false,
       resume: true,
@@ -83,6 +89,7 @@ export function createOpenAICompatibleProvider(endpoint: OpenAICompatibleEndpoin
       images: true,
       system: "native",
       schema: "native",
+      sampling: true,
     },
     detect,
     authStatus,

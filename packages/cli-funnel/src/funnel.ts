@@ -124,6 +124,9 @@ export function createFunnel(options: FunnelOptions = {}) {
     if (p.capabilities.access.length > 0 && input.selection.access === "supervised" && !input.onApproval) {
       throw new FunnelError('access "supervised" needs an onApproval callback.', "invalid-selection");
     }
+    if (input.sampling && !p.capabilities.sampling) {
+      throw new FunnelError(`${p.displayName} does not take sampling options.`, "unsupported");
+    }
     if (input.attachments?.length && !p.capabilities.images) {
       throw new FunnelError(`${p.displayName} cannot take image attachments.`, "unsupported");
     }
