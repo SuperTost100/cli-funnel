@@ -4,7 +4,7 @@ Runs the real `codex` binary (tested with 0.157.0, minimum 0.150.0) on your Chat
 
 ## How runs work
 
-Runs use `codex app-server`, the JSON-RPC protocol over stdio, not `codex exec --json`. App-server is the only Codex interface that can pass approval requests back to the caller, interrupt a turn, and resume a thread on the same connection. Each run starts one `codex app-server` process and stops it when the turn ends.
+Runs use `codex app-server`, the JSON-RPC protocol over stdio, not `codex exec --json`. App-server is the only Codex interface that can pass approval requests back to the caller, interrupt a turn, and resume a thread on the same connection. Each run starts one `codex app-server` process and stops it when the turn ends. With `sessions.keepAlive` the process and thread stay up, and the next turn is another `turn/start` on the same thread. See [Live sessions](../sessions.md).
 
 Protocol flow:
 
@@ -26,6 +26,15 @@ Protocol flow:
 | `error` with `willRetry: false` | `error` |
 
 Usage has no cost figure. `inputTokens` includes cached tokens, as Codex reports them.
+
+## Live sessions
+
+With `createFunnel({ sessions: { keepAlive: true } })`:
+
+- `initialize` and `thread/start` (or `thread/resume`) run once per process. Every turn is a `turn/start` on that thread and emits its own `session` event.
+- `funnel.steer(sessionId, text)` sends `turn/steer` with `expectedTurnId` set to the running turn.
+- Server approval requests go to the running turn's `onApproval`. Between turns they are declined.
+- An aborted turn sends `turn/interrupt`, waits for `turn/completed` (five seconds at most), then stops the process.
 
 ## Access mapping
 

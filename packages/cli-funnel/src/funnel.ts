@@ -1,6 +1,7 @@
 import { observeRun } from "./run-log.js";
 import { loadManifest } from "./catalog/manifest.js";
 import { validateSelection } from "./selection.js";
+import { SessionPool, type LiveSessionInfo, type SessionOptions } from "./sessions.js";
 import { createRunFolder } from "./providers/base.js";
 import { PROVIDERS } from "./providers/index.js";
 import { memoryHistory } from "./providers/history.js";
@@ -51,6 +52,8 @@ export interface FunnelOptions {
    * without the user's consent. See `jsonlRunLog` for a ready-made handler.
    */
   onEvent?: (record: RunEventRecord) => unknown;
+  /** Keep CLI processes alive between turns. Off by default. See docs/sessions.md. */
+  sessions?: SessionOptions;
 }
 
 export interface ProviderOverview {
@@ -79,6 +82,7 @@ export function createFunnel(options: FunnelOptions = {}) {
   } as Record<ProviderId, Provider>;
   // One store per funnel, so two funnels in a process never read each other's sessions.
   const history = options.history ?? memoryHistory();
+  const pool = options.sessions?.keepAlive ? new SessionPool(options.sessions) : undefined;
   const provider = (id: ProviderId): Provider => {
     const p = registry[id];
     if (!p) throw new FunnelError(`Unknown provider "${id}".`, "invalid-selection");
@@ -141,7 +145,8 @@ export function createFunnel(options: FunnelOptions = {}) {
   function stream(input: RunInput): RunStream {
     const source = (async function* () {
       const p = await prepare(input);
-      yield* p.run(input.history ? input : { ...input, history });
+      const runInput = input.history ? input : { ...input, history };
+      yield* pool ? pool.run(p, runInput) : p.run(runInput);
     })();
     const events = options.onEvent ? observeRun(options.onEvent, input, source) : source;
     // Fold events as they pass, so `.result` works next to `for await` without keeping them.
@@ -228,6 +233,23 @@ export function createFunnel(options: FunnelOptions = {}) {
     manifest: () => loadManifest(options.manifestUrl),
 
     stream,
+
+    /**
+     * Adds a user message to the turn running in a live session. Needs `sessions.keepAlive`. Codex only: other
+     * providers throw `unsupported`. Pass `provider` when two providers could share a session id.
+     */
+    async steer(sessionId: string, text: string, provider?: ProviderId): Promise<void> {
+      if (!pool) throw new FunnelError("steer needs createFunnel({ sessions: { keepAlive: true } }).", "unsupported");
+      await pool.steer(sessionId, text, provider);
+    },
+    /** Live sessions kept by `sessions.keepAlive`. Empty without it. */
+    sessions: (): LiveSessionInfo[] => pool?.list() ?? [],
+    /** Stops the live process of one session. The next turn resumes it in a new process. False when it had none. */
+    closeSession: (sessionId: string, provider?: ProviderId): boolean => pool?.close(sessionId, provider) ?? false,
+    /** Stops every live session process. Running turns end as cancelled. */
+    close(): void {
+      pool?.closeAll();
+    },
 
     /** Runs one turn and resolves with the final text, usage and tool calls. */
     async run(input: RunInput): Promise<RunResult> {

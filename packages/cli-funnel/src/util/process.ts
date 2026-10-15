@@ -234,6 +234,11 @@ export interface Streamed {
   closeStdin(): void;
   /** Stops the CLI and its process group. See `terminate`. */
   kill(): void;
+  /**
+   * `false` lets the host exit while the CLI idles between turns; the exit hook then kills it. `true` keeps the host
+   * running again. Used by live sessions.
+   */
+  hold(on: boolean): void;
 }
 
 /** Spawns a CLI and exposes stdout as an NDJSON stream. Aborting the signal stops it with `terminate`. */
@@ -308,6 +313,12 @@ export function spawnStream(
     write: (line) => child.stdin.write(line.endsWith("\n") ? line : line + "\n"),
     closeStdin: () => child.stdin.end(),
     kill: () => terminate(child),
+    hold: (on) => {
+      for (const handle of [child, child.stdin, child.stdout, child.stderr] as unknown as ({ ref?(): void; unref?(): void } | null)[]) {
+        if (on) handle?.ref?.();
+        else handle?.unref?.();
+      }
+    },
   };
 }
 

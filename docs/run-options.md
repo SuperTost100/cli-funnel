@@ -57,6 +57,10 @@ A model that is not in the table, such as a release newer than this version, has
 
 Thinking text arrives as `reasoning.delta` events. The Anthropic API returns it only when you set an effort, because the newest models hide it by default (`display: "omitted"`). Opus 4.5 takes `effort` but not adaptive thinking, so it sends no thinking text. Gemini 2.5 models take a token budget, not a level, and get no effort setting. Chat Completions does not stream reasoning summaries, so OpenAI sends no `reasoning.delta`.
 
+## Sessions
+
+`sessionId` continues an earlier conversation. Each turn starts a new CLI process unless the funnel keeps processes alive. See [Live sessions](sessions.md).
+
 ## Structured answers
 
 When `responseSchema` is set, `result.structured` holds the parsed answer. Claude Code and Antigravity report it themselves. For the others cli-funnel parses the answer text, and a surrounding code fence is allowed. If the text is not JSON, `structured` is empty and `result.structuredError` says why.

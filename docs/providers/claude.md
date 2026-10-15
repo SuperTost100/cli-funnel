@@ -7,7 +7,7 @@ Runs the real `claude` binary in print mode and reads its stream-json output. Te
 | Purpose | Flags |
 | --- | --- |
 | Run | `-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages` |
-| Prompt | One `user` JSON line on stdin. Stdin closes after the `result` message. |
+| Prompt | One `user` JSON line on stdin. Stdin closes after the `result` message, unless the session is kept alive. |
 | Model | `--model <id>`, or `--model '<id>[1m]'` for a 1M context window |
 | Effort | `--effort low\|medium\|high\|xhigh\|max` |
 | Access | `--permission-mode <mode>` (see below) |
@@ -80,6 +80,12 @@ Not supported. `fastMode` is a Claude Code setting, but in SDK-style runs the CL
 - `logout()` runs `claude auth logout`.
 - `update()` runs `claude update`.
 - `authStatus()` reads `claude auth status`. The org id is not returned. Login, logout and update were not run during development, to protect the local install.
+
+## Live sessions
+
+With `createFunnel({ sessions: { keepAlive: true } })` stdin stays open after `result`, and the next turn writes another `user` line to the same process. Claude Code sends a new `system` / `init` message for each turn, with the same session id. Closing an idle session closes stdin and gives Claude Code two seconds to exit on its own.
+
+There is no `steer`. A `user` line written while a turn runs does not join that turn: Claude Code answers it afterwards as a turn of its own, with a second `result`. See [Live sessions](../sessions.md).
 
 ## Known limits
 
