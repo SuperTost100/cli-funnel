@@ -40,6 +40,8 @@ The funnel passes the manifest to every CLI provider, so `funnel.models()` and t
 
 The funnel keeps each provider's installation and model list for 60 seconds, so a chat UI does not start a process per message. Call `funnel.refresh(id)` (or `funnel.refresh()` for all) after you install a CLI or change a model server and want the new state at once. Failed lookups and missing CLIs are not kept.
 
+Each `ModelInfo` has a `source`: `"cli"` when the CLI listed it, `"manifest"` when only the manifest knows it. The manifest can be ahead of or behind the installed CLI, so a manifest-only model may no longer exist. For Codex, Cursor Agent and Antigravity, hide the `"manifest"` entries when the list also has `"cli"` entries. Claude Code has no live list, so all its entries are `"manifest"`.
+
 A model released after your manifest still runs if you set `allowUnlistedModels: true`. The id goes to the CLI unchanged.
 
 ## Hardcode or expose

@@ -33,7 +33,7 @@ describe("antigravity parser", () => {
     const models = parseModels(fx("models.txt"));
     const flash = models.find((m) => m.id === "gemini-3.8-flash")!;
     expect(flash.efforts.map((e) => e.id)).toEqual(["low", "medium", "high"]);
-    expect(models.find((m) => m.id === "gemini-3.1-pro")!.efforts.map((e) => e.id)).toEqual(["low", "high"]);
+    expect(parseModels("m-high\tM (High)\nm-low\tM (Low)\n")[0]!.efforts.map((e) => e.id)).toEqual(["low", "high"]);
     expect(models.find((m) => m.id === "claude-sonnet-4-6")!.efforts).toEqual([]);
     expect(models.find((m) => m.id === "gpt-oss-120b-medium")!.efforts).toEqual([]);
   });

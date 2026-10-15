@@ -44,7 +44,7 @@ Approvals work. The CLI writes a `control_request` (subtype `can_use_tool`) to s
 
 ## Run options
 
-`system` goes to `--system-prompt` at `none`, which replaces Claude Code's own prompt, and to `--append-system-prompt` at the other levels. Images go as `image` blocks in the stream-json user message. `responseSchema` goes to `--json-schema`, and the `result` message carries the parsed answer in `structured_output`. All three were verified live on 2.1.285. A `none` run with an image and a schema used about 1,200 input tokens.
+`system` goes to `--system-prompt` at `none`, which replaces Claude Code's own prompt, and to `--append-system-prompt` at the other levels. Over 4 KB the text goes to a private temp file instead (`--system-prompt-file` or `--append-system-prompt-file`), which is removed after the run, because Linux refuses one argument over 128 KiB and Windows limits the whole command line to 32,767 characters. `--json-schema` takes only inline JSON, so a very large schema can still hit that limit. Images go as `image` blocks in the stream-json user message. `responseSchema` goes to `--json-schema`, and the `result` message carries the parsed answer in `structured_output`. All three were verified live on 2.1.285. A `none` run with an image and a schema used about 1,200 input tokens.
 
 ## Models
 

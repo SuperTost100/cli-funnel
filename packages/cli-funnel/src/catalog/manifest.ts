@@ -66,8 +66,14 @@ export function fromManifest(
     .map(({ minCliVersion: _min, ...m }) => ({ ...m, provider, source: "manifest" as const }));
 }
 
-/** Live CLI entries win over manifest entries with the same id. Manifest-only entries stay. */
+/**
+ * Live CLI entries win over manifest entries with the same id. Manifest-only entries stay, marked
+ * `source: "manifest"`, so a caller can hide them once a live list exists. Live entries are marked `"cli"`.
+ */
 export function mergeModels(live: ModelInfo[], fromFile: ModelInfo[]): ModelInfo[] {
   const seen = new Set(live.map((m) => m.id));
-  return [...live, ...fromFile.filter((m) => !seen.has(m.id))];
+  return [
+    ...live.map((m) => ({ ...m, source: "cli" as const })),
+    ...fromFile.filter((m) => !seen.has(m.id)).map((m) => ({ ...m, source: "manifest" as const })),
+  ];
 }

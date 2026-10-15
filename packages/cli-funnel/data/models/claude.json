@@ -56,6 +56,34 @@
     "fast": false
   },
   {
+    "id": "claude-sonnet-5-5",
+    "name": "Claude Sonnet 5.5",
+    "efforts": [
+      {
+        "id": "low",
+        "label": "Low"
+      },
+      {
+        "id": "medium",
+        "label": "Medium"
+      },
+      {
+        "id": "high",
+        "label": "High"
+      },
+      {
+        "id": "xhigh",
+        "label": "Extra high"
+      },
+      {
+        "id": "max",
+        "label": "Max"
+      }
+    ],
+    "contextWindows": [],
+    "fast": false
+  },
+  {
     "id": "claude-sonnet-5",
     "name": "Claude Sonnet 5",
     "efforts": [
@@ -109,6 +137,34 @@
       1000000
     ],
     "defaultContextWindow": 200000,
+    "fast": false
+  },
+  {
+    "id": "claude-haiku-5-5",
+    "name": "Claude Haiku 5.5",
+    "efforts": [
+      {
+        "id": "low",
+        "label": "Low"
+      },
+      {
+        "id": "medium",
+        "label": "Medium"
+      },
+      {
+        "id": "high",
+        "label": "High"
+      },
+      {
+        "id": "xhigh",
+        "label": "Extra high"
+      },
+      {
+        "id": "max",
+        "label": "Max"
+      }
+    ],
+    "contextWindows": [],
     "fast": false
   },
   {

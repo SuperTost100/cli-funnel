@@ -94,6 +94,9 @@ gpt-5.6-sol-medium - GPT-5.6 Sol 1M
 gpt-5.6-sol-medium-fast - GPT-5.6 Sol 1M Fast
 gpt-5.6-sol-max - GPT-5.6 Sol 1M Max
 gpt-5.6-sol-max-fast - GPT-5.6 Sol 1M Max Fast
+gemini-4-argon-low - Gemini 4 Argon Low
+gemini-4-argon-medium - Gemini 4 Argon Medium
+gemini-4-argon-high - Gemini 4 Argon High
 gpt-5.5-none - GPT-5.5 1M None
 gpt-5.5-none-fast - GPT-5.5 None Fast
 gpt-5.5-low - GPT-5.5 1M Low
@@ -230,6 +233,16 @@ gpt-5.4-nano-low - GPT-5.4 Nano Low
 gpt-5.4-nano-medium - GPT-5.4 Nano
 gpt-5.4-nano-high - GPT-5.4 Nano High
 gpt-5.4-nano-xhigh - GPT-5.4 Nano Extra High
+claude-haiku-5-5-low - Claude Haiku 5.5  Low No Thinking
+claude-haiku-5-5-medium - Claude Haiku 5.5  Medium No Thinking
+claude-haiku-5-5-high - Claude Haiku 5.5  High No Thinking
+claude-haiku-5-5-xhigh - Claude Haiku 5.5  Extra High No Thinking
+claude-haiku-5-5-max - Claude Haiku 5.5  Max No Thinking
+claude-haiku-5-5-thinking-low - Claude Haiku 5.5  Low
+claude-haiku-5-5-thinking-medium - Claude Haiku 5.5  Medium
+claude-haiku-5-5-thinking-high - Claude Haiku 5.5  High
+claude-haiku-5-5-thinking-xhigh - Claude Haiku 5.5  Extra High
+claude-haiku-5-5-thinking-max - Claude Haiku 5.5  Max
 claude-4.5-sonnet - Claude Sonnet 4.5
 claude-4.5-sonnet-thinking - Claude Sonnet 4.5 Thinking
 gpt-5.1-low - GPT-5.1 Low
