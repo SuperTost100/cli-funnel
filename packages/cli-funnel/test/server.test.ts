@@ -62,7 +62,7 @@ describe("server", () => {
       capabilities: { ...fake.capabilities, access: ["none", "auto", "full"] },
       models: async () => [{ ...(await fake.models())[0]!, provider: "agent" }],
       async *run(input) {
-        yield { type: "text.delta", text: input.selection.access };
+        yield { type: "text.delta", text: input.selection.access ?? "" };
         yield { type: "done", text: "", finishReason: "stop" };
       },
     };

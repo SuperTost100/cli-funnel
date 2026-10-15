@@ -9,8 +9,8 @@ interface Selection {
   effort?: string;        // one of the model's efforts
   contextWindow?: number; // tokens, one of the model's contextWindows
   fast?: boolean;         // only when the model has a fast tier
-  cwd: string;            // absolute path of the project
-  access: "none" | "supervised" | "accept-edits" | "auto" | "full";
+  cwd?: string;           // absolute path of the project, required for the four CLIs
+  access?: "none" | "supervised" | "accept-edits" | "auto" | "full"; // required for the four CLIs
 }
 ```
 
@@ -21,7 +21,7 @@ interface Selection {
 - `ollama`, see [Ollama](providers/ollama.md),
 - `openai-compatible:<id>` for each server passed in `createFunnel({ openaiCompatible })`, see [OpenAI-compatible servers](providers/openai-compatible.md).
 
-Providers without machine access (everything except the four CLIs) list no access levels. For them `cwd` is not checked and `access` only has to be a known level.
+Providers without machine access (everything except the four CLIs) list no access levels. For them `cwd` and `access` are optional and ignored, so `{ provider: "ollama", model: "qwen3:latest" }` is a complete selection. The four CLIs reject a selection that lacks either.
 
 ## Where model lists come from
 
@@ -36,7 +36,9 @@ The manifest can refresh without a package release. Point `manifestUrl` at a hos
 createFunnel({ manifestUrl: "https://example.com/cli-funnel/models.json" });
 ```
 
-An entry can carry `minCliVersion`, which hides the model on older CLIs.
+The funnel passes the manifest to every CLI provider, so `funnel.models()` and the model check before a run both use it. An entry can carry `minCliVersion`, which hides the model on older CLIs.
+
+The funnel keeps each provider's installation and model list for 60 seconds, so a chat UI does not start a process per message. Call `funnel.refresh(id)` (or `funnel.refresh()` for all) after you install a CLI or change a model server and want the new state at once. Failed lookups and missing CLIs are not kept.
 
 A model released after your manifest still runs if you set `allowUnlistedModels: true`. The id goes to the CLI unchanged.
 

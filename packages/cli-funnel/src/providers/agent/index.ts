@@ -1,7 +1,8 @@
-import { fromManifest, loadBundledManifest } from "../../catalog/manifest.js";
+import { fromManifest, loadManifest } from "../../catalog/manifest.js";
 import { compareVersions, exec, spawnStream } from "../../util/process.js";
 import { detectInstallation, findBinary, runLogout, runUpdate, spawnLogin } from "../base.js";
-import { FunnelError, type AuthStatus, type FunnelEvent, type ModelInfo, type Provider, type RunInput } from "../../types.js";
+import { FunnelError, type AuthStatus, type FunnelEvent, type ModelInfo, type Provider, type ProviderContext, type RunInput } from "../../types.js";
+import { requireMachine } from "../../selection.js";
 import { composePrompt } from "../prompt.js";
 import { ownedWorkspace } from "../../util/workspace.js";
 import { groupModels, parseModelList, parseStatus, StreamMapper, toCliModel } from "./parser.js";
@@ -49,7 +50,7 @@ export function accessFlags(access: RunInput["selection"]["access"]): string[] {
 export const buildPrompt = (input: RunInput) => composePrompt(input, { system: true, schema: true });
 
 /** `workspace` is the selection's folder, or the `none` workspace. The prompt goes on stdin, so its size has no argv limit. */
-export function buildArgs(input: RunInput, model: string, workspace = input.selection.cwd): string[] {
+export function buildArgs(input: RunInput, model: string, workspace = requireMachine(input.selection).cwd): string[] {
   const { selection } = input;
   return [
     "-p",
@@ -61,7 +62,7 @@ export function buildArgs(input: RunInput, model: string, workspace = input.sele
     "--workspace",
     workspace,
     "--trust",
-    ...accessFlags(selection.access),
+    ...accessFlags(requireMachine(selection).access),
     ...(input.sessionId ? ["--resume", input.sessionId] : []),
   ];
 }
@@ -136,13 +137,13 @@ export const agentProvider: Provider = {
     }),
   logout: () => runLogout(BINARY, ["logout"]),
   update: () => runUpdate(BINARY, ["update"]),
-  async models(): Promise<ModelInfo[]> {
+  async models(ctx?: ProviderContext): Promise<ModelInfo[]> {
     const listed = await listModels();
     if (listed.length) {
       known = new Set(listed.map((m) => m.id));
       return groupModels(listed);
     }
-    return fromManifest(await loadBundledManifest(), "agent", undefined, compareVersions);
+    return fromManifest(await loadManifest(ctx?.manifestUrl), "agent", undefined, compareVersions);
   },
   run,
 };
