@@ -306,6 +306,29 @@ export interface Provider {
   pullModel?(name: string, options?: { signal?: AbortSignal }): AsyncIterable<PullEvent>;
   /** Removes a downloaded model. Present when `capabilities.manageModels` is true. */
   deleteModel?(name: string): Promise<void>;
+  /**
+   * Starts a CLI process that stays alive across turns, for `createFunnel({ sessions: { keepAlive: true } })`. The
+   * process is set up from `input`: its selection, system prompt, schema, env, approval handler and `sessionId` to
+   * resume. Run the turns with `turn()`, the first one included.
+   */
+  openSession?(input: RunInput): Promise<LiveSession>;
+}
+
+/** A CLI process that keeps one conversation across turns. Made by `Provider.openSession`. */
+export interface LiveSession {
+  /** Known once the first turn reported it. */
+  readonly sessionId: string | undefined;
+  /** False once the process exited or was closed. */
+  readonly alive: boolean;
+  /**
+   * Runs one turn on the live process. One turn at a time. The turn ends with `done` or `error`. The process stays
+   * up after a clean end; an abort, a consumer that stops before the end, or a process exit stops it.
+   */
+  turn(input: RunInput): AsyncIterable<FunnelEvent>;
+  /** Adds a user message to the running turn. Absent when the CLI cannot. */
+  steer?(text: string): Promise<void>;
+  /** Stops the process. */
+  close(): void;
 }
 
 export class FunnelError extends Error {

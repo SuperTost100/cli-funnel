@@ -2,11 +2,12 @@ import { FunnelError, type AccessLevel, type ApprovalDecision, type ApprovalRequ
 import { detectInstallation, findBinary, runLogout, runUpdate, spawnLogin } from "../base.js";
 import { fromManifest, loadManifest, mergeModels } from "../../catalog/manifest.js";
 import { needsArgFile, writeArgFile, type ArgFile } from "../../util/argfile.js";
-import { compareVersions, exec, spawnStream } from "../../util/process.js";
+import { compareVersions, exec, spawnStream, type Streamed } from "../../util/process.js";
+import { openClaudeSession } from "./live.js";
 import { requireMachine } from "../../selection.js";
 import { parseClaudeMessage } from "./parser.js";
 
-const BIN = "claude";
+export const BIN = "claude";
 const TESTED_RANGE = { min: "2.1.0" };
 
 const PERMISSION_MODE: Record<AccessLevel, string> = {
@@ -99,18 +100,7 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
     for await (const raw of proc.lines) {
       const msg = raw as Record<string, any>;
       if (msg.type === "control_request") {
-        const req = msg.request ?? {};
-        if (req.subtype !== "can_use_tool") {
-          proc.write(JSON.stringify({ type: "control_response", response: { subtype: "error", request_id: msg.request_id, error: "unsupported request" } }));
-          continue;
-        }
-        const request = { id: String(req.tool_use_id ?? msg.request_id), tool: String(req.tool_name), input: req.input, description: req.description };
-        yield { type: "approval.request", request };
-        const decision = await awaitApproval(input, request, proc.exited);
-        // Cancelled or exited while waiting: the loop ends with the process and the run reports why below.
-        if (decision === undefined) continue;
-        const response = decision === "allow" ? { behavior: "allow", updatedInput: req.input } : { behavior: "deny", message: "Denied by the user." };
-        proc.write(JSON.stringify({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response } }));
+        yield* answerControlRequest(proc, msg, input);
         continue;
       }
       // `result` is the last message of the turn. Close stdin before yielding it, since a consumer that stops at
@@ -133,6 +123,25 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   await proc.exited;
   if (input.signal?.aborted) yield { type: "done", text: "", finishReason: "cancelled" };
   else yield { type: "error", message: proc.stderr().trim() || "Claude Code exited without a result.", code: "cli-failed" };
+}
+
+/**
+ * Answers one `control_request` from Claude Code. A tool approval is yielded as `approval.request` and answered with the
+ * caller's decision. When the run is cancelled or the CLI exits while waiting, nothing is answered: the caller's loop
+ * ends with the process and reports why.
+ */
+export async function* answerControlRequest(proc: Streamed, msg: Record<string, any>, input: RunInput): AsyncGenerator<FunnelEvent> {
+  const req = msg.request ?? {};
+  if (req.subtype !== "can_use_tool") {
+    proc.write(JSON.stringify({ type: "control_response", response: { subtype: "error", request_id: msg.request_id, error: "unsupported request" } }));
+    return;
+  }
+  const request = { id: String(req.tool_use_id ?? msg.request_id), tool: String(req.tool_name), input: req.input, description: req.description };
+  yield { type: "approval.request", request };
+  const decision = await awaitApproval(input, request, proc.exited);
+  if (decision === undefined) return;
+  const response = decision === "allow" ? { behavior: "allow", updatedInput: req.input } : { behavior: "deny", message: "Denied by the user." };
+  proc.write(JSON.stringify({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response } }));
 }
 
 /** Waits for the caller's decision, or undefined once the run is aborted or the CLI has exited. */
@@ -179,4 +188,5 @@ export const claudeProvider: Provider = {
     return mergeModels([], fromManifest(manifest, "claude", install.version, compareVersions));
   },
   run,
+  openSession: openClaudeSession,
 };

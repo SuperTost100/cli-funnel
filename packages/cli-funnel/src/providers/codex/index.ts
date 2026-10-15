@@ -11,8 +11,9 @@ import { Translator } from "./events.js";
 import { parseCatalog } from "./models.js";
 import { RpcClient } from "./rpc.js";
 import { noToolsConfig } from "./tools.js";
+import { openCodexSession } from "./live.js";
 
-const BINARY = "codex";
+export const BINARY = "codex";
 const TESTED_RANGE = { min: "0.150.0" };
 
 async function authStatus(): Promise<AuthStatus> {
@@ -36,6 +37,66 @@ async function models(ctx?: ProviderContext): Promise<ModelInfo[]> {
   return fromManifest(await loadManifest(ctx?.manifestUrl), "codex");
 }
 
+export const INITIALIZE_PARAMS = {
+  clientInfo: { name: "cli-funnel", title: null, version: "0.1.0" },
+  capabilities: { experimentalApi: false, requestAttestation: false },
+};
+
+/** Settings for `thread/start` and `thread/resume`. */
+export async function threadSettings(path: string, input: RunInput) {
+  const sel = input.selection;
+  const machine = requireMachine(sel);
+  const plan = planAccess(machine.access);
+  return {
+    model: sel.model,
+    cwd: sel.cwd,
+    approvalPolicy: plan.approvalPolicy,
+    approvalsReviewer: plan.approvalsReviewer,
+    sandbox: plan.sandbox,
+    ...(sel.fast ? { serviceTier: "priority" } : {}),
+    ...(input.system ? { developerInstructions: input.system } : {}),
+    ...(sel.access === "none" ? { config: await noToolsConfig(path, machine.cwd, input.env) } : {}),
+  };
+}
+
+/** Params for `turn/start`: the prompt, its images, and the per-turn settings. */
+export function turnParams(input: RunInput, threadId: string) {
+  return {
+    threadId,
+    input: [
+      ...(input.attachments ?? []).map((a) => ({ type: "image", url: `data:${a.mediaType};base64,${a.data}` })),
+      { type: "text", text: input.prompt, text_elements: [] },
+    ],
+    ...(input.selection.effort ? { effort: input.selection.effort } : {}),
+    ...(input.responseSchema ? { outputSchema: input.responseSchema.schema } : {}),
+  };
+}
+
+/**
+ * The answer to one approval request. Levels below `supervised` answer without asking. Otherwise `push` gets the
+ * `approval.request` event and the caller's `onApproval` decides.
+ */
+export async function decideApproval(
+  req: ServerRequest,
+  input: RunInput,
+  items: Map<string, unknown>,
+  push: (e: FunnelEvent) => void,
+): Promise<ApprovalDecision> {
+  const access = input.selection.access;
+  if (access === "none") return "deny";
+  if (req.method === "item/fileChange/requestApproval" && planAccess(requireMachine(input.selection).access).autoAllowFileChanges) return "allow";
+  if (access === "full") return "allow";
+  const request = toApprovalRequest(req, items);
+  if (!request) return "deny";
+  push({ type: "approval.request", request });
+  if (!input.onApproval) return "deny";
+  try {
+    return await input.onApproval(request);
+  } catch {
+    return "deny";
+  }
+}
+
 async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   const path = findBinary(BINARY);
   if (!path) {
@@ -43,8 +104,7 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
     return;
   }
   const sel = input.selection;
-  const machine = requireMachine(sel);
-  const plan = planAccess(machine.access);
+  requireMachine(sel);
   const out = new Channel<FunnelEvent>();
   const proc = spawnStream(path, ["app-server"], { cwd: sel.cwd, env: input.env });
   let translator: Translator | undefined;
@@ -60,20 +120,7 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
     proc.kill();
   };
 
-  const decide = async (req: ServerRequest): Promise<ApprovalDecision> => {
-    if (sel.access === "none") return "deny";
-    if (req.method === "item/fileChange/requestApproval" && plan.autoAllowFileChanges) return "allow";
-    if (sel.access === "full") return "allow";
-    const request = toApprovalRequest(req, translator?.items ?? new Map());
-    if (!request) return "deny";
-    out.push({ type: "approval.request", request });
-    if (!input.onApproval) return "deny";
-    try {
-      return await input.onApproval(request);
-    } catch {
-      return "deny";
-    }
-  };
+  const decide = (req: ServerRequest) => decideApproval(req, input, translator?.items ?? new Map(), (e) => out.push(e));
 
   const rpc = new RpcClient(proc, {
     notification(method, params) {
@@ -111,36 +158,16 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
 
   void (async () => {
     try {
-      await rpc.request("initialize", {
-        clientInfo: { name: "cli-funnel", title: null, version: "0.1.0" },
-        capabilities: { experimentalApi: false, requestAttestation: false },
-      });
+      await rpc.request("initialize", INITIALIZE_PARAMS);
       rpc.notify("initialized");
-      const settings = {
-        model: sel.model,
-        cwd: sel.cwd,
-        approvalPolicy: plan.approvalPolicy,
-        approvalsReviewer: plan.approvalsReviewer,
-        sandbox: plan.sandbox,
-        ...(sel.fast ? { serviceTier: "priority" } : {}),
-        ...(input.system ? { developerInstructions: input.system } : {}),
-        ...(sel.access === "none" ? { config: await noToolsConfig(path, machine.cwd, input.env) } : {}),
-      };
+      const settings = await threadSettings(path, input);
       const started = input.sessionId
         ? await rpc.request("thread/resume", { threadId: input.sessionId, ...settings })
         : await rpc.request("thread/start", settings);
       threadId = started.thread.id as string;
       translator = new Translator(threadId);
       out.push({ type: "session", sessionId: threadId, model: started.model });
-      const res = await rpc.request("turn/start", {
-        threadId,
-        input: [
-          ...(input.attachments ?? []).map((a) => ({ type: "image", url: `data:${a.mediaType};base64,${a.data}` })),
-          { type: "text", text: input.prompt, text_elements: [] },
-        ],
-        ...(sel.effort ? { effort: sel.effort } : {}),
-        ...(input.responseSchema ? { outputSchema: input.responseSchema.schema } : {}),
-      });
+      const res = await rpc.request("turn/start", turnParams(input, threadId));
       turnId ??= res?.turn?.id;
     } catch (e) {
       finish([{ type: "error", message: e instanceof Error ? e.message : String(e), code: "cli-failed" }]);
@@ -182,4 +209,5 @@ export const codexProvider: Provider = {
   update: () => runUpdate(BINARY, ["update"]),
   models,
   run,
+  openSession: openCodexSession,
 };
