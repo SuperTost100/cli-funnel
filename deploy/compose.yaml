@@ -1,0 +1,23 @@
+# Runs cli-funnel serve for your tailnet only.
+#   cp compose.env.example .env   then fill in both values
+#   docker compose up -d --build
+name: cli-funnel
+
+services:
+  funnel:
+    build: .
+    restart: unless-stopped
+    environment:
+      # serve refuses a non-loopback address without a token. Compose stops here when it is missing.
+      CLI_FUNNEL_TOKEN: ${CLI_FUNNEL_TOKEN:?Set CLI_FUNNEL_TOKEN in .env}
+    ports:
+      # The host side binds one address, so the port is not open on the LAN or the internet.
+      - "${TAILNET_IP:?Set TAILNET_IP in .env to the output of tailscale ip -4}:${PORT:-4747}:4747"
+    volumes:
+      # Home folder of the container user: CLI sign-ins, settings and cli-funnel sessions survive a rebuild.
+      - home:/home/node
+      # The only folder runs may use as their project folder.
+      - ${WORKSPACE:-./workspace}:/workspace
+
+volumes:
+  home:

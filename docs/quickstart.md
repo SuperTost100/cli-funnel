@@ -119,4 +119,4 @@ Not every CLI can pass approvals through. `funnel.providers.<id>.capabilities.ac
 npx cli-funnel serve --cwd /path/to/project
 ```
 
-This starts an HTTP server with an OpenAI-compatible `/v1/chat/completions`. See [OpenAI compatibility](openai-compat.md) and [UI components](ui.md).
+This starts an HTTP server with an OpenAI-compatible `/v1/chat/completions`. See [Run the server](serve.md), [OpenAI compatibility](openai-compat.md) and [UI components](ui.md).

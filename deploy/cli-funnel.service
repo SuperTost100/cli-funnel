@@ -1,0 +1,27 @@
+# A systemd user unit. It runs as you, so the CLIs find their sign-ins in your home folder.
+#
+#   mkdir -p ~/.config/systemd/user ~/.config/cli-funnel
+#   cp cli-funnel.service ~/.config/systemd/user/
+#   cp serve.example.json ~/.config/cli-funnel/serve.json
+#   install -m 600 /dev/null ~/.config/cli-funnel/env
+#   echo "CLI_FUNNEL_TOKEN=$(openssl rand -hex 32)" >> ~/.config/cli-funnel/env
+#   loginctl enable-linger "$USER"
+#   systemctl --user enable --now cli-funnel
+[Unit]
+Description=cli-funnel HTTP server
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+# The token comes from this file, so it stays out of the unit and the process list.
+EnvironmentFile=%h/.config/cli-funnel/env
+# Where npm -g and the CLIs usually live. Add yours if it is elsewhere.
+Environment=PATH=%h/.local/bin:%h/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+# serve.json sets "host" to this machine's tailnet address.
+ExecStart=/usr/bin/env cli-funnel serve --config %h/.config/cli-funnel/serve.json
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target
