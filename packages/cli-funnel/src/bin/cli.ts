@@ -12,7 +12,7 @@ import { createHandler } from "../server/handler.js";
 import { serveNode } from "../server/node.js";
 import { fileHistory } from "../providers/history.js";
 import type { OpenAICompatibleEndpoint } from "../providers/openai-compatible.js";
-import { readServeConfig, resolveServe } from "./serve-config.js";
+import { SERVE_TIMEOUT_SEC, readServeConfig, resolveServe, seconds } from "./serve-config.js";
 import { UsageError, loadImages, loadSchema, renderRun, resolvePrompt } from "./run-input.js";
 import { ACCESS_LEVELS, type AccessLevel, type ProviderId } from "../types.js";
 
@@ -27,7 +27,7 @@ const HELP = `cli-funnel <command>
   rm <provider> <model>        Delete a downloaded model (Ollama)
   run <provider> <model> [prompt | -]
        [--effort x] [--fast] [--context tokens] [--cwd dir] [--access ${ACCESS_LEVELS.join("|")}]
-       [--system text] [--session id] [--max-tokens n]
+       [--system text] [--session id] [--max-tokens n] [--timeout seconds]
        [--image file]... [--schema file.json] [--json] [--quiet]
                                Prints a session id on stderr. Pass it to --session to continue.
                                The prompt is read from stdin when it is - or missing and stdin is piped.
@@ -35,13 +35,15 @@ const HELP = `cli-funnel <command>
                                --schema asks for JSON that matches the file and prints only that answer.
                                --json prints the full result as JSON on stdout and nothing else.
                                --quiet drops the stream and prints the final text once.
+                               --timeout stops the run after that many seconds and exits 1.
                                Exits 1 when the run gives no text and does not finish with "stop".
   serve [--port 4747] [--host 127.0.0.1] [--cwd dir] [--access level] [--token secret]
         [--config file.json] [--fs-root dir]... [--approval-timeout seconds] [--cors origin]
-        [--log-jsonl file] [--log-content]
+        [--log-jsonl file] [--log-content] [--timeout seconds]
                                HTTP API, SSE streaming and OpenAI-compatible /v1 endpoints.
                                Flags beat the config file, the file beats the environment. See docs/serve.md.
                                --log-jsonl appends one line per run: ids, timing, usage, no text. --log-content adds the prompt and text.
+                               --timeout stops each run after that many seconds, default ${SERVE_TIMEOUT_SEC}. 0 means no limit.
   mcp [--max-access ${ACCESS_LEVELS.join("|")}] [--fs-root dir]... [--cwd dir]
                                MCP server on stdio. Tools: list_providers, list_models, run.
                                --max-access caps what a run may ask for (default none).
@@ -81,6 +83,7 @@ const { values, positionals } = parseArgs({
     system: { type: "string" },
     session: { type: "string" },
     "max-tokens": { type: "string" },
+    timeout: { type: "string" },
     help: { type: "boolean", short: "h" },
   },
 });
@@ -138,6 +141,14 @@ const out = (s: string) => process.stdout.write(s + "\n");
 const usage = (s: string): never => {
   process.stderr.write(s + "\n");
   return process.exit(2);
+};
+/** `run --timeout` in milliseconds. */
+const runTimeoutMs = (): number | undefined => {
+  try {
+    return values.timeout === undefined ? undefined : seconds("--timeout", values.timeout) * 1000;
+  } catch (err) {
+    return usageExit(err);
+  }
 };
 const provider = (): ProviderId => {
   if (!providerArg || !(providerArg in funnel.providers)) return usage(`Pick a provider: ${Object.keys(funnel.providers).join(", ")}`);
@@ -286,6 +297,7 @@ async function main() {
       system: values.system,
       sessionId: values.session,
       maxOutputTokens,
+      timeoutMs: runTimeoutMs(),
       // Without a terminal prompt the CLI denies tools that need approval on its own.
       onApproval: rl
         ? async (r) => {
@@ -303,6 +315,10 @@ async function main() {
     });
     rl?.close();
     if (!structured) process.exitCode = 1;
+    if (result.timeout) {
+      process.stderr.write(`Stopped after ${values.timeout} s (--timeout).\n`);
+      process.exitCode = 1;
+    }
     if (result.deniedActions.length) {
       process.stderr.write(`Denied: ${[...new Set(result.deniedActions)].join(", ")}. Use --access supervised to approve tools one by one.\n`);
     }

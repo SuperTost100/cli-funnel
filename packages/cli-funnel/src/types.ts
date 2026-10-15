@@ -132,7 +132,8 @@ export type FunnelEvent =
   | { type: "retry"; attempt: number; status: number; delayMs: number }
   /** The parsed answer when the provider reports structured output itself. */
   | { type: "structured"; data: unknown }
-  | { type: "done"; text: string; finishReason: FinishReason }
+  /** `timeout` is set when the run hit `RunInput.timeoutMs`. `finishReason` is then "cancelled". */
+  | { type: "done"; text: string; finishReason: FinishReason; timeout?: true }
   | { type: "error"; message: string; code?: string };
 
 /** What `createFunnel({ onEvent })` receives for every event of a run. */
@@ -172,6 +173,8 @@ export interface RunResult {
   structured?: unknown;
   /** Why `structured` is missing when `responseSchema` was set, for example text that is not JSON. */
   structuredError?: string;
+  /** True when the run hit `RunInput.timeoutMs`. `finishReason` is then "cancelled". */
+  timeout?: true;
 }
 
 /** Sampling controls. Each provider sends the fields its vendor accepts and ignores the rest. */
@@ -216,6 +219,11 @@ export interface RunInput {
   signal?: AbortSignal;
   /** Names the run in `onEvent` records and logs. Default: generated. The HTTP server passes the id it sends to clients. */
   runId?: string;
+  /**
+   * Stops the run after this many milliseconds and ends it with `finishReason: "cancelled"` and `timeout: true`.
+   * Unset or 0 means no deadline.
+   */
+  timeoutMs?: number;
   /** Called for each tool call that needs approval. Required when `selection.access` is "supervised". */
   onApproval?: (request: ApprovalRequest) => Promise<ApprovalDecision> | ApprovalDecision;
   /** Extra environment for the CLI process. */

@@ -6,7 +6,7 @@ import { ACCESS_LEVELS, type AccessLevel } from "../types.js";
 import { UsageError } from "./run-input.js";
 
 /** What `serve --config` reads. The handler options keep their names, so the file mirrors `createHandler`. */
-export interface ServeConfig extends Pick<HandlerOptions, "basePath" | "token" | "allowedHosts" | "tailscale" | "fsRoots" | "approvalTimeoutSec" | "cors" | "openai"> {
+export interface ServeConfig extends Pick<HandlerOptions, "basePath" | "token" | "allowedHosts" | "tailscale" | "fsRoots" | "approvalTimeoutSec" | "maxRunMs" | "cors" | "openai"> {
   port?: number;
   host?: string;
   /** Project folder for the OpenAI-compatible endpoints. Same as `openai.cwd`. */
@@ -22,8 +22,11 @@ export interface ServeConfig extends Pick<HandlerOptions, "basePath" | "token" |
 
 const KEYS = [
   "port", "host", "cwd", "access", "token", "allowedHosts", "tailscale", "fsRoots", "approvalTimeoutSec", "cors", "basePath", "openai", "openaiCompatible",
-  "logJsonl", "logContent",
+  "logJsonl", "logContent", "maxRunMs",
 ] as const;
+
+/** How long `serve` lets a run take when neither --timeout nor `maxRunMs` says otherwise. */
+export const SERVE_TIMEOUT_SEC = 1800;
 
 const isStrings = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
@@ -58,6 +61,7 @@ export function parseServeConfig(raw: unknown, path: string): ServeConfig {
   need("tailscale", typeof raw.tailscale === "boolean", "true or false");
   need("fsRoots", isStrings(raw.fsRoots), "a list of folders");
   need("approvalTimeoutSec", typeof raw.approvalTimeoutSec === "number" && raw.approvalTimeoutSec > 0, "a positive number of seconds");
+  need("maxRunMs", typeof raw.maxRunMs === "number" && raw.maxRunMs >= 0, "a number of milliseconds, 0 for no limit");
   need("cors", typeof raw.cors === "string", "one origin");
   need("basePath", typeof raw.basePath === "string", "a string");
   need("openai", isObject(raw.openai), "an object with cwd and access");
@@ -82,6 +86,7 @@ export interface ServeFlags {
   token?: string;
   "fs-root"?: string[];
   "approval-timeout"?: string;
+  timeout?: string;
   cors?: string;
   "log-jsonl"?: string;
   "log-content"?: boolean;
@@ -96,6 +101,13 @@ export interface ServeSettings {
   handler: HandlerOptions;
   openaiCompatible?: OpenAICompatibleEndpoint[];
 }
+
+/** A number of seconds, 0 included. */
+export const seconds = (flag: string, v: string) => {
+  const n = Number(v);
+  if (v.trim() === "" || !Number.isFinite(n) || n < 0) throw new UsageError(`${flag} takes a number of seconds, got "${v}".`);
+  return n;
+};
 
 const positive = (flag: string, v: string) => {
   const n = Number(v);
@@ -116,6 +128,8 @@ export function resolveServe(flags: ServeFlags, config: ServeConfig, env: NodeJS
   const envHosts = env.CLI_FUNNEL_ALLOWED_HOSTS?.split(",").map((h) => h.trim()).filter(Boolean);
   const token = flags.token ?? config.token ?? (env.CLI_FUNNEL_TOKEN || undefined);
   const timeout = flags["approval-timeout"] !== undefined ? positive("--approval-timeout", flags["approval-timeout"]) : config.approvalTimeoutSec;
+  // 0 turns the deadline off.
+  const maxRunMs = flags.timeout !== undefined ? seconds("--timeout", flags.timeout) * 1000 : config.maxRunMs ?? SERVE_TIMEOUT_SEC * 1000;
   const port = flags.port !== undefined ? Number(flags.port) : config.port ?? 4747;
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new UsageError(`--port must be a port number, got "${flags.port}".`);
   const logFile = flags["log-jsonl"] ?? config.logJsonl;
@@ -134,6 +148,7 @@ export function resolveServe(flags: ServeFlags, config: ServeConfig, env: NodeJS
       fsRoots: roots ?? [where.home, cwd],
       openai: { ...config.openai, cwd, access: access as AccessLevel },
       approvalTimeoutSec: timeout,
+      maxRunMs,
       cors: flags.cors ?? config.cors,
     },
     openaiCompatible: config.openaiCompatible,

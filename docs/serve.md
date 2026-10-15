@@ -20,6 +20,7 @@ By default it listens on `127.0.0.1:4747` and answers only requests that come fr
 | `--config <file>` | none | Read settings from a JSON file. |
 | `--fs-root <dir>` | home folder and `--cwd` | Folder that runs may use as their project folder and the folder picker may browse. Repeat it for more. |
 | `--approval-timeout <seconds>` | `300` | How long a `supervised` run waits for an answer before the request is denied. |
+| `--timeout <seconds>` | `1800` | Stop each run after this long. `0` turns it off. See [Deadline](run-options.md#deadline). |
 | `--cors <origin>` | off | One web origin that may call the API from a browser. See [CORS](#cors). |
 | `--log-jsonl <file>` | off | Append one JSON line per run to the file. See [Log runs](#log-runs). |
 | `--log-content` | off | Add the prompt and the answer text to each log line. Needs `--log-jsonl`. |
@@ -36,6 +37,7 @@ By default it listens on `127.0.0.1:4747` and answers only requests that come fr
 | `token` | `--token`. Prefer `CLI_FUNNEL_TOKEN`, see below. |
 | `fsRoots` | `--fs-root`, as a list |
 | `approvalTimeoutSec` | `--approval-timeout` |
+| `maxRunMs` | `--timeout`, in milliseconds |
 | `cors` | `--cors` |
 | `logJsonl`, `logContent` | `--log-jsonl`, `--log-content` |
 | `allowedHosts` | `CLI_FUNNEL_ALLOWED_HOSTS`, as a list |

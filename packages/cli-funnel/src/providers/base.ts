@@ -214,6 +214,7 @@ export function createRunFolder(input: RunInput): RunFolder {
         case "done":
           if (e.text) result.text = e.text;
           result.finishReason = e.finishReason;
+          if (e.timeout) result.timeout = true;
           break;
         case "error":
           result.finishReason = "error";

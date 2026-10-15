@@ -28,6 +28,8 @@ export interface TrackedRun {
   id: string;
   /** Aborts when the request closes or the run is cancelled by id. */
   signal: AbortSignal;
+  /** The handler's deadline for the run. */
+  timeoutMs?: number;
   end: () => void;
 }
 
@@ -230,6 +232,7 @@ export async function handleOpenAI(
     maxOutputTokens: body.max_completion_tokens ?? body.max_tokens,
     sessionId: body.x_funnel?.sessionId,
     signal: run.signal,
+    timeoutMs: run.timeoutMs,
     onApproval: () => "deny",
   };
 
