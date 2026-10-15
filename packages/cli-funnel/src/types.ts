@@ -184,6 +184,14 @@ export interface Sampling {
   seed?: number;
 }
 
+/** Settings only an Ollama server takes. */
+export interface OllamaRunOptions {
+  /** How long the server keeps the model loaded after this run: a duration such as `"30m"`, seconds as a number, `-1` for good, `0` to unload at once. Overrides the funnel's `ollama.keepAlive`. */
+  keepAlive?: string | number;
+  /** Extra entries for the request's `options`, for example `{ top_k: 40, repeat_penalty: 1.1 }`. They win over the fields cli-funnel sets from `sampling`, `maxOutputTokens` and `selection.contextWindow`. */
+  options?: Record<string, unknown>;
+}
+
 export interface RunInput {
   selection: Selection;
   prompt: string;
@@ -197,6 +205,8 @@ export interface RunInput {
   maxOutputTokens?: number;
   /** Temperature, top-p, stop sequences and seed. See `capabilities.sampling`. The vendor may reject values its models do not allow, for example a non-default temperature on recent Claude and OpenAI reasoning models. */
   sampling?: Sampling;
+  /** Ollama only. Other providers ignore it. */
+  ollama?: OllamaRunOptions;
   /** Anthropic API: mark the system prompt and the newest turn for prompt caching, so the next turn reads them from the cache. */
   cache?: boolean;
   /** Gemini API: the name of cached content to run against, for example `cachedContents/abc123`. */

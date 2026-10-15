@@ -26,10 +26,10 @@ result.structured; // { color: "rosso" }
 | `maxOutputTokens` | ignored | ignored | ignored | ignored | `max_tokens` | `max_completion_tokens` | `maxOutputTokens` | `options.num_predict` |
 | `cache` | refused | refused | refused | refused | `cache_control` on the system prompt and newest turn | refused | no effect | refused |
 | `cachedContent` | refused | refused | refused | refused | refused | refused | `cachedContent` | refused |
-| `sampling.temperature` | refused | refused | refused | refused | `temperature` | `temperature` | `generationConfig.temperature` | not yet |
-| `sampling.topP` | refused | refused | refused | refused | `top_p` | `top_p` | `generationConfig.topP` | not yet |
-| `sampling.stop` | refused | refused | refused | refused | `stop_sequences` | `stop` | `generationConfig.stopSequences` | not yet |
-| `sampling.seed` | refused | refused | refused | refused | ignored, the API has no seed | `seed` | `generationConfig.seed` | not yet |
+| `sampling.temperature` | refused | refused | refused | refused | `temperature` | `temperature` | `generationConfig.temperature` | `options.temperature` |
+| `sampling.topP` | refused | refused | refused | refused | `top_p` | `top_p` | `generationConfig.topP` | `options.top_p` |
+| `sampling.stop` | refused | refused | refused | refused | `stop_sequences` | `stop` | `generationConfig.stopSequences` | `options.stop` |
+| `sampling.seed` | refused | refused | refused | refused | ignored, the API has no seed | `seed` | `generationConfig.seed` | `options.seed` |
 
 When an API provider or model server stops because it hit the output limit, the run ends with `finishReason: "length"` and `text` is cut off. With `responseSchema`, a cut-off answer usually fails to parse and `structuredError` says so. The CLIs never report `length`.
 
