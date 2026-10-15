@@ -13,6 +13,7 @@
 - [UI components](docs/ui.md): React hooks, picker, login panel, approvals
 - [OpenAI compatibility](docs/openai-compat.md)
 - [API keys](docs/api-keys.md)
+- [MCP server](docs/mcp.md): `cli-funnel mcp` on stdio, tools list_providers, list_models and run, access capped by `--max-access`
 - [Ollama](docs/providers/ollama.md): local models, no key, pull and delete
 - [OpenAI-compatible servers](docs/providers/openai-compatible.md): LM Studio, llama.cpp, vLLM, gateways
 - [Adding a provider](docs/adding-a-provider.md)

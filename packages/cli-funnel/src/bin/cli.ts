@@ -1,10 +1,12 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import type { AddressInfo } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { createFunnel } from "../funnel.js";
+import { createMcpServer, serveStdio } from "../mcp/server.js";
 import { createHandler } from "../server/handler.js";
 import { serveNode } from "../server/node.js";
 import { fileHistory } from "../providers/history.js";
@@ -28,6 +30,9 @@ const HELP = `cli-funnel <command>
                                Exits 1 when the run gives no text and does not finish with "stop".
   serve [--port 4747] [--host 127.0.0.1] [--cwd dir] [--access level] [--token secret]
                                HTTP API, SSE streaming and OpenAI-compatible /v1 endpoints
+  mcp [--max-access ${ACCESS_LEVELS.join("|")}] [--fs-root dir]... [--cwd dir]
+                               MCP server on stdio. Tools: list_providers, list_models, run.
+                               --max-access caps what a run may ask for (default none).
 
 Providers: claude, codex, agent, antigravity, anthropic-api, openai-api, gemini-api, ollama
 
@@ -46,6 +51,8 @@ const { values, positionals } = parseArgs({
     context: { type: "string" },
     cwd: { type: "string" },
     access: { type: "string" },
+    "max-access": { type: "string" },
+    "fs-root": { type: "string", multiple: true },
     port: { type: "string" },
     host: { type: "string" },
     token: { type: "string" },
@@ -90,6 +97,14 @@ const wholeNumber = (flag: string, raw: string | undefined): number | undefined 
   return Number(raw);
 };
 const LOCAL_HOSTS = ["127.0.0.1", "localhost", "::1"];
+
+function packageVersion(): string | undefined {
+  try {
+    return JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version;
+  } catch {
+    return undefined;
+  }
+}
 
 async function main() {
   if (values.help) return out(HELP);
@@ -222,6 +237,26 @@ async function main() {
       process.stderr.write(`The run ended without text. Finish reason: ${result.finishReason}\n`);
       process.exitCode = 1;
     }
+    return;
+  }
+
+  if (command === "mcp") {
+    const maxAccess = (values["max-access"] ?? "none") as AccessLevel;
+    if (!ACCESS_LEVELS.includes(maxAccess)) {
+      process.stderr.write(`--max-access must be one of ${ACCESS_LEVELS.join(", ")}.\n`);
+      process.exit(2);
+    }
+    const cwd = values.cwd ?? process.cwd();
+    const server = createMcpServer({
+      funnel,
+      maxAccess,
+      fsRoots: values["fs-root"]?.length ? values["fs-root"] : [homedir(), cwd],
+      cwd,
+      version: packageVersion(),
+      log: (m) => process.stderr.write(`${m}\n`),
+    });
+    process.stderr.write(`cli-funnel MCP server on stdio, max access ${maxAccess}\n`);
+    await serveStdio(server, process.stdin, process.stdout);
     return;
   }
 
