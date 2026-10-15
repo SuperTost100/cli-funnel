@@ -8,7 +8,7 @@ Runs the real `claude` binary in print mode and reads its stream-json output. Te
 | --- | --- |
 | Run | `-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages` |
 | Prompt | One `user` JSON line on stdin. Stdin closes after the `result` message. |
-| Model | `--model <id>` |
+| Model | `--model <id>`, or `--model '<id>[1m]'` for a 1M context window |
 | Effort | `--effort low\|medium\|high\|xhigh\|max` |
 | Access | `--permission-mode <mode>` (see below) |
 | Approvals | `--permission-prompt-tool stdio` |
@@ -55,13 +55,20 @@ Claude has no list command, so models come from `data/models/claude.json`.
 | `claude-fable-5-1` | low to max | Needs usage credits on a Pro plan (the run returns a 429 error) |
 | `claude-opus-5-5` | low to max | 1M context |
 | `claude-sonnet-5` | low to max | 1M context |
+| `claude-opus-4-6` | low, medium, high, max | 200k context, or 1M with `contextWindow: 1000000` |
 | `claude-haiku-4-5-20251001` | none listed | 200k context |
 
 Each id was run with `claude -p` and `init` reported the same id back, except Fable, which resolves but is then refused for credits. Aliases such as `opus` are not listed.
 
 Effort: the CLI accepts `--effort` values `low`, `medium`, `high`, `xhigh` and `max` for every model tried, and only warns on unknown values. It gives no per-model list, so per-model support is not checked. Haiku accepts the flag but no effort is offered for it. No default effort is set, so the CLI decides.
 
-Context: `--model 'claude-sonnet-5[1m]'` is accepted and reports a 1,000,000 window. Sonnet 5 and Opus 5.5 already report 1M without the suffix on this account, so `contextWindow` is not a setting here. Other plans may differ.
+Context: Claude Code picks a model's 1M context variant through a `[1m]` suffix on the model id. A selection with `contextWindow: 1000000` on a model that lists `[200000, 1000000]` in `contextWindows` runs with `--model '<id>[1m]'`, and the `session` event reports the suffixed id. Without `contextWindow`, or with the default, the id goes unchanged.
+
+Tested on 2.1.300 with `modelUsage.contextWindow` from the result:
+
+- `claude-opus-4-6` reports 200,000, and `claude-opus-4-6[1m]` reports 1,000,000.
+- Sonnet 5, Opus 5.5 and Fable 5.1 already report 1,000,000 without the suffix, so they list no context sizes.
+- `claude-sonnet-4-6[1m]` failed with "Usage credits required for 1M context", and `claude-haiku-4-5-20251001[1m]` with "The long context beta is not yet available for this subscription". Neither is offered. Other plans may differ.
 
 ## Fast mode
 
@@ -76,7 +83,7 @@ Not supported. `fastMode` is a Claude Code setting, but in SDK-style runs the CL
 
 ## Known limits
 
-- Fast mode and context window selection are unavailable.
+- Fast mode is unavailable.
 - Approval requests other than `can_use_tool` are answered with an error.
 - Resume needs the same cwd as the original run, because Claude stores sessions per project directory.
 - The `paste` and other MCP servers that need auth print a note in the model's reply, not an error.
