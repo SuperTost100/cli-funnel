@@ -11,6 +11,7 @@ import { createHandler } from "../server/handler.js";
 import { serveNode } from "../server/node.js";
 import { fileHistory } from "../providers/history.js";
 import type { OpenAICompatibleEndpoint } from "../providers/openai-compatible.js";
+import { readServeConfig, resolveServe } from "./serve-config.js";
 import { UsageError, loadImages, loadSchema, renderRun, resolvePrompt } from "./run-input.js";
 import { ACCESS_LEVELS, type AccessLevel, type ProviderId } from "../types.js";
 
@@ -35,7 +36,9 @@ const HELP = `cli-funnel <command>
                                --quiet drops the stream and prints the final text once.
                                Exits 1 when the run gives no text and does not finish with "stop".
   serve [--port 4747] [--host 127.0.0.1] [--cwd dir] [--access level] [--token secret]
-                               HTTP API, SSE streaming and OpenAI-compatible /v1 endpoints
+        [--config file.json] [--fs-root dir]... [--approval-timeout seconds] [--cors origin]
+                               HTTP API, SSE streaming and OpenAI-compatible /v1 endpoints.
+                               Flags beat the config file, the file beats the environment. See docs/serve.md.
   mcp [--max-access ${ACCESS_LEVELS.join("|")}] [--fs-root dir]... [--cwd dir]
                                MCP server on stdio. Tools: list_providers, list_models, run.
                                --max-access caps what a run may ask for (default none).
@@ -46,8 +49,9 @@ OpenAI-compatible servers come from CLI_FUNNEL_OPENAI_COMPATIBLE, a JSON list su
   [{"id":"lmstudio","name":"LM Studio","baseUrl":"http://127.0.0.1:1234/v1"}]
 Each one becomes the provider openai-compatible:<id>.
 
-Without --token, serve answers only localhost, IP addresses and tailscale serve. CLI_FUNNEL_ALLOWED_HOSTS adds
-host names, comma-separated. ".example.com" matches subdomains, "*" turns the check off.`;
+Without a token, serve answers only localhost, IP addresses and tailscale serve. CLI_FUNNEL_TOKEN sets the token
+without putting it in the process list. CLI_FUNNEL_ALLOWED_HOSTS adds host names, comma-separated.
+".example.com" matches subdomains, "*" turns the check off.`;
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -62,6 +66,9 @@ const { values, positionals } = parseArgs({
     port: { type: "string" },
     host: { type: "string" },
     token: { type: "string" },
+    config: { type: "string" },
+    "approval-timeout": { type: "string" },
+    cors: { type: "string" },
     json: { type: "boolean" },
     quiet: { type: "boolean" },
     image: { type: "string", multiple: true },
@@ -73,7 +80,23 @@ const { values, positionals } = parseArgs({
   },
 });
 
+function usageExit(err: unknown): never {
+  if (!(err instanceof UsageError)) throw err;
+  process.stderr.write(`${err.message}\n`);
+  process.exit(2);
+}
+
+function loadServeConfig() {
+  try {
+    return values.config ? readServeConfig(values.config) : {};
+  } catch (err) {
+    return usageExit(err);
+  }
+}
+const serveConfig = loadServeConfig();
+
 function openaiCompatible(): OpenAICompatibleEndpoint[] | undefined {
+  if (serveConfig.openaiCompatible) return serveConfig.openaiCompatible;
   const raw = process.env.CLI_FUNNEL_OPENAI_COMPATIBLE;
   if (!raw) return undefined;
   try {
@@ -291,16 +314,25 @@ async function main() {
   }
 
   if (command === "serve") {
-    const handler = createHandler(funnel, {
-      token: values.token,
-      allowedHosts: process.env.CLI_FUNNEL_ALLOWED_HOSTS?.split(",").map((h) => h.trim()).filter(Boolean),
-      fsRoots: [homedir(), values.cwd ?? process.cwd()],
-      openai: { cwd: values.cwd ?? process.cwd(), access: (values.access as AccessLevel) ?? "accept-edits" },
-    });
+    let settings;
+    try {
+      settings = resolveServe(values, serveConfig, process.env, { cwd: process.cwd(), home: homedir() });
+    } catch (err) {
+      return usageExit(err);
+    }
+    const { port, token } = settings;
     // [::1] is how an IPv6 address is written in a URL. The socket wants it without brackets.
-    const host = (values.host ?? "127.0.0.1").replace(/^\[(.*)\]$/, "$1");
-    if (!LOCAL_HOSTS.includes(host) && !values.token) return usage("Refusing to listen on a public address without --token.");
-    const { server } = await serveNode(handler, { port: values.port ? Number(values.port) : 4747, host });
+    const host = settings.host.replace(/^\[(.*)\]$/, "$1");
+    if (!LOCAL_HOSTS.includes(host) && !token) {
+      return usage("Refusing to listen on a public address without a token. Pass --token, set CLI_FUNNEL_TOKEN or put token in the config file.");
+    }
+    let handler;
+    try {
+      handler = createHandler(funnel, settings.handler);
+    } catch (err) {
+      return usage(err instanceof Error ? err.message : String(err));
+    }
+    const { server } = await serveNode(handler, { port, host });
     const url = `http://${host.includes(":") ? `[${host}]` : host}:${(server.address() as AddressInfo).port}`;
     out(`cli-funnel listening on ${url}`);
     out(`OpenAI-compatible base URL: ${url}/v1   (model ids look like claude/claude-sonnet-5)`);

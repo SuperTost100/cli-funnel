@@ -38,7 +38,30 @@ export interface HandlerOptions {
   openai?: OpenAIDefaults;
   /** Seconds to wait for an approval before denying it. Default 300. */
   approvalTimeoutSec?: number;
+  /**
+   * One web origin, such as "https://app.example.com", that may call the API from a browser. Off by default.
+   * Answers its preflight requests and adds CORS headers to its responses. Other origins get none, and the origin
+   * check above stays on. A wildcard is not accepted.
+   */
+  cors?: string;
 }
+
+/** The origin ("scheme://host[:port]") of a CORS setting. Throws on anything else, including "*". */
+export function corsOrigin(value: string): string {
+  try {
+    const u = new URL(value);
+    if ((u.protocol === "http:" || u.protocol === "https:") && u.origin === value.replace(/\/$/, "").toLowerCase()) return u.origin;
+  } catch {
+    /* falls through to the error */
+  }
+  throw new Error(`cors must be one origin such as "https://app.example.com", not "${value}".`);
+}
+
+const CORS_ALLOW = {
+  "access-control-allow-methods": "GET, POST, OPTIONS",
+  "access-control-allow-headers": "authorization, content-type",
+  "access-control-max-age": "600",
+};
 
 interface PendingApproval {
   resolve: (d: ApprovalDecision) => void;
@@ -80,6 +103,9 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
   const logins = new Map<string, LoginSession>();
   let seq = 0;
 
+  const cors = options.cors === undefined ? undefined : corsOrigin(options.cors);
+  const corsMatch = (req: Request) => !!cors && req.headers.get("origin")?.toLowerCase() === cors;
+
   const insideRoots = (p: string) => roots.some((r) => p === r || p.startsWith(r + sep));
   // Checks the real path, so a symlink inside a root cannot point a run or the picker outside it.
   const cwdAllowed = (cwd: string) => {
@@ -103,7 +129,7 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
     if (!origin) return undefined;
     const from = hostnameOf(origin);
     const sameHost = !!host && origin.toLowerCase().replace(/^https?:\/\//, "") === host;
-    if (!from || !(sameHost || isLoopback(from) || listed(from))) return `Requests from ${origin} are refused.`;
+    if (!from || !(sameHost || isLoopback(from) || listed(from) || corsMatch(req))) return `Requests from ${origin} are refused.`;
     return undefined;
   };
   const tokenOk = (header: string | null) => {
@@ -194,7 +220,7 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
     return json({ path, name: basename(path), parent: insideRoots(parent) && parent !== path ? parent : null, dirs });
   }
 
-  return async function handle(req: Request): Promise<Response> {
+  async function handleRequest(req: Request): Promise<Response> {
     const url = new URL(req.url);
     let path = url.pathname;
     if (base) {
@@ -269,5 +295,16 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
       const status = err instanceof FunnelError ? (err.code === "invalid-selection" ? 400 : 409) : 500;
       return json({ error: err instanceof Error ? err.message : String(err), code: (err as FunnelError).code }, status);
     }
+  }
+
+  return async function handle(req: Request): Promise<Response> {
+    if (!corsMatch(req)) return handleRequest(req);
+    const headers = { "access-control-allow-origin": cors!, vary: "Origin" };
+    // A preflight carries no credentials, so it is answered before the token check. It reveals nothing.
+    if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: { ...headers, ...CORS_ALLOW } });
+    const res = await handleRequest(req);
+    const merged = new Headers(res.headers);
+    for (const [k, v] of Object.entries(headers)) merged.set(k, v);
+    return new Response(res.body, { status: res.status, headers: merged });
   };
 }

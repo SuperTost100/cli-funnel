@@ -11,6 +11,7 @@
 - [Run options](docs/run-options.md): system prompt, images, JSON schema answers, output limit, and access `none`
 - [Sign-in and updates](docs/auth-and-updates.md)
 - [UI components](docs/ui.md): React hooks, picker, login panel, approvals
+- [Run the server](docs/serve.md): config file, folders, CORS, tailnet deploy
 - [OpenAI compatibility](docs/openai-compat.md)
 - [API keys](docs/api-keys.md)
 - [MCP server](docs/mcp.md): `cli-funnel mcp` on stdio, tools list_providers, list_models and run, access capped by `--max-access`
