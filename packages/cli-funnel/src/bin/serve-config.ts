@@ -14,10 +14,15 @@ export interface ServeConfig extends Pick<HandlerOptions, "basePath" | "token" |
   /** Access level for the OpenAI-compatible endpoints. Same as `openai.access`. */
   access?: AccessLevel;
   openaiCompatible?: OpenAICompatibleEndpoint[];
+  /** Append one JSON line per run to this file. */
+  logJsonl?: string;
+  /** Add the prompt and the answer text to each log line. */
+  logContent?: boolean;
 }
 
 const KEYS = [
   "port", "host", "cwd", "access", "token", "allowedHosts", "tailscale", "fsRoots", "approvalTimeoutSec", "cors", "basePath", "openai", "openaiCompatible",
+  "logJsonl", "logContent",
 ] as const;
 
 const isStrings = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
@@ -57,11 +62,14 @@ export function parseServeConfig(raw: unknown, path: string): ServeConfig {
   need("basePath", typeof raw.basePath === "string", "a string");
   need("openai", isObject(raw.openai), "an object with cwd and access");
   need("openaiCompatible", Array.isArray(raw.openaiCompatible), "a list of { id, name, baseUrl, apiKey?, models? }");
+  need("logJsonl", typeof raw.logJsonl === "string" && raw.logJsonl !== "", "a file path");
+  need("logContent", typeof raw.logContent === "boolean", "true or false");
   const config = raw as ServeConfig;
   const dir = dirname(resolve(path));
   const abs = (p: string) => resolve(dir, p);
   if (config.fsRoots) config.fsRoots = config.fsRoots.map(abs);
   if (config.cwd) config.cwd = abs(config.cwd);
+  if (config.logJsonl) config.logJsonl = abs(config.logJsonl);
   if (config.openai?.cwd) config.openai = { ...config.openai, cwd: abs(config.openai.cwd) };
   return config;
 }
@@ -75,9 +83,13 @@ export interface ServeFlags {
   "fs-root"?: string[];
   "approval-timeout"?: string;
   cors?: string;
+  "log-jsonl"?: string;
+  "log-content"?: boolean;
 }
 
 export interface ServeSettings {
+  /** Where to write the run log, and whether lines carry the prompt and text. */
+  log?: { file: string; content: boolean };
   host: string;
   port: number;
   token?: string;
@@ -106,10 +118,14 @@ export function resolveServe(flags: ServeFlags, config: ServeConfig, env: NodeJS
   const timeout = flags["approval-timeout"] !== undefined ? positive("--approval-timeout", flags["approval-timeout"]) : config.approvalTimeoutSec;
   const port = flags.port !== undefined ? Number(flags.port) : config.port ?? 4747;
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new UsageError(`--port must be a port number, got "${flags.port}".`);
+  const logFile = flags["log-jsonl"] ?? config.logJsonl;
+  const logContent = flags["log-content"] ?? config.logContent ?? false;
+  if (logContent && !logFile) throw new UsageError("--log-content needs --log-jsonl, since it only adds fields to that log.");
   return {
     host: flags.host ?? config.host ?? "127.0.0.1",
     port,
     token,
+    log: logFile ? { file: logFile, content: logContent } : undefined,
     handler: {
       basePath: config.basePath,
       token,

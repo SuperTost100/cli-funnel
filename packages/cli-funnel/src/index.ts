@@ -12,3 +12,4 @@ export {
   type OpenAICompatibleEndpoint,
 } from "./providers/openai-compatible.js";
 export { fileHistory, memoryHistory } from "./providers/history.js";
+export { jsonlRunLog, redact, type JsonlRunLogOptions } from "./run-log.js";

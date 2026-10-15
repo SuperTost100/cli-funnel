@@ -148,6 +148,7 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
     const runId = `run_${++seq}_${Date.now().toString(36)}`;
     const timeoutMs = (options.approvalTimeoutSec ?? 300) * 1000;
     const input: RunInput = {
+      runId,
       selection: body.selection,
       prompt: body.prompt,
       system: body.system,

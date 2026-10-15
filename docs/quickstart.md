@@ -52,6 +52,18 @@ for await (const event of stream) {
 const result = await stream.result;
 ```
 
+## Watch runs
+
+Pass `onEvent` to see every event of every run, with its run id, provider, model and timestamp. Use it for metrics or an audit trail:
+
+```ts
+const funnel = createFunnel({
+  onEvent: ({ runId, provider, event }) => console.log(runId, provider, event.type),
+});
+```
+
+It is never awaited and cannot break a run. `jsonlRunLog` writes one line per run to a file. See [Log runs](serve.md#log-runs) for the fields and what is left out by default.
+
 ## Run from a terminal
 
 ```bash

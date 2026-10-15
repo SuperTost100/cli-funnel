@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { createFunnel } from "../funnel.js";
 import { createMcpServer, serveStdio } from "../mcp/server.js";
+import { jsonlRunLog } from "../run-log.js";
 import { createHandler } from "../server/handler.js";
 import { serveNode } from "../server/node.js";
 import { fileHistory } from "../providers/history.js";
@@ -37,8 +38,10 @@ const HELP = `cli-funnel <command>
                                Exits 1 when the run gives no text and does not finish with "stop".
   serve [--port 4747] [--host 127.0.0.1] [--cwd dir] [--access level] [--token secret]
         [--config file.json] [--fs-root dir]... [--approval-timeout seconds] [--cors origin]
+        [--log-jsonl file] [--log-content]
                                HTTP API, SSE streaming and OpenAI-compatible /v1 endpoints.
                                Flags beat the config file, the file beats the environment. See docs/serve.md.
+                               --log-jsonl appends one line per run: ids, timing, usage, no text. --log-content adds the prompt and text.
   mcp [--max-access ${ACCESS_LEVELS.join("|")}] [--fs-root dir]... [--cwd dir]
                                MCP server on stdio. Tools: list_providers, list_models, run.
                                --max-access caps what a run may ask for (default none).
@@ -69,6 +72,8 @@ const { values, positionals } = parseArgs({
     config: { type: "string" },
     "approval-timeout": { type: "string" },
     cors: { type: "string" },
+    "log-jsonl": { type: "string" },
+    "log-content": { type: "boolean" },
     json: { type: "boolean" },
     quiet: { type: "boolean" },
     image: { type: "string", multiple: true },
@@ -95,6 +100,14 @@ function loadServeConfig() {
 }
 const serveConfig = loadServeConfig();
 
+function resolveServeOrExit() {
+  try {
+    return resolveServe(values, serveConfig, process.env, { cwd: process.cwd(), home: homedir() });
+  } catch (err) {
+    return usageExit(err);
+  }
+}
+
 function openaiCompatible(): OpenAICompatibleEndpoint[] | undefined {
   if (serveConfig.openaiCompatible) return serveConfig.openaiCompatible;
   const raw = process.env.CLI_FUNNEL_OPENAI_COMPATIBLE;
@@ -111,7 +124,14 @@ function openaiCompatible(): OpenAICompatibleEndpoint[] | undefined {
 
 // Conversations with the API providers, Ollama and OpenAI-compatible servers, so --session works across commands.
 const sessions = join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "cli-funnel", "sessions");
-const funnel = createFunnel({ openaiCompatible: openaiCompatible(), history: fileHistory(sessions) });
+const serveSettings = positionals[0] === "serve" ? resolveServeOrExit() : undefined;
+// Keys and the server token never reach the log.
+const logSecrets = [serveSettings?.token, ...(serveConfig.openaiCompatible ?? []).map((e) => e.apiKey), process.env.ANTHROPIC_API_KEY, process.env.OPENAI_API_KEY, process.env.GEMINI_API_KEY];
+const funnel = createFunnel({
+  openaiCompatible: openaiCompatible(),
+  history: fileHistory(sessions),
+  onEvent: serveSettings?.log && jsonlRunLog(serveSettings.log.file, { content: serveSettings.log.content, secrets: logSecrets }),
+});
 const [command, providerArg, ...rest] = positionals;
 const out = (s: string) => process.stdout.write(s + "\n");
 /** Prints a usage error on stderr and exits with 2. */
@@ -314,12 +334,7 @@ async function main() {
   }
 
   if (command === "serve") {
-    let settings;
-    try {
-      settings = resolveServe(values, serveConfig, process.env, { cwd: process.cwd(), home: homedir() });
-    } catch (err) {
-      return usageExit(err);
-    }
+    const settings = serveSettings!;
     const { port, token } = settings;
     // [::1] is how an IPv6 address is written in a URL. The socket wants it without brackets.
     const host = settings.host.replace(/^\[(.*)\]$/, "$1");

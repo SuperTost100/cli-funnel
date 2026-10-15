@@ -129,6 +129,25 @@ export type FunnelEvent =
   | { type: "done"; text: string; finishReason: FinishReason }
   | { type: "error"; message: string; code?: string };
 
+/** What `createFunnel({ onEvent })` receives for every event of a run. */
+export interface RunEventRecord {
+  runId: string;
+  provider: ProviderId;
+  /** The model that was asked for. The `session` event may name the one that answered. */
+  model: string;
+  selection: Selection;
+  /**
+   * The prompt of the run, repeated on every record. It is the user's text, so do not store it
+   * unless the user agreed to that. The built-in JSONL log leaves it out by default.
+   */
+  prompt: string;
+  /** Epoch milliseconds when the run started. */
+  startedAt: number;
+  /** Epoch milliseconds when this event was seen. */
+  time: number;
+  event: FunnelEvent;
+}
+
 /** What `funnel.run()` resolves to. Shaped like an API response. */
 export interface RunResult {
   text: string;
@@ -161,6 +180,8 @@ export interface RunInput {
   /** Continue an earlier conversation. Use the `sessionId` from a previous result. */
   sessionId?: string;
   signal?: AbortSignal;
+  /** Names the run in `onEvent` records and logs. Default: generated. The HTTP server passes the id it sends to clients. */
+  runId?: string;
   /** Called for each tool call that needs approval. Required when `selection.access` is "supervised". */
   onApproval?: (request: ApprovalRequest) => Promise<ApprovalDecision> | ApprovalDecision;
   /** Extra environment for the CLI process. */

@@ -21,6 +21,8 @@ By default it listens on `127.0.0.1:4747` and answers only requests that come fr
 | `--fs-root <dir>` | home folder and `--cwd` | Folder that runs may use as their project folder and the folder picker may browse. Repeat it for more. |
 | `--approval-timeout <seconds>` | `300` | How long a `supervised` run waits for an answer before the request is denied. |
 | `--cors <origin>` | off | One web origin that may call the API from a browser. See [CORS](#cors). |
+| `--log-jsonl <file>` | off | Append one JSON line per run to the file. See [Log runs](#log-runs). |
+| `--log-content` | off | Add the prompt and the answer text to each log line. Needs `--log-jsonl`. |
 
 `--fs-root` replaces the home folder default. Set it whenever the server is reachable by anyone else. A run whose `cwd` is outside every root is refused with 403, and symlinks are resolved before the check.
 
@@ -35,6 +37,7 @@ By default it listens on `127.0.0.1:4747` and answers only requests that come fr
 | `fsRoots` | `--fs-root`, as a list |
 | `approvalTimeoutSec` | `--approval-timeout` |
 | `cors` | `--cors` |
+| `logJsonl`, `logContent` | `--log-jsonl`, `--log-content` |
 | `allowedHosts` | `CLI_FUNNEL_ALLOWED_HOSTS`, as a list |
 | `tailscale` | `false` stops accepting `*.ts.net` hosts from `tailscale serve` |
 | `basePath` | Path prefix for every route, such as `/funnel` |
@@ -80,6 +83,59 @@ npx cli-funnel serve --token "$TOKEN" --cors https://app.example.com
 The option takes one origin, written as the browser sends it: scheme, host and a port when it is not the default. A wildcard and a path are rejected at startup. For that origin the server answers the preflight request, which needs no token, and adds `Access-Control-Allow-Origin` to every response, including errors. Other origins get no CORS headers.
 
 The origin check stays on. A page on any other origin is still refused when there is no token, and the `Host` check still applies to requests from the configured one. Set a token whenever you set `cors`, since the origin only says which page called, not who is using it.
+
+## Log runs
+
+`--log-jsonl` appends one JSON line to a file when a run ends, whether it came through the API or the `/v1` endpoints:
+
+```bash
+npx cli-funnel serve --log-jsonl ~/.local/state/cli-funnel/runs.jsonl
+```
+
+```json
+{"time":"2026-10-15T20:10:03.412Z","runId":"run_3_mgq1x8","provider":"claude","model":"claude-sonnet-5","effort":"high","access":"accept-edits","cwd":"/home/you/code","sessionId":"9f3c...","startedAt":"2026-10-15T20:09:58.101Z","durationMs":5311,"finishReason":"stop","usage":{"inputTokens":1210,"outputTokens":284,"totalTokens":1494},"toolCalls":3,"tools":{"Read":2,"Bash":1},"deniedActions":[]}
+```
+
+| Field | Meaning |
+|---|---|
+| `time`, `startedAt`, `durationMs` | End and start of the run as ISO timestamps, and the difference in milliseconds. |
+| `runId` | The id the API sends to the client in its first event. |
+| `provider`, `model`, `effort`, `fast`, `contextWindow`, `access`, `cwd` | The selection. `model` is the one that answered when the CLI reports it. |
+| `sessionId` | The session to continue the conversation. |
+| `finishReason` | `stop`, `cancelled`, `denied`, `length` or `error`. |
+| `usage` | Token counts and, when the CLI reports it, `costUsd`. |
+| `toolCalls`, `tools` | Number of tool calls, and calls per tool name. Tool inputs and outputs are never logged. |
+| `deniedActions` | Names of tool calls that were refused. |
+| `error` | `message` and `code` of a failed run. Only on failed runs. |
+| `prompt`, `text` | The prompt and the answer. Only with `--log-content`. |
+
+Prompts and answers are off by default, because they are the user's text and often hold code and secrets. Add `--log-content` only when the people using the server know it is on. The file is created with mode 600, and its folder is created when missing. A line that cannot be written is reported once on stderr and does not affect the run.
+
+Keys and tokens never appear. The server's token, the `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `GEMINI_API_KEY` values, and the keys in `openaiCompatible` are masked wherever they would show up, and so are strings shaped like API keys, which matters for `error.message` and for `prompt` and `text`. Masking cannot know every secret a user pastes into a prompt, which is one more reason to leave content off.
+
+### From code
+
+`createFunnel({ onEvent })` is the hook behind this. It is called with every event of every run:
+
+```ts
+import { createFunnel, jsonlRunLog } from "cli-funnel";
+
+const funnel = createFunnel({
+  onEvent: (record) => metrics.count(record.provider, record.event.type),
+});
+
+// or the same file log the server writes:
+const logged = createFunnel({ onEvent: jsonlRunLog("runs.jsonl", { content: false }) });
+```
+
+| `record` field | Meaning |
+|---|---|
+| `runId`, `provider`, `model`, `selection` | Which run, and what it was asked to use. Pass `runId` in the run input to pick your own id. |
+| `startedAt`, `time` | Epoch milliseconds for the start of the run and for this event. |
+| `event` | The same event the stream yields. |
+| `prompt` | The prompt, repeated on every record. Do not store it without the user's consent. |
+
+`onEvent` is not awaited, and an error or rejection inside it is ignored. A slow async handler cannot hold up the stream. A synchronous one still runs on the event loop, so keep it short. A run that fails before the CLI starts, for example on an unknown model, gets an `error` event, so every run ends with a `done` or an `error` record.
 
 ## Run it on a tailnet
 
