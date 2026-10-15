@@ -50,6 +50,8 @@ The response carries `x_funnel.sessionId`, `toolCalls` and `deniedActions`. A st
 
 The folder is checked against the server's `fsRoots` on every request, the default one included. Providers with no access levels (Ollama, API providers, OpenAI-compatible servers) ignore it.
 
+`x_funnel.runId` names the run. A streaming response has it in the first chunk. `POST /runs/<runId>/cancel` stops the run, as described in [Run options](run-options.md#cancel-a-run).
+
 ## Limits
 
 The OpenAI wire format has no approve button. Requests to this endpoint therefore deny anything that needs approval, and `supervised` behaves as deny-by-default. Use `accept-edits`, `auto` or `full` here, or use the `/run` route and `useRun` when a human should approve actions.

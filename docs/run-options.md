@@ -88,3 +88,21 @@ Cursor Agent and Antigravity have no flag that removes tools. Their read-only mo
 - Antigravity: `.agents/hooks.json` with a `PreToolUse` hook that answers `deny` for every tool except `finish`, which carries the `--json-schema` answer. A deny beats an `allow` from any other hook, and a hook that fails also blocks the call.
 
 The model still sees its tools and may try one. The call fails, shows up in `result.deniedActions`, and the model answers in text. Neither CLI drops the tool definitions, so the token count does not go down. Antigravity still starts MCP servers from the user's config, but every call to them is refused. Project files such as `AGENTS.md` are not loaded, since the run does not happen in `cwd`. See [Access levels](access-levels.md).
+
+## Cancel a run
+
+In the library, abort the `signal` you passed to `stream()` or `run()`. The provider stops and the stream ends with `done` and `finishReason: "cancelled"`.
+
+Over HTTP, the first event on `/run` is `{ type: "run", runId }`. Cancel the run with:
+
+```bash
+curl -X POST http://127.0.0.1:4747/runs/<runId>/cancel
+```
+
+The server stops the provider and answers any approval the run is waiting on with `deny`. The stream then ends with `done` and `finishReason: "cancelled"`. A run id the server does not know, or one that has already finished, gets a 404.
+
+From the browser client, call `client.cancelRun(runId)`. `useRun().cancel()` calls it and also closes the local stream.
+
+Chat completions report the id in `x_funnel.runId`. A streaming response carries it in the first chunk, so an SDK client can cancel while the answer is still coming. The same route works for both.
+
+Closing the connection still cancels the run, as before.

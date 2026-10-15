@@ -14,7 +14,7 @@ import {
   type Selection,
 } from "../types.js";
 import { BodyError, DEFAULT_MAX_BODY_BYTES, readJson } from "./body.js";
-import { handleOpenAI, type OpenAIDefaults } from "./openai.js";
+import { handleOpenAI, type OpenAIDefaults, type TrackedRun } from "./openai.js";
 import { json, sse, sseHeaders } from "./sse.js";
 
 export interface HandlerOptions {
@@ -104,7 +104,17 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
   const approvals = new Map<string, PendingApproval>();
   const earlyDecisions = new Map<string, ApprovalDecision>();
   const logins = new Map<string, LoginSession>();
+  // One controller per live run, so POST /runs/:id/cancel can stop it.
+  const runs = new Map<string, AbortController>();
   let seq = 0;
+
+  /** Registers a run under a new id. Its signal aborts when the request closes or the run is cancelled. */
+  const startRun = (requestSignal: AbortSignal): TrackedRun => {
+    const id = `run_${++seq}_${Date.now().toString(36)}`;
+    const controller = new AbortController();
+    runs.set(id, controller);
+    return { id, signal: AbortSignal.any([requestSignal, controller.signal]), end: () => runs.delete(id) };
+  };
 
   const cors = options.cors === undefined ? undefined : corsOrigin(options.cors);
   const corsMatch = (req: Request) => !!cors && req.headers.get("origin")?.toLowerCase() === cors;
@@ -157,7 +167,8 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
     if ((!provider || provider.capabilities.access.length > 0) && !cwdAllowed(body.selection?.cwd ?? "")) {
       return json({ error: "cwd does not exist or is outside the allowed roots. Set fsRoots on the handler." }, 403);
     }
-    const runId = `run_${++seq}_${Date.now().toString(36)}`;
+    const tracked = startRun(req.signal);
+    const runId = tracked.id;
     const timeoutMs = (options.approvalTimeoutSec ?? 300) * 1000;
     // Approvals this run is waiting on. An aborted or finished run answers them with deny, so nothing outlives it.
     const pending = new Set<string>();
@@ -168,7 +179,8 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
       over = true;
       for (const key of [...pending]) approvals.get(key)?.resolve("deny");
     };
-    req.signal.addEventListener("abort", settleAll, { once: true });
+    // Closing the request and cancelling the run by id both abort this signal.
+    tracked.signal.addEventListener("abort", settleAll, { once: true });
     const input: RunInput = {
       runId,
       selection: body.selection,
@@ -178,10 +190,10 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
       responseSchema: body.responseSchema,
       maxOutputTokens: body.maxOutputTokens,
       sessionId: body.sessionId,
-      signal: req.signal,
+      signal: tracked.signal,
       onApproval: (request) =>
         new Promise<ApprovalDecision>((resolveDecision) => {
-          if (over || req.signal.aborted) return resolveDecision("deny");
+          if (over || tracked.signal.aborted) return resolveDecision("deny");
           const key = `${runId}:${request.id}`;
           const early = earlyDecisions.get(key);
           if (early) {
@@ -209,11 +221,16 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
         yield { type: "error", message: err instanceof Error ? err.message : String(err), code: (err as FunnelError).code };
       } finally {
         settleAll();
-        req.signal.removeEventListener("abort", settleAll);
+        tracked.signal.removeEventListener("abort", settleAll);
+        tracked.end();
       }
     })();
     // The generator may be blocked inside the provider, so a cancelled body settles the approvals itself.
-    return new Response(sse(events, { onCancel: settleAll }), { headers: sseHeaders });
+    const cancel = () => {
+      settleAll();
+      tracked.end();
+    };
+    return new Response(sse(events, { onCancel: cancel }), { headers: sseHeaders });
   }
 
   async function login(id: ProviderId, req: Request): Promise<Response> {
@@ -267,7 +284,7 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
       const seg = path.split("/").filter(Boolean);
       const m = req.method;
 
-      if (path.startsWith("/v1/")) return await handleOpenAI(funnel, req, path, openai, cwdAllowed, maxBody);
+      if (path.startsWith("/v1/")) return await handleOpenAI(funnel, req, path, openai, cwdAllowed, maxBody, startRun);
 
       if (m === "GET" && path === "/providers") return json(await funnel.overview());
       if (m === "GET" && path === "/fs") return await listDirs(url);
@@ -295,6 +312,13 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
           return json({ ok: true });
         }
         if (m === "POST" && seg[2] === "update") return json(await funnel.update(id));
+      }
+
+      if (m === "POST" && seg[0] === "runs" && seg[1] && seg[2] === "cancel" && !seg[3]) {
+        const controller = runs.get(seg[1]);
+        if (!controller) return json({ error: "Unknown run" }, 404);
+        controller.abort();
+        return json({ ok: true });
       }
 
       if (m === "POST" && seg[0] === "logins" && seg[1]) {

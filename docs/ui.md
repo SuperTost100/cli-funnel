@@ -107,7 +107,7 @@ const run = useRun(client);
 {run.approvals.map((r) => <ApprovalPrompt key={r.id} request={r} onDecide={run.approve} />)}
 ```
 
-`useRun` keeps the session id between calls, so the next `send` continues the conversation. `newConversation()` ends the run in flight and clears the session. Calling `send` during a run cancels that run first. Leaving the page cancels it too.
+`useRun` keeps the session id between calls, so the next `send` continues the conversation. `newConversation()` ends the run in flight and clears the session. `cancel()` stops the run on the server and closes the stream. Calling `send` during a run cancels that run first. Leaving the page cancels it too.
 
 `run.result` has `text`, `provider`, `model`, `sessionId`, `usage`, `finishReason`, `toolCalls`, `deniedActions` and `structured`. `provider` and `model` are the ones you passed to `send`, even if the picker has changed since. If `approve` fails, the prompt stays and `run.error` has the message, so the user can press the button again.
 

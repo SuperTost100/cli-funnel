@@ -102,6 +102,8 @@ export function createClient(options: ClientOptions) {
       events<RunEvent>("/run", input, signal),
     approve: (runId: string, approvalId: string, decision: ApprovalDecision) =>
       post(`/approvals/${runId}/${approvalId}`, { decision }),
+    /** Stops a run on the server. The run's stream ends with `done` and `finishReason: "cancelled"`. */
+    cancelRun: (runId: string) => post(`/runs/${encodeURIComponent(runId)}/cancel`),
   };
 }
 

@@ -408,7 +408,11 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
     return { ...out, structuredError: last?.structuredError };
   }, [events, started, turns]);
 
-  const cancel = useCallback(() => abort.current?.abort(), []);
+  // Stops the run on the server too. Closing the stream alone also stops it, but only once the server notices.
+  const cancel = useCallback(() => {
+    if (runId.current) void client.cancelRun(runId.current).catch(() => {});
+    abort.current?.abort();
+  }, [client]);
   // Starting over ends the run in flight, so its late events cannot bring the old session back.
   const reset = useCallback(() => {
     abort.current?.abort();
