@@ -14,7 +14,7 @@ A **provider** wraps one CLI. It knows the binary name, how to build flags from 
 
 A **selection** is one plain object with everything a user chooses: provider, model, reasoning effort, context window, fast mode, project folder and access level. Your UI produces it. You can also write it by hand and hardcode it. See [Selection](selection.md).
 
-An **event** is one step of a run: `session`, `text.delta`, `reasoning.delta`, `tool.start`, `tool.end`, `approval.request`, `usage`, `done`, `error`. Every provider emits the same events.
+An **event** is one step of a run: `session`, `text.delta`, `reasoning.delta`, `tool.start`, `tool.end`, `approval.request`, `usage`, `retry`, `done`, `error`. Every provider emits the same events.
 
 A **result** is what `funnel.run()` resolves to once the events are folded together. It is shaped like an API response.
 

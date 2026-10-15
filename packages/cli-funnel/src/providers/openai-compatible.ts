@@ -2,6 +2,7 @@ import { FunnelError, type AuthStatus, type EffortOption, type Installation, typ
 import { chatUserContent, streamChatCompletions, type Msg } from "./api.js";
 import { redact, redactErrors } from "../util/redact.js";
 import { runWithHistory } from "./history.js";
+import { mergeHeaders } from "./http.js";
 
 /** One OpenAI-compatible server: LM Studio, llama.cpp server, vLLM, a hosted gateway. */
 export interface OpenAICompatibleEndpoint {
@@ -13,6 +14,10 @@ export interface OpenAICompatibleEndpoint {
   baseUrl: string;
   /** Sent as a Bearer token. Leave it out for local servers that need none. */
   apiKey?: string;
+  /** Sent with every request, for example a gateway's own auth header. */
+  headers?: Record<string, string>;
+  /** Extra attempts after a 429 or 5xx before any output. Default 2. 0 turns retries off. */
+  retries?: number;
   /** Model ids to offer when the server has no working `/models` endpoint. Ignored when it lists models. */
   models?: string[];
   /**
@@ -46,7 +51,7 @@ export function createOpenAICompatibleProvider(endpoint: OpenAICompatibleEndpoin
   // Gateways sometimes take the key in the query string, so the URL is not safe to show.
   const shown = redact(base, [endpoint.apiKey]);
   const efforts: EffortOption[] = (endpoint.efforts ?? []).map((e) => ({ id: e, label: e.charAt(0).toUpperCase() + e.slice(1) }));
-  const headers = (): Record<string, string> => (endpoint.apiKey ? { authorization: `Bearer ${endpoint.apiKey}` } : {});
+  const headers = (): Record<string, string> => mergeHeaders(endpoint.apiKey ? { authorization: `Bearer ${endpoint.apiKey}` } : {}, endpoint.headers);
   const listing = (timeoutMs = PROBE_MS) => fetch(`${base}/models`, { headers: headers(), signal: AbortSignal.timeout(timeoutMs) }).catch(() => undefined);
   const notReachable = () => `${endpoint.name} is not reachable at ${shown}.`;
   const configured = (): ModelInfo[] =>
@@ -111,9 +116,9 @@ export function createOpenAICompatibleProvider(endpoint: OpenAICompatibleEndpoin
       const user: Msg = { role: "user", content: chatUserContent(input) };
       return redactErrors(
         runWithHistory(input, user, (text): Msg => ({ role: "assistant", content: text }), (messages) =>
-          streamChatCompletions({ baseUrl: base, key: endpoint.apiKey, maxTokensField: "max_tokens", label: endpoint.name }, input, messages),
+          streamChatCompletions({ baseUrl: base, key: endpoint.apiKey, headers: endpoint.headers, retry: { retries: endpoint.retries }, maxTokensField: "max_tokens", label: endpoint.name }, input, messages),
         ),
-        [endpoint.apiKey],
+        [endpoint.apiKey, ...Object.values(endpoint.headers ?? {})],
       );
     },
   };

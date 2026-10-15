@@ -205,6 +205,9 @@ export function createRunFolder(input: RunInput): RunFolder {
         case "usage":
           result.usage = e.usage;
           break;
+        case "retry":
+          result.retries = (result.retries ?? 0) + 1;
+          break;
         case "structured":
           result.structured = e.data;
           break;
