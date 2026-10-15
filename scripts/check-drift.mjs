@@ -1,19 +1,21 @@
 // Checks that every flag or subcommand cli-funnel depends on still shows up in the CLI's help output.
-// Skips CLIs that are not installed. Exits 1 when something disappeared.
+// The list is in drift-checks.mjs. Skips CLIs that are not installed, unless DRIFT_REQUIRE names them
+// (comma-separated ids), in which case a missing CLI counts as a failure. Exits 1 when something disappeared.
 import { spawnSync } from "node:child_process";
+import { CHECKS } from "./drift-checks.mjs";
 
-const CHECKS = {
-  claude: { bin: "claude", help: [[["--help"], ["--output-format", "--input-format", "--include-partial-messages", "--permission-mode", "--permission-prompt-tool", "--model", "--effort", "--resume", "--verbose"]], [["auth", "--help"], ["login", "logout", "status"]]] },
-  codex: { bin: "codex", help: [[["app-server", "--help"], ["generate-json-schema"]], [["login", "--help"], ["--device-auth", "status"]], [["debug", "--help"], ["models"]]] },
-  agent: { bin: "agent", help: [[["--help"], ["--output-format", "--stream-partial-output", "--model", "--list-models", "--force", "--auto-review", "--mode", "--workspace", "--trust", "--resume"]]] },
-  antigravity: { bin: "agy", help: [[["--help"], ["--output-format", "--model", "--effort", "--mode", "--conversation", "--dangerously-skip-permissions", "--print", "--input-format"]]] },
-};
+const required = (process.env.DRIFT_REQUIRE ?? "").split(",").map((s) => s.trim()).filter(Boolean);
 
 let missing = 0;
 for (const [id, { bin, help }] of Object.entries(CHECKS)) {
   const version = spawnSync(bin, ["--version"], { encoding: "utf8" });
   if (version.error) {
-    console.log(`${id}: not installed, skipped`);
+    if (required.includes(id)) {
+      console.log(`${id}: MISSING, "${bin}" is not installed but DRIFT_REQUIRE lists it`);
+      missing++;
+    } else {
+      console.log(`${id}: not installed, skipped (its flags were not checked)`);
+    }
     continue;
   }
   console.log(`${id}: ${(version.stdout + version.stderr).trim().split("\n")[0]}`);
