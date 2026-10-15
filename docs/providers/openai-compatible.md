@@ -22,6 +22,8 @@ await funnel.run({
 | `name` | Shown in pickers. |
 | `baseUrl` | What you would give an OpenAI SDK, usually ending in `/v1`. cli-funnel adds `/models` and `/chat/completions`. |
 | `apiKey` | Optional. Sent as `Authorization: Bearer`. |
+| `headers` | Optional. Sent with every request, for example a gateway's own auth header. |
+| `retries` | Optional. Extra attempts after a 429 or 5xx before any output. Default 2. See [API keys](../api-keys.md#retries). |
 | `models` | Optional. Used only when the server's `/models` fails or lists nothing. |
 | `efforts` | Optional. Levels the server accepts as `reasoning_effort`, for example `["low", "high"]`. A server cannot say which models reason, so they apply to every model of the endpoint. Without it the endpoint offers no effort. |
 

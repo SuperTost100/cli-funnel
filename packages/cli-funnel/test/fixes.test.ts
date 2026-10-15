@@ -62,7 +62,8 @@ describe("codex declines", () => {
 
 describe("API sessions", () => {
   afterEach(() => vi.unstubAllGlobals());
-  const provider = () => createApiProviders({ anthropic: "k" })["anthropic-api"];
+  // Retries are off so the failed turn is one request and not three.
+  const provider = () => createApiProviders({ anthropic: "k" }, { anthropic: { retries: 0 } })["anthropic-api"];
   const input = (over: Partial<RunInput> = {}): RunInput => ({
     selection: { provider: "anthropic-api", model: "claude-test", cwd: "/tmp", access: "full" },
     prompt: "Hi.",

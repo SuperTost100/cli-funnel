@@ -2,6 +2,7 @@ import { readSSE } from "../util/sse.js";
 import { redactErrors } from "../util/redact.js";
 import { anthropicAdaptive, anthropicEfforts, geminiEfforts, openaiEfforts } from "./efforts.js";
 import { runWithHistory } from "./history.js";
+import { fetchRetrying, mergeHeaders, type RetryOptions } from "./http.js";
 import {
   FunnelError,
   type ApiProviderId,
@@ -23,18 +24,66 @@ interface Turn {
   assistantContent?: unknown[];
 }
 
+/** Settings for one vendor, passed as `createFunnel({ api: { anthropic: {...} } })`. */
+export interface ApiVendorConfig {
+  /** The API key. Falls back to `apiKeys`, then to the vendor's environment variable. */
+  key?: string;
+  /**
+   * Where requests go, for a gateway or an enterprise proxy. Written like the vendor SDKs take it: the Anthropic
+   * default is `https://api.anthropic.com`, OpenAI's is `https://api.openai.com/v1` and Gemini's is
+   * `https://generativelanguage.googleapis.com/v1beta`. cli-funnel adds the path after it.
+   */
+  baseUrl?: string;
+  /** Sent with every request, after the default headers. A name that matches a default (any case) replaces it. */
+  headers?: Record<string, string>;
+  /** Extra attempts after a 429 or 5xx before any output. Default 2. 0 turns retries off. */
+  retries?: number;
+  /** First retry wait in milliseconds, doubled for each retry. Default 500. A `Retry-After` header wins. */
+  retryDelayMs?: number;
+}
+
+export interface ApiConfig {
+  anthropic?: ApiVendorConfig;
+  openai?: ApiVendorConfig;
+  gemini?: ApiVendorConfig;
+}
+
+/** What a vendor call needs besides the run input. */
+interface ApiContext {
+  baseUrl: string;
+  /** Auth and version headers plus the configured extras, with lowercase names. */
+  headers: Record<string, string>;
+  retry: RetryOptions;
+}
+
 interface ApiSpec {
   id: ApiProviderId;
   displayName: string;
   envVar: string;
   keyHint: string;
-  listModels(key: string): Promise<ModelInfo[]>;
-  stream(key: string, input: RunInput, messages: Msg[], turn: Turn): AsyncGenerator<FunnelEvent>;
+  defaultBaseUrl: string;
+  /** Prompt caching options the vendor takes. */
+  cache: boolean;
+  /** The headers that carry the key. */
+  authHeaders(key: string): Record<string, string>;
+  listModels(ctx: ApiContext): Promise<ModelInfo[]>;
+  stream(ctx: ApiContext, input: RunInput, messages: Msg[], turn: Turn): AsyncGenerator<FunnelEvent>;
   /** The user turn in this vendor's content format. */
   userContent(input: RunInput): string | unknown[];
 }
 
 const MODEL_BASE = { contextWindows: [], fast: false, source: "cli" as const };
+
+const EPHEMERAL = { type: "ephemeral" };
+
+/** A copy of the last message with a cache breakpoint on its last content block. Stored history stays untouched. */
+function cacheLast(messages: Msg[]): Msg[] {
+  const last = messages.at(-1);
+  if (!last) return messages;
+  const blocks = typeof last.content === "string" ? [{ type: "text", text: last.content }] : [...last.content];
+  blocks[blocks.length - 1] = { ...(blocks.at(-1) as object), cache_control: EPHEMERAL };
+  return [...messages.slice(0, -1), { ...last, content: blocks }];
+}
 
 /** The Messages request body. */
 export function anthropicBody(input: RunInput, messages: Msg[]): Record<string, unknown> {
@@ -48,14 +97,14 @@ export function anthropicBody(input: RunInput, messages: Msg[]): Record<string, 
     model,
     max_tokens: input.maxOutputTokens ?? 8192,
     stream: true,
-    ...(input.system ? { system: input.system } : {}),
+    ...(input.system ? { system: input.cache ? [{ type: "text", text: input.system, cache_control: EPHEMERAL }] : input.system } : {}),
     // The newest models hide thinking text unless `display` asks for it. Effort turns thinking on where it is off by default.
     ...(effort && anthropicAdaptive(model) ? { thinking: { type: "adaptive", display: "summarized" } } : {}),
     ...(Object.keys(outputConfig).length ? { output_config: outputConfig } : {}),
     ...(sampling?.temperature !== undefined ? { temperature: sampling.temperature } : {}),
     ...(sampling?.topP !== undefined ? { top_p: sampling.topP } : {}),
     ...(sampling?.stop?.length ? { stop_sequences: sampling.stop } : {}),
-    messages,
+    messages: input.cache ? cacheLast(messages) : messages,
   };
 }
 
@@ -64,14 +113,15 @@ const anthropic: ApiSpec = {
   displayName: "Anthropic API",
   envVar: "ANTHROPIC_API_KEY",
   keyHint: "console.anthropic.com",
-  async listModels(key) {
+  defaultBaseUrl: "https://api.anthropic.com",
+  cache: true,
+  authHeaders: (key) => ({ "x-api-key": key, "anthropic-version": "2023-06-01" }),
+  async listModels(ctx) {
     const out: ModelInfo[] = [];
     let after = "";
     // The list is short today, but it is paged, so follow `has_more`. The cap stops a server that never ends.
     for (let page = 0; page < 20; page++) {
-      const res = await fetch(`https://api.anthropic.com/v1/models?limit=1000${after ? `&after_id=${encodeURIComponent(after)}` : ""}`, {
-        headers: { "x-api-key": key, "anthropic-version": "2023-06-01" },
-      });
+      const res = await fetch(`${ctx.baseUrl}/v1/models?limit=1000${after ? `&after_id=${encodeURIComponent(after)}` : ""}`, { headers: ctx.headers });
       if (!res.ok) throw new FunnelError(`Anthropic API returned ${res.status}.`, "cli-failed");
       const body = (await res.json()) as { data: { id: string; display_name?: string }[]; has_more?: boolean; last_id?: string };
       for (const m of body.data) out.push({ id: m.id, name: m.display_name ?? m.id, provider: "anthropic-api", efforts: anthropicEfforts(m.id), ...MODEL_BASE });
@@ -80,13 +130,12 @@ const anthropic: ApiSpec = {
     }
     return out;
   },
-  async *stream(key, input, messages) {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      signal: input.signal,
-      headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: JSON.stringify(anthropicBody(input, messages)),
-    });
+  async *stream(ctx, input, messages) {
+    const res = yield* fetchRetrying(
+      `${ctx.baseUrl}/v1/messages`,
+      { method: "POST", signal: input.signal, headers: { ...ctx.headers, "content-type": "application/json" }, body: JSON.stringify(anthropicBody(input, messages)) },
+      ctx.retry,
+    );
     if (!res.ok) return yield { type: "error", message: `Anthropic API ${res.status}: ${await res.text()}`, code: "cli-failed" };
     let inTok = 0;
     let outTok = 0;
@@ -135,6 +184,9 @@ export interface ChatCompletionsOptions {
   /** Base URL that ends before `/chat/completions`, for example `https://api.openai.com/v1`. */
   baseUrl: string;
   key?: string;
+  /** Extra headers, sent after the defaults. */
+  headers?: Record<string, string>;
+  retry?: RetryOptions;
   /** Name of the output limit field. OpenAI uses `max_completion_tokens`, most other servers `max_tokens`. */
   maxTokensField: "max_completion_tokens" | "max_tokens";
   /** Prefix for error messages, for example "OpenAI API". */
@@ -150,32 +202,36 @@ const truncated = (label: string): FunnelEvent => ({ type: "error", message: `${
 export async function* streamChatCompletions(opts: ChatCompletionsOptions, input: RunInput, messages: Msg[]): AsyncGenerator<FunnelEvent> {
   let res: Response;
   try {
-    res = await fetch(`${opts.baseUrl}/chat/completions`, {
-      method: "POST",
-      signal: input.signal,
-      headers: { ...(opts.key ? { authorization: `Bearer ${opts.key}` } : {}), "content-type": "application/json" },
-      body: JSON.stringify({
-        model: input.selection.model,
-        // The system message is sent on every call and never stored in the session history.
-        messages: input.system ? [{ role: "system", content: input.system }, ...messages] : messages,
-        stream: true,
-        stream_options: { include_usage: true },
-        ...(input.maxOutputTokens ? { [opts.maxTokensField]: input.maxOutputTokens } : {}),
-        ...(input.selection.effort ? { reasoning_effort: input.selection.effort } : {}),
-        ...(input.sampling?.temperature !== undefined ? { temperature: input.sampling.temperature } : {}),
-        ...(input.sampling?.topP !== undefined ? { top_p: input.sampling.topP } : {}),
-        ...(input.sampling?.stop?.length ? { stop: input.sampling.stop } : {}),
-        ...(input.sampling?.seed !== undefined ? { seed: input.sampling.seed } : {}),
-        ...(input.responseSchema
-          ? {
-              response_format: {
-                type: "json_schema",
-                json_schema: { name: input.responseSchema.name ?? "response", schema: input.responseSchema.schema, ...(opts.strictSchema ? { strict: true } : {}) },
-              },
-            }
-          : {}),
-      }),
-    });
+    res = yield* fetchRetrying(
+      `${opts.baseUrl}/chat/completions`,
+      {
+        method: "POST",
+        signal: input.signal,
+        headers: mergeHeaders({ ...(opts.key ? { authorization: `Bearer ${opts.key}` } : {}), "content-type": "application/json" }, opts.headers),
+        body: JSON.stringify({
+          model: input.selection.model,
+          // The system message is sent on every call and never stored in the session history.
+          messages: input.system ? [{ role: "system", content: input.system }, ...messages] : messages,
+          stream: true,
+          stream_options: { include_usage: true },
+          ...(input.maxOutputTokens ? { [opts.maxTokensField]: input.maxOutputTokens } : {}),
+          ...(input.selection.effort ? { reasoning_effort: input.selection.effort } : {}),
+          ...(input.sampling?.temperature !== undefined ? { temperature: input.sampling.temperature } : {}),
+          ...(input.sampling?.topP !== undefined ? { top_p: input.sampling.topP } : {}),
+          ...(input.sampling?.stop?.length ? { stop: input.sampling.stop } : {}),
+          ...(input.sampling?.seed !== undefined ? { seed: input.sampling.seed } : {}),
+          ...(input.responseSchema
+            ? {
+                response_format: {
+                  type: "json_schema",
+                  json_schema: { name: input.responseSchema.name ?? "response", schema: input.responseSchema.schema, ...(opts.strictSchema ? { strict: true } : {}) },
+                },
+              }
+            : {}),
+        }),
+      },
+      opts.retry,
+    );
   } catch (err) {
     if (input.signal?.aborted) return yield { type: "done", text: "", finishReason: "cancelled" };
     return yield { type: "error", message: `${opts.label} is not reachable at ${opts.baseUrl}: ${String(err)}`, code: "cli-failed" };
@@ -264,8 +320,11 @@ const openai: ApiSpec = {
   displayName: "OpenAI API",
   envVar: "OPENAI_API_KEY",
   keyHint: "platform.openai.com",
-  async listModels(key) {
-    const res = await fetch("https://api.openai.com/v1/models", { headers: { authorization: `Bearer ${key}` } });
+  defaultBaseUrl: "https://api.openai.com/v1",
+  cache: false,
+  authHeaders: (key) => ({ authorization: `Bearer ${key}` }),
+  async listModels(ctx) {
+    const res = await fetch(`${ctx.baseUrl}/models`, { headers: ctx.headers });
     if (!res.ok) throw new FunnelError(`OpenAI API returned ${res.status}.`, "cli-failed");
     const body = (await res.json()) as { data: { id: string }[] };
     return body.data
@@ -273,12 +332,11 @@ const openai: ApiSpec = {
       .map((m) => ({ id: m.id, name: m.id, provider: "openai-api" as const, efforts: openaiEfforts(m.id), ...MODEL_BASE }))
       .sort((a, b) => a.id.localeCompare(b.id));
   },
-  stream: (key, input, messages) =>
-    streamChatCompletions({ baseUrl: "https://api.openai.com/v1", key, maxTokensField: "max_completion_tokens", label: "OpenAI API", strictSchema: true }, input, messages),
+  // The key is already in ctx.headers, so it is passed as a header and not as `key`.
+  stream: (ctx, input, messages) =>
+    streamChatCompletions({ baseUrl: ctx.baseUrl, headers: ctx.headers, retry: ctx.retry, maxTokensField: "max_completion_tokens", label: "OpenAI API", strictSchema: true }, input, messages),
   userContent: chatUserContent,
 };
-
-const GEMINI = "https://generativelanguage.googleapis.com/v1beta";
 
 /** Gemini ids that are aliases or models without text chat. Aliases like `gemini-flash-latest` break the versioned-id rule. */
 const GEMINI_SKIP = /latest|embedding|aqa|tts|image|imagen|veo|live|audio|robotics|computer-use/;
@@ -294,12 +352,15 @@ const gemini: ApiSpec = {
   displayName: "Gemini API",
   envVar: "GEMINI_API_KEY",
   keyHint: "aistudio.google.com",
-  async listModels(key) {
+  defaultBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
+  cache: true,
+  authHeaders: (key) => ({ "x-goog-api-key": key }),
+  async listModels(ctx) {
     const out: ModelInfo[] = [];
     let page = "";
     do {
-      const res = await fetch(`${GEMINI}/models?pageSize=1000${page ? `&pageToken=${encodeURIComponent(page)}` : ""}`, {
-        headers: { "x-goog-api-key": key },
+      const res = await fetch(`${ctx.baseUrl}/models?pageSize=1000${page ? `&pageToken=${encodeURIComponent(page)}` : ""}`, {
+        headers: ctx.headers,
       });
       if (!res.ok) throw new FunnelError(`Gemini API returned ${res.status}.`, "cli-failed");
       const body = (await res.json()) as {
@@ -315,28 +376,33 @@ const gemini: ApiSpec = {
     } while (page);
     return out.sort((a, b) => a.id.localeCompare(b.id));
   },
-  async *stream(key, input, messages, turn) {
-    const res = await fetch(`${GEMINI}/models/${encodeURIComponent(input.selection.model)}:streamGenerateContent?alt=sse`, {
-      method: "POST",
-      signal: input.signal,
-      headers: { "x-goog-api-key": key, "content-type": "application/json" },
-      body: JSON.stringify({
-        contents: messages.map((m) => ({
-          role: m.role === "assistant" ? "model" : "user",
-          parts: typeof m.content === "string" ? [{ text: m.content }] : m.content,
-        })),
-        ...(input.system ? { systemInstruction: { parts: [{ text: input.system }] } } : {}),
-        generationConfig: {
-          ...(input.maxOutputTokens ? { maxOutputTokens: input.maxOutputTokens } : {}),
-          ...(input.selection.effort ? { thinkingConfig: { thinkingLevel: input.selection.effort, includeThoughts: true } } : {}),
-          ...(input.sampling?.temperature !== undefined ? { temperature: input.sampling.temperature } : {}),
-          ...(input.sampling?.topP !== undefined ? { topP: input.sampling.topP } : {}),
-          ...(input.sampling?.stop?.length ? { stopSequences: input.sampling.stop } : {}),
-          ...(input.sampling?.seed !== undefined ? { seed: input.sampling.seed } : {}),
-          ...(input.responseSchema ? { responseMimeType: "application/json", responseJsonSchema: input.responseSchema.schema } : {}),
-        },
-      }),
-    });
+  async *stream(ctx, input, messages, turn) {
+    const res = yield* fetchRetrying(
+      `${ctx.baseUrl}/models/${encodeURIComponent(input.selection.model)}:streamGenerateContent?alt=sse`,
+      {
+        method: "POST",
+        signal: input.signal,
+        headers: { ...ctx.headers, "content-type": "application/json" },
+        body: JSON.stringify({
+          contents: messages.map((m) => ({
+            role: m.role === "assistant" ? "model" : "user",
+            parts: typeof m.content === "string" ? [{ text: m.content }] : m.content,
+          })),
+          ...(input.system ? { systemInstruction: { parts: [{ text: input.system }] } } : {}),
+          ...(input.cachedContent ? { cachedContent: input.cachedContent } : {}),
+          generationConfig: {
+            ...(input.maxOutputTokens ? { maxOutputTokens: input.maxOutputTokens } : {}),
+            ...(input.selection.effort ? { thinkingConfig: { thinkingLevel: input.selection.effort, includeThoughts: true } } : {}),
+            ...(input.sampling?.temperature !== undefined ? { temperature: input.sampling.temperature } : {}),
+            ...(input.sampling?.topP !== undefined ? { topP: input.sampling.topP } : {}),
+            ...(input.sampling?.stop?.length ? { stopSequences: input.sampling.stop } : {}),
+            ...(input.sampling?.seed !== undefined ? { seed: input.sampling.seed } : {}),
+            ...(input.responseSchema ? { responseMimeType: "application/json", responseJsonSchema: input.responseSchema.schema } : {}),
+          },
+        }),
+      },
+      ctx.retry,
+    );
     if (!res.ok) return yield { type: "error", message: `Gemini API ${res.status}: ${await res.text()}`, code: "cli-failed" };
     let usage: Record<string, number> | undefined;
     let stop = "STOP";
@@ -405,11 +471,19 @@ async function* settle(spec: ApiSpec, input: RunInput, stream: () => AsyncIterab
   }
 }
 
-function makeApiProvider(spec: ApiSpec, getKey: () => string | undefined): Provider {
-  const key = () => {
+function makeApiProvider(spec: ApiSpec, getKey: () => string | undefined, config: ApiVendorConfig = {}): Provider {
+  // A gateway that authenticates through its own headers needs no key.
+  const hasHeaders = !!config.headers && Object.keys(config.headers).length > 0;
+  const context = (): ApiContext => {
     const k = getKey() ?? process.env[spec.envVar];
-    if (!k) throw new FunnelError(`Set ${spec.envVar} (get a key at ${spec.keyHint}) or pass it to createFunnel({ apiKeys }).`, "not-logged-in");
-    return k;
+    if (!k && !hasHeaders) {
+      throw new FunnelError(`Set ${spec.envVar} (get a key at ${spec.keyHint}) or pass it to createFunnel({ apiKeys }).`, "not-logged-in");
+    }
+    return {
+      baseUrl: (config.baseUrl ?? spec.defaultBaseUrl).trim().replace(/\/+$/, ""),
+      headers: mergeHeaders(k ? spec.authHeaders(k) : {}, config.headers),
+      retry: { retries: config.retries, retryDelayMs: config.retryDelayMs },
+    };
   };
   return {
     id: spec.id,
@@ -426,9 +500,13 @@ function makeApiProvider(spec: ApiSpec, getKey: () => string | undefined): Provi
       system: "native",
       schema: "native",
       sampling: true,
+      cache: spec.cache,
     },
     detect: async () => ({ installed: true, testedRange: { min: "0" }, withinTestedRange: true }),
-    authStatus: async () => ({ loggedIn: !!(getKey() ?? process.env[spec.envVar]), method: "API key" }),
+    authStatus: async () => {
+      const hasKey = !!(getKey() ?? process.env[spec.envVar]);
+      return { loggedIn: hasKey || hasHeaders, method: hasKey ? "API key" : "Headers" };
+    },
     login() {
       return {
         async *[Symbol.asyncIterator]() {
@@ -442,15 +520,15 @@ function makeApiProvider(spec: ApiSpec, getKey: () => string | undefined): Provi
       throw new FunnelError(`Remove ${spec.envVar} from your environment to sign out.`, "unsupported");
     },
     update: async () => ({ changed: false, output: "API providers have nothing to update." }),
-    models: async () => spec.listModels(key()),
+    models: async () => spec.listModels(context()),
     run(input) {
       const user: Msg = { role: "user", content: spec.userContent(input) };
       const turn: Turn = {};
       return redactErrors(
         runWithHistory(input, user, (text): Msg => ({ role: "assistant", content: turn.assistantContent ?? text }), (messages) =>
-          settle(spec, input, () => spec.stream(key(), input, messages, turn)),
+          settle(spec, input, () => spec.stream(context(), input, messages, turn)),
         ),
-        [getKey() ?? process.env[spec.envVar]],
+        [getKey() ?? process.env[spec.envVar], ...Object.values(config.headers ?? {})],
       );
     },
   };
@@ -462,8 +540,9 @@ export interface ApiKeys {
   gemini?: string;
 }
 
-export const createApiProviders = (keys: ApiKeys = {}): Record<ApiProviderId, Provider> => ({
-  "anthropic-api": makeApiProvider(anthropic, () => keys.anthropic),
-  "openai-api": makeApiProvider(openai, () => keys.openai),
-  "gemini-api": makeApiProvider(gemini, () => keys.gemini),
+/** Keys in `config` win over `keys`. Both fall back to the vendor's environment variable. */
+export const createApiProviders = (keys: ApiKeys = {}, config: ApiConfig = {}): Record<ApiProviderId, Provider> => ({
+  "anthropic-api": makeApiProvider(anthropic, () => config.anthropic?.key ?? keys.anthropic, config.anthropic),
+  "openai-api": makeApiProvider(openai, () => config.openai?.key ?? keys.openai, config.openai),
+  "gemini-api": makeApiProvider(gemini, () => config.gemini?.key ?? keys.gemini, config.gemini),
 });

@@ -50,6 +50,8 @@ export interface Capabilities {
   schema: "native" | "prompt";
   /** True when the provider passes `RunInput.sampling` to the model. Runs that set `sampling` on other providers are refused. */
   sampling?: boolean;
+  /** True when the provider takes `RunInput.cache` or `RunInput.cachedContent`. Runs that set them on other providers are refused. */
+  cache?: boolean;
   /** True when `pullModel` and `deleteModel` work. Model servers such as Ollama. */
   manageModels?: boolean;
 }
@@ -126,6 +128,8 @@ export type FunnelEvent =
   /** A provider yields this, then awaits `onApproval` for the answer. */
   | { type: "approval.request"; request: ApprovalRequest }
   | { type: "usage"; usage: Usage }
+  /** An API provider got a 429 or 5xx before any output and will send the request again after `delayMs`. `attempt` counts retries from 1. */
+  | { type: "retry"; attempt: number; status: number; delayMs: number }
   /** The parsed answer when the provider reports structured output itself. */
   | { type: "structured"; data: unknown }
   | { type: "done"; text: string; finishReason: FinishReason }
@@ -139,6 +143,8 @@ export interface RunResult {
   sessionId?: string;
   usage?: Usage;
   finishReason: FinishReason;
+  /** How many times an API provider sent the request again after a 429 or 5xx. Absent when it did not. */
+  retries?: number;
   /** Tool calls the agent made, in order. */
   toolCalls: { id: string; name: string; input?: unknown; error?: string }[];
   /** Tool calls the CLI refused because nobody could approve them. */
@@ -172,6 +178,10 @@ export interface RunInput {
   maxOutputTokens?: number;
   /** Temperature, top-p, stop sequences and seed. See `capabilities.sampling`. The vendor may reject values its models do not allow, for example a non-default temperature on recent Claude and OpenAI reasoning models. */
   sampling?: Sampling;
+  /** Anthropic API: mark the system prompt and the newest turn for prompt caching, so the next turn reads them from the cache. */
+  cache?: boolean;
+  /** Gemini API: the name of cached content to run against, for example `cachedContents/abc123`. */
+  cachedContent?: string;
   /** Continue an earlier conversation. Use the `sessionId` from a previous result. */
   sessionId?: string;
   signal?: AbortSignal;
