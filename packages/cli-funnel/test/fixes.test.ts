@@ -150,7 +150,8 @@ describe("agent process", () => {
     const pidFile = join(dir, "pid");
     writeFileSync(
       bin,
-      `#!/bin/sh\n[ "$1" = "--list-models" ] && exit 0\necho '{"type":"system","subtype":"init","session_id":"s1"}'\necho $$ > ${pidFile}\nexec sleep 30\n`,
+      // The pid goes first: once the session line is out, the caller may stop the CLI before its next line runs.
+      `#!/bin/sh\n[ "$1" = "--list-models" ] && exit 0\necho $$ > ${pidFile}\necho '{"type":"system","subtype":"init","session_id":"s1"}'\nexec sleep 30\n`,
     );
     chmodSync(bin, 0o755);
     process.env.CLI_FUNNEL_AGENT_BIN = bin;
