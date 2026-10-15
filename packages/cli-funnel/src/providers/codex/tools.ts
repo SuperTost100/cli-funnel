@@ -28,33 +28,45 @@ const TOOL_FEATURES = [
   "in_app_browser",
 ];
 
-const SERVER_HEADER = /^\s*\[mcp_servers\.(?:"([^"]+)"|([A-Za-z0-9_-]+))\]\s*$/gm;
+const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** MCP server names declared in a Codex config file. Only the table headers are read. */
-function declaredServers(file: string): string[] {
-  let text: string;
+/**
+ * The names in `names` that a Codex config file declares as MCP servers. TOML can spell a server key bare,
+ * double-quoted or single-quoted, in a `[mcp_servers.x]` header, a dotted `mcp_servers.x.command` key, or as a key
+ * under `[mcp_servers]` or in an inline `mcp_servers = { x = {...} }` table. The match is loose on purpose: a false
+ * positive makes Codex reject the override and the run fails, a false negative would let the server start.
+ */
+export function declaredServers(text: string, names: string[]): string[] {
+  const hasTable = /^\s*(?:\[\s*mcp_servers\s*\]|mcp_servers\s*=\s*\{)/m.test(text);
+  return names.filter((name) => {
+    const key = `(?:${escape(name)}|"${escape(name)}"|'${escape(name)}')`;
+    const dotted = new RegExp(`^\\s*\\[?\\s*mcp_servers\\s*\\.\\s*${key}\\s*[.=\\]]`, "m");
+    const nested = new RegExp(`(?:^|[{,])\\s*${key}\\s*[.=]`, "m");
+    return dotted.test(text) || (hasTable && nested.test(text));
+  });
+}
+
+function readConfig(file: string): string {
   try {
-    text = readFileSync(file, "utf8");
+    return readFileSync(file, "utf8");
   } catch {
-    return [];
+    return "";
   }
-  return [...text.matchAll(SERVER_HEADER)].map((m) => m[1] ?? m[2]!);
 }
 
 /**
  * Enabled MCP servers declared in the user's or the project's Codex config. Servers that plugins and
  * features add are left out: switching the feature off removes them, and an `enabled` override for a
  * server that no config file defines makes Codex reject the whole configuration.
+ * `env` is the run's environment, so a run pointed at another `CODEX_HOME` reads that home's servers.
  */
-async function configMcpServers(bin: string, cwd: string): Promise<string[]> {
-  const res = await exec(bin, ["mcp", "list", "--json"], { timeoutMs: 20_000 });
+async function configMcpServers(bin: string, cwd: string, env?: Record<string, string>): Promise<string[]> {
+  const res = await exec(bin, ["mcp", "list", "--json"], { cwd, env, timeoutMs: 20_000 });
   if (res.code !== 0) throw new Error(`codex mcp list failed: ${(res.stderr || res.stdout).trim().slice(0, 200)}`);
-  const enabled = new Set(
-    (JSON.parse(res.stdout) as { name: string; enabled?: boolean }[]).filter((s) => s.enabled !== false).map((s) => s.name),
-  );
-  const home = process.env.CODEX_HOME ?? join(homedir(), ".codex");
-  const declared = [...declaredServers(join(home, "config.toml")), ...declaredServers(join(cwd, ".codex", "config.toml"))];
-  return [...new Set(declared)].filter((name) => enabled.has(name));
+  const enabled = (JSON.parse(res.stdout) as { name: string; enabled?: boolean }[]).filter((s) => s.enabled !== false).map((s) => s.name);
+  const home = env?.CODEX_HOME ?? process.env.CODEX_HOME ?? join(homedir(), ".codex");
+  const text = readConfig(join(home, "config.toml")) + "\n" + readConfig(join(cwd, ".codex", "config.toml"));
+  return declaredServers(text, enabled);
 }
 
 /**
@@ -62,8 +74,8 @@ async function configMcpServers(bin: string, cwd: string): Promise<string[]> {
  * Measured: a one-line prompt drops from about 19,000 input tokens to about 11,900, and the model
  * reports no shell tool. Config MCP servers are switched off by name, since an empty table does not replace them.
  */
-export async function noToolsConfig(bin: string, cwd: string): Promise<Record<string, unknown>> {
-  const servers = await configMcpServers(bin, cwd);
+export async function noToolsConfig(bin: string, cwd: string, env?: Record<string, string>): Promise<Record<string, unknown>> {
+  const servers = await configMcpServers(bin, cwd, env);
   return Object.fromEntries([
     ...TOOL_FEATURES.map((f) => [`features.${f}`, false]),
     ["web_search", "disabled"],

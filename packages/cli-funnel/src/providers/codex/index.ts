@@ -122,7 +122,7 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
         sandbox: plan.sandbox,
         ...(sel.fast ? { serviceTier: "priority" } : {}),
         ...(input.system ? { developerInstructions: input.system } : {}),
-        ...(sel.access === "none" ? { config: await noToolsConfig(path, sel.cwd) } : {}),
+        ...(sel.access === "none" ? { config: await noToolsConfig(path, sel.cwd, input.env) } : {}),
       };
       const started = input.sessionId
         ? await rpc.request("thread/resume", { threadId: input.sessionId, ...settings })
