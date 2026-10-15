@@ -21,7 +21,7 @@ Runs use `agy --print=<prompt> --output-format stream-json` with stdin closed. L
 
 - `accept-edits` passes `--mode accept-edits`. Verified: file writes succeed in a workspace the user has already trusted in Antigravity (listed in `trustedWorkspaces` in `~/.gemini/antigravity-cli/settings.json`). In an untrusted directory such as a fresh `/tmp` folder the write is still denied. Trust the folder once in the interactive `agy` first.
 - `full` passes `--dangerously-skip-permissions`. Every tool runs without a check.
-- `auto` does not exist in `agy` and is not offered.
+- `auto` is not offered. `agy` 1.3.5 added `--mode auto`, but it is not available on every account. On an account without it, `agy` prints `warning: --mode auto is not available for this account; continuing in the default mode.` on stderr and runs in the default mode. cli-funnel cannot tell from the stream which mode ran, so it cannot promise the level. Tested on 1.3.5.
 
 That is not true of every shell command. On 1.2.13, a `touch` outside the workspace ran without a check both in the default print mode and with `--mode plan --sandbox`. `--mode plan` has no effect together with `--disable-slash-commands`, and the CLI prints a warning saying so. Neither mode can carry `none`.
 

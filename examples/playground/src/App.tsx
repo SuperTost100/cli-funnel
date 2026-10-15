@@ -40,7 +40,10 @@ export function App() {
         <section className="panel" aria-labelledby="setup">
           <h2 id="setup">Settings</h2>
           <FunnelPickerView client={client} state={state} />
-          <p className="hint">Default folder is <code>{__SANDBOX__}</code>, so test runs cannot touch your projects.</p>
+          <p className="hint">
+            Default folder is <code>{__SANDBOX__}</code>. Runs may still use any folder under your home directory, because the
+            playground server allows the whole home directory. To narrow it, change <code>fsRoots</code> in <code>server.mjs</code>.
+          </p>
 
           <h2>Accounts</h2>
           <div className="accounts">

@@ -4,7 +4,7 @@ A selection describes one run. It is plain JSON, so you can store it, send it ov
 
 ```ts
 interface Selection {
-  provider: "claude" | "codex" | "agent" | "antigravity";
+  provider: ProviderId;   // see below
   model: string;          // concrete id, for example "claude-sonnet-5"
   effort?: string;        // one of the model's efforts
   contextWindow?: number; // tokens, one of the model's contextWindows
@@ -13,6 +13,15 @@ interface Selection {
   access: "none" | "supervised" | "accept-edits" | "auto" | "full";
 }
 ```
+
+`provider` is one of:
+
+- the CLI providers `claude`, `codex`, `agent` and `antigravity`,
+- the API providers `anthropic-api`, `openai-api` and `gemini-api`, see [API keys](api-keys.md),
+- `ollama`, see [Ollama](providers/ollama.md),
+- `openai-compatible:<id>` for each server passed in `createFunnel({ openaiCompatible })`, see [OpenAI-compatible servers](providers/openai-compatible.md).
+
+Providers without machine access (everything except the four CLIs) list no access levels. For them `cwd` is not checked and `access` only has to be a known level.
 
 ## Where model lists come from
 
