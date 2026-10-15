@@ -71,13 +71,19 @@ describe("approvals of an aborted run (#59)", () => {
   function supervised() {
     let settle!: (d: ApprovalDecision) => void;
     const decision = new Promise<ApprovalDecision>((r) => (settle = r));
+    // The provider asks only once the stream pulls past the approval event. Cancelling earlier closes it at the
+    // yield, and then there is nothing to deny, so the tests wait for the question before they cancel.
+    let markAsked!: () => void;
+    const asked = new Promise<void>((r) => (markAsked = r));
     const provider = scripted("claude", async function* (input) {
       const request = { id: "a1", tool: "Bash", input: {} };
       yield { type: "approval.request", request };
-      settle(await input.onApproval!(request));
+      const answer = input.onApproval!(request);
+      markAsked();
+      settle(await answer);
       yield done();
     });
-    return { provider, decision };
+    return { provider, decision, asked };
   }
   const startRun = (post: ReturnType<typeof setup>["post"], signal: AbortSignal) =>
     post("/run", { selection: { provider: "claude", model: "m1", cwd: root, access: "supervised" }, prompt: "go" }, { signal });
@@ -95,20 +101,22 @@ describe("approvals of an aborted run (#59)", () => {
   }
 
   it("denies the pending approval when the request aborts", async () => {
-    const { provider, decision } = supervised();
+    const { provider, decision, asked } = supervised();
     const { post } = setup(provider);
     const ac = new AbortController();
     const res = await startRun(post, ac.signal);
     await readUntil(res, "approval.request");
+    await timeout(asked, 1000, "the provider to ask");
     ac.abort();
     expect(await timeout(decision, 1000, "the approval to settle")).toBe("deny");
   });
 
   it("denies the pending approval when the response body is cancelled", async () => {
-    const { provider, decision } = supervised();
+    const { provider, decision, asked } = supervised();
     const { post } = setup(provider);
     const res = await startRun(post, new AbortController().signal);
     const reader = await readUntil(res, "approval.request");
+    await timeout(asked, 1000, "the provider to ask");
     await reader.cancel();
     expect(await timeout(decision, 1000, "the approval to settle")).toBe("deny");
   });
