@@ -130,6 +130,7 @@ const client = createClient({ baseUrl: "/api/funnel" });
 - [Sign-in and updates](docs/auth-and-updates.md)
 - [UI components](docs/ui.md)
 - [OpenAI compatibility](docs/openai-compat.md) and [API keys](docs/api-keys.md)
+- [MCP server](docs/mcp.md): call a provider as a tool from Claude Code, Codex or Cursor
 - Providers: [Claude Code](docs/providers/claude.md), [Codex](docs/providers/codex.md), [Cursor Agent](docs/providers/agent.md), [Antigravity](docs/providers/antigravity.md), [Ollama](docs/providers/ollama.md), [OpenAI-compatible servers](docs/providers/openai-compatible.md)
 - [Adding a provider](docs/adding-a-provider.md)
 - [Keeping up with CLI changes](docs/maintenance.md)
