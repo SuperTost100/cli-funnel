@@ -52,6 +52,44 @@ describe("codex events", () => {
     expect(usage.usage.totalTokens).toBe(19245 + 19273);
   });
 
+  it("keeps commentary out of the answer and the text stream", () => {
+    const { events } = replay("commentary.ndjson");
+    const done = events.at(-1) as Extract<FunnelEvent, { type: "done" }>;
+    expect(done.text).toBe('{"ok":true}');
+    const streamed = events.filter((e) => e.type === "text.delta").map((e) => (e as { text: string }).text).join("");
+    expect(streamed).toBe(done.text);
+    const reasoning = events.filter((e) => e.type === "reasoning.delta").map((e) => (e as { text: string }).text).join("");
+    expect(reasoning).toBe("Let me think.");
+  });
+
+  it("treats a message without a phase as answer text", () => {
+    const t = new Translator("a");
+    t.handle("item/started", { threadId: "a", item: { type: "agentMessage", id: "m", text: "", phase: null } });
+    expect(t.handle("item/agentMessage/delta", { threadId: "a", itemId: "m", delta: "hi" }).events).toEqual([{ type: "text.delta", text: "hi" }]);
+    t.handle("item/completed", { threadId: "a", item: { type: "agentMessage", id: "m", text: "hi" } });
+    expect(t.handle("turn/completed", { threadId: "a", turn: { status: "completed" } }).events[0]).toMatchObject({ type: "done", text: "hi" });
+  });
+
+  it("emits tool events for a web search", () => {
+    const { events } = replay("web-search.ndjson");
+    expect(events.find((e) => e.type === "tool.start")).toMatchObject({ id: "ws_1", name: "web_search" });
+    expect(events.find((e) => e.type === "tool.end")).toMatchObject({ id: "ws_1" });
+  });
+
+  it("emits tool events for an image view", () => {
+    const { events } = replay("image-view.ndjson");
+    expect(events.find((e) => e.type === "tool.start")).toMatchObject({ id: "iv_1", name: "image_view", input: { path: "/tmp/cf-codex-test/chart.png" } });
+    expect(events.find((e) => e.type === "tool.end")).toMatchObject({ id: "iv_1" });
+  });
+
+  it("emits tool events for a sub-agent call and reports a failed one", () => {
+    const { events } = replay("sub-agent.ndjson");
+    expect(events.find((e) => e.type === "tool.start")).toMatchObject({ id: "ca_1", name: "agent:spawnAgent", input: { prompt: "List the files in src." } });
+    expect(events.find((e) => e.type === "tool.end")).toMatchObject({ id: "ca_1" });
+    const t = new Translator("a");
+    expect(t.handle("item/completed", { threadId: "a", item: { type: "collabAgentToolCall", id: "x", status: "failed" } }).events[0]).toMatchObject({ type: "tool.end", error: "Agent call failed" });
+  });
+
   it("ignores other threads", () => {
     const t = new Translator("a");
     expect(t.handle("item/agentMessage/delta", { threadId: "b", delta: "x" }).events).toEqual([]);

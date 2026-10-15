@@ -69,7 +69,7 @@ describe("claude args", () => {
 describe("claude models", () => {
   it("lists concrete ids from the manifest", async () => {
     const models = await claudeProvider.models();
-    expect(models.map((m) => m.id)).toEqual(["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5", "claude-opus-4-6", "claude-haiku-4-5-20251001"]);
+    expect(models.map((m) => m.id)).toEqual(["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-sonnet-5", "claude-opus-4-6", "claude-haiku-5-5", "claude-haiku-4-5-20251001"]);
     expect(models.every((m) => !m.fast)).toBe(true);
     expect(models.find((m) => m.id === "claude-opus-4-6")).toMatchObject({ contextWindows: [200_000, 1_000_000], defaultContextWindow: 200_000 });
   });

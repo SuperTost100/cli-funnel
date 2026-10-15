@@ -16,9 +16,10 @@ Protocol flow:
 | App-server message | Funnel event |
 | --- | --- |
 | thread id from `thread/start` or `thread/resume` | `session` (`sessionId` is the thread id) |
-| `item/agentMessage/delta` | `text.delta` |
+| `item/agentMessage/delta` | `text.delta`, or `reasoning.delta` when the message's `phase` (from `item/started`) is `commentary` |
 | `item/reasoning/summaryTextDelta`, `item/reasoning/textDelta` | `reasoning.delta` |
-| `item/started` and `item/completed` for `commandExecution`, `fileChange`, `mcpToolCall`, `dynamicToolCall` | `tool.start`, `tool.end` |
+| `item/started` and `item/completed` for `commandExecution`, `fileChange`, `mcpToolCall`, `dynamicToolCall`, `webSearch`, `imageView`, `collabAgentToolCall` | `tool.start`, `tool.end` |
+| `item/completed` for an `agentMessage` | the text joins the answer unless its `phase` is `commentary` |
 | `item/commandExecution/requestApproval`, `item/fileChange/requestApproval`, `mcpServer/elicitation/request` | `approval.request`, then the reply to the server |
 | `thread/tokenUsage/updated` | `usage` (sum of the per-call `last` breakdown, so a resumed thread reports only this turn) |
 | `turn/completed` | `done` (`cancelled` when interrupted) or `error` when the turn failed |

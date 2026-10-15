@@ -33,7 +33,7 @@ describe("antigravity parser", () => {
     const models = parseModels(fx("models.txt"));
     const flash = models.find((m) => m.id === "gemini-3.8-flash")!;
     expect(flash.efforts.map((e) => e.id)).toEqual(["low", "medium", "high"]);
-    expect(models.find((m) => m.id === "gemini-3.1-pro")!.efforts.map((e) => e.id)).toEqual(["low", "high"]);
+    expect(parseModels("m-high\tM (High)\nm-low\tM (Low)\n")[0]!.efforts.map((e) => e.id)).toEqual(["low", "high"]);
     expect(models.find((m) => m.id === "claude-sonnet-4-6")!.efforts).toEqual([]);
     expect(models.find((m) => m.id === "gpt-oss-120b-medium")!.efforts).toEqual([]);
   });
@@ -116,6 +116,34 @@ describe("antigravity none", () => {
       if (old === undefined) delete process.env.XDG_CACHE_HOME;
       else process.env.XDG_CACHE_HOME = old;
     }
+  });
+});
+
+describe.skipIf(process.platform === "win32")("antigravity long schema", () => {
+  afterEach(() => {
+    delete process.env.CLI_FUNNEL_AGY_BIN;
+  });
+
+  it("passes a 200 KB schema as a private file and removes it after the run", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cf-agy-"));
+    const bin = join(dir, "agy");
+    const log = join(dir, "log");
+    // Records the --json-schema value, the file's size and the folder's mode, then answers.
+    writeFileSync(
+      bin,
+      `#!/bin/sh\nprev=""\nfor a in "$@"; do\n  if [ "$prev" = "--json-schema" ]; then echo "$a" > ${log}; wc -c < "$a" >> ${log}; stat -c %a "$(dirname "$a")" >> ${log}; fi\n  prev="$a"\ndone\necho '{"event":"result","result":{"status":"SUCCESS","response":"ok"}}'\n`,
+    );
+    chmodSync(bin, 0o755);
+    process.env.CLI_FUNNEL_AGY_BIN = bin;
+    const schema = { type: "object", properties: { text: { type: "string", description: "x".repeat(200_000) } } };
+    const run: RunInput = { selection: { provider: "antigravity", model: "m", cwd: dir, access: "full" }, prompt: "hi", responseSchema: { schema } };
+    for await (const _ of antigravityProvider.run(run)) {
+      /* drain */
+    }
+    const [path, size, mode] = readFileSync(log, "utf8").trim().split("\n");
+    expect(Number(size)).toBe(JSON.stringify(schema).length);
+    expect(mode).toBe("700");
+    expect(existsSync(path!)).toBe(false);
   });
 });
 

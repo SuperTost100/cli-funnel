@@ -2,7 +2,7 @@
 
 Provider id `antigravity`. Binary `agy`. Tested against 1.2.11 through 1.3.0, minimum 1.2.0.
 
-Runs use `agy --print=<prompt> --output-format stream-json` with stdin closed. Linux refuses a single argument over 128 KiB, so a prompt over 100 KB goes on stdin instead: `--print= --input-format stream-json` and one line `{"event":"user","message":{"content":"..."}}`. agy does not document that message shape. It is what agy 1.x decodes. The stream carries an `init` event, `step_update` events (text deltas and tool steps) and a final `result` with token usage and `denied_actions`.
+Runs use `agy --print=<prompt> --output-format stream-json` with stdin closed. Linux refuses a single argument over 128 KiB, so a prompt over 100 KB goes on stdin instead (over 30 KB on Windows, where the whole command line is limited to 32,767 characters): `--print= --input-format stream-json` and one line `{"event":"user","message":{"content":"..."}}`. agy does not document that message shape. It is what agy 1.x decodes. The stream carries an `init` event, `step_update` events (text deltas and tool steps) and a final `result` with token usage and `denied_actions`.
 
 ## Capabilities
 
@@ -44,7 +44,7 @@ Denied tools appear as `tool.end` events whose error starts with `denied:`. That
 
 ## Run options
 
-The CLI has no system prompt flag, so `system` goes in front of the prompt inside `<instructions>`. `responseSchema` goes to `--json-schema`, and the `result` event carries the parsed answer in `structured_output`. Verified live. Images are refused.
+The CLI has no system prompt flag, so `system` goes in front of the prompt inside `<instructions>`. `responseSchema` goes to `--json-schema`, as a path to a private temp file when the schema is over 4 KB (removed after the run), and the `result` event carries the parsed answer in `structured_output`. Verified live. Images are refused.
 
 ## Models
 

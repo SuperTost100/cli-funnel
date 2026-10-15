@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFunnel } from "../src/funnel.js";
 import { collect } from "../src/providers/base.js";
 import { buildPrompt as agentPrompt } from "../src/providers/agent/index.js";
-import { buildArgs as agyArgs } from "../src/providers/antigravity/index.js";
+import { buildArgs as agyArgs, stdinPrompt } from "../src/providers/antigravity/index.js";
 import { createMapper } from "../src/providers/antigravity/parser.js";
 import { buildArgs as claudeArgs, userContent } from "../src/providers/claude/index.js";
 import { parseClaudeMessage } from "../src/providers/claude/parser.js";
@@ -74,6 +74,14 @@ describe("claude", () => {
     expect(args).not.toContain("--tools");
   });
 
+  it("points the file flags at a file when one is given", () => {
+    const none = claudeArgs(input({}, { system: "Be terse." }), "/tmp/p.txt");
+    expect(none).toEqual(expect.arrayContaining(["--system-prompt-file", "/tmp/p.txt"]));
+    expect(none).not.toContain("Be terse.");
+    const other = claudeArgs(input({ access: "accept-edits" }, { system: "Be terse." }), "/tmp/p.txt");
+    expect(other).toEqual(expect.arrayContaining(["--append-system-prompt-file", "/tmp/p.txt"]));
+  });
+
   it("sends images as content blocks", () => {
     expect(userContent(input({}))).toBe("Give the word ok.");
     expect(userContent(input({}, { attachments: [IMAGE] }))).toEqual([
@@ -108,6 +116,20 @@ describe("antigravity", () => {
     expect(args[0]).toContain("<instructions>");
     expect(args[0]).not.toContain("JSON Schema");
     expect(args).toContain("--json-schema");
+  });
+
+  it("moves the prompt to stdin at 30 KB on Windows and at 100 KB elsewhere", () => {
+    const sel = { provider: "antigravity", model: "m", cwd: "/tmp", access: "full" } as const;
+    const prompt = "x".repeat(40_000);
+    expect(stdinPrompt({ selection: sel, prompt }, "win32")).toBeDefined();
+    expect(stdinPrompt({ selection: sel, prompt }, "linux")).toBeUndefined();
+    expect(agyArgs({ selection: sel, prompt }, [], "win32")).toEqual(expect.arrayContaining(["--print=", "--input-format", "stream-json"]));
+    expect(agyArgs({ selection: sel, prompt }, [], "linux")[0]).toBe(`--print=${prompt}`);
+  });
+
+  it("passes the schema file path to --json-schema when one is given", () => {
+    const args = agyArgs(input({ provider: "antigravity", access: "accept-edits" }, { responseSchema: SCHEMA }), [], "linux", "/tmp/cli-funnel-x/schema.json");
+    expect(args[args.indexOf("--json-schema") + 1]).toBe("/tmp/cli-funnel-x/schema.json");
   });
 
   it("reads structured_output from the result", () => {

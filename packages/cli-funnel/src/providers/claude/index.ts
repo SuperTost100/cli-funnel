@@ -1,6 +1,7 @@
 import { FunnelError, type AccessLevel, type ApprovalDecision, type ApprovalRequest, type AuthStatus, type Capabilities, type FunnelEvent, type Provider, type ProviderContext, type RunInput } from "../../types.js";
 import { detectInstallation, findBinary, runLogout, runUpdate, spawnLogin } from "../base.js";
 import { fromManifest, loadManifest, mergeModels } from "../../catalog/manifest.js";
+import { needsArgFile, writeArgFile, type ArgFile } from "../../util/argfile.js";
 import { compareVersions, exec, spawnStream } from "../../util/process.js";
 import { requireMachine } from "../../selection.js";
 import { parseClaudeMessage } from "./parser.js";
@@ -41,7 +42,8 @@ export function cliModel(selection: RunInput["selection"]): string {
   return selection.contextWindow === 1_000_000 && !selection.model.endsWith("[1m]") ? `${selection.model}[1m]` : selection.model;
 }
 
-export function buildArgs(input: RunInput): string[] {
+/** `systemFile` carries a long system prompt. Without it the prompt goes inline. */
+export function buildArgs(input: RunInput, systemFile?: string): string[] {
   const { selection } = input;
   const args = [
     "-p",
@@ -55,7 +57,10 @@ export function buildArgs(input: RunInput): string[] {
   if (selection.effort) args.push("--effort", selection.effort);
   if (selection.access === "none") args.push(...NO_TOOLS);
   // `none` replaces Claude Code's coding-agent prompt. Other levels keep it and append.
-  if (input.system) args.push(selection.access === "none" ? "--system-prompt" : "--append-system-prompt", input.system);
+  if (input.system) {
+    const flag = selection.access === "none" ? "--system-prompt" : "--append-system-prompt";
+    args.push(systemFile ? `${flag}-file` : flag, systemFile ?? input.system);
+  }
   if (input.responseSchema) args.push("--json-schema", JSON.stringify(input.responseSchema.schema));
   // Without this flag the CLI denies anything that needs a prompt instead of asking.
   if (selection.access !== "full" && selection.access !== "none" && input.onApproval) args.push("--permission-prompt-tool", "stdio");
@@ -78,7 +83,15 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   if (input.selection.access === "supervised" && !input.onApproval) {
     throw new FunnelError('Access "supervised" needs an onApproval handler.', "invalid-selection");
   }
-  const proc = spawnStream(bin, buildArgs(input), { cwd: input.selection.cwd, env: input.env, signal: input.signal, closeStdin: false });
+  // A long system prompt would hit the argv size limit, so it goes through a private temp file removed after the run.
+  const systemFile = input.system && needsArgFile(input.system) ? await writeArgFile("system-prompt.txt", input.system) : undefined;
+  let proc: ReturnType<typeof spawnStream>;
+  try {
+    proc = spawnStream(bin, buildArgs(input, systemFile?.path), { cwd: input.selection.cwd, env: input.env, signal: input.signal, closeStdin: false });
+  } catch (err) {
+    await systemFile?.remove();
+    throw err;
+  }
   proc.write(JSON.stringify({ type: "user", message: { role: "user", content: userContent(input) } }));
 
   let finished = false;
@@ -113,6 +126,8 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
     // After a result Claude Code exits on its own once stdin closes. Give it a moment to save the session, then stop it.
     if (finished) setTimeout(() => proc.kill(), 2000).unref();
     else proc.kill();
+    // The CLI reads the file at startup, before its first message.
+    await systemFile?.remove();
   }
   if (finished) return;
   await proc.exited;
