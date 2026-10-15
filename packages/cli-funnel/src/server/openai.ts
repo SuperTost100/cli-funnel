@@ -12,6 +12,7 @@ import {
 } from "../types.js";
 import { BodyError, DEFAULT_MAX_BODY_BYTES, readJson } from "./body.js";
 import { json, sse, sseHeaders } from "./sse.js";
+import { BUSY_RETRY_AFTER_SEC, type RunQueue } from "../queue.js";
 
 export interface OpenAIDefaults {
   /** Project directory the agent works in. Default: the server's cwd. Must be inside the handler's `fsRoots`. */
@@ -30,6 +31,8 @@ export interface TrackedRun {
   signal: AbortSignal;
   /** The handler's deadline for the run. */
   timeoutMs?: number;
+  /** The handler's run queue, when it limits concurrent runs. */
+  queue?: RunQueue;
   end: () => void;
 }
 
@@ -252,7 +255,20 @@ export async function handleOpenAI(
   const answerOf = (r: { text: string; structured?: unknown }) => (input.responseSchema && r.structured !== undefined ? JSON.stringify(r.structured) : r.text);
 
   let streaming = false;
+  let release: (() => void) | undefined;
+  const end = () => {
+    release?.();
+    run.end();
+  };
   try {
+    // With a concurrency limit the request waits here for a slot. `queued` tells the client how long it waited.
+    let queued: { waitedMs: number } | undefined;
+    if (run.queue) {
+      const since = Date.now();
+      let waited = false;
+      release = await run.queue.acquire(provider, { signal: run.signal, onPosition: () => (waited = true) });
+      if (waited) queued = { waitedMs: Date.now() - since };
+    }
     if (!body.stream) {
       const r = await funnel.run(input);
       return json({
@@ -262,7 +278,7 @@ export async function handleOpenAI(
         model: body.model,
         choices: [{ index: 0, message: { role: "assistant", content: answerOf(r) }, finish_reason: finish(r.finishReason) }],
         usage: usageOut(r.usage),
-        x_funnel: { runId: run.id, sessionId: r.sessionId, toolCalls: r.toolCalls, deniedActions: r.deniedActions },
+        x_funnel: { runId: run.id, queued, sessionId: r.sessionId, toolCalls: r.toolCalls, deniedActions: r.deniedActions },
       });
     }
 
@@ -275,7 +291,7 @@ export async function handleOpenAI(
       return json(failure(Object.assign(new Error(first.value.message), { code: first.value.code })), statusOf(first.value.code));
     }
     const chunks = (async function* () {
-      yield chunk({ role: "assistant" }, null, { x_funnel: { runId: run.id } });
+      yield chunk({ role: "assistant" }, null, { x_funnel: { runId: run.id, queued } });
       try {
         let streamed = "";
         for await (const e of replay(first, it)) {
@@ -302,14 +318,18 @@ export async function handleOpenAI(
       try {
         yield* chunks;
       } finally {
-        run.end();
+        end();
       }
     })();
     streaming = true;
-    return new Response(sse(tracked, { done: "[DONE]", onCancel: run.end }), { headers: sseHeaders });
+    return new Response(sse(tracked, { done: "[DONE]", onCancel: end }), { headers: sseHeaders });
   } catch (err) {
+    // A full queue, or a wait past queueTimeoutMs.
+    if (err instanceof FunnelError && err.code === "busy") {
+      return Response.json(failure(err), { status: 429, headers: { "retry-after": String(BUSY_RETRY_AFTER_SEC) } });
+    }
     return json(failure(err), err instanceof FunnelError ? statusOf(err.code) : 500);
   } finally {
-    if (!streaming) run.end();
+    if (!streaming) end();
   }
 }

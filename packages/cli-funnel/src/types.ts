@@ -120,6 +120,8 @@ export interface ApprovalRequest {
 export type ApprovalDecision = "allow" | "deny";
 
 export type FunnelEvent =
+  /** The run waits for a slot under `maxConcurrentRuns`. `ahead` is the number of runs waiting before it. */
+  | { type: "queue.position"; ahead: number }
   | { type: "session"; sessionId: string; model?: string }
   | { type: "text.delta"; text: string }
   | { type: "reasoning.delta"; text: string }
@@ -348,7 +350,9 @@ export class FunnelError extends Error {
       | "unsupported"
       | "invalid-selection"
       | "cli-failed"
-      | "aborted",
+      | "aborted"
+      /** Refused by `maxConcurrentRuns`: the queue is full or the wait passed `queueTimeoutMs`. */
+      | "busy",
   ) {
     super(message);
     this.name = "FunnelError";

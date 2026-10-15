@@ -16,8 +16,10 @@ import {
 import { BodyError, DEFAULT_MAX_BODY_BYTES, readJson } from "./body.js";
 import { handleOpenAI, type OpenAIDefaults, type TrackedRun } from "./openai.js";
 import { json, sse, sseHeaders } from "./sse.js";
+import { BUSY_RETRY_AFTER_SEC, RunQueue, waitForSlot, type RunLimits } from "../queue.js";
 
-export interface HandlerOptions {
+/** `maxConcurrentRuns`, `maxQueuedRuns` and `queueTimeoutMs` limit the runs on `/run` and `/v1/chat/completions`. */
+export interface HandlerOptions extends RunLimits {
   /** Path prefix the routes live under, for example "/api/funnel". Default "". */
   basePath?: string;
   /**
@@ -108,6 +110,7 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
   const logins = new Map<string, LoginSession>();
   // One controller per live run, so POST /runs/:id/cancel can stop it.
   const runs = new Map<string, AbortController>();
+  const queue = RunQueue.from(options);
   let seq = 0;
 
   /** Registers a run under a new id. Its signal aborts when the request closes or the run is cancelled. */
@@ -115,7 +118,7 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
     const id = `run_${++seq}_${Date.now().toString(36)}`;
     const controller = new AbortController();
     runs.set(id, controller);
-    return { id, signal: AbortSignal.any([requestSignal, controller.signal]), timeoutMs: options.maxRunMs, end: () => runs.delete(id) };
+    return { id, signal: AbortSignal.any([requestSignal, controller.signal]), timeoutMs: options.maxRunMs, queue, end: () => runs.delete(id) };
   };
 
   const cors = options.cors === undefined ? undefined : corsOrigin(options.cors);
@@ -169,6 +172,9 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
     if ((!provider || provider.capabilities.access.length > 0) && !cwdAllowed(body.selection?.cwd ?? "")) {
       return json({ error: "cwd does not exist or is outside the allowed roots. Set fsRoots on the handler." }, 403);
     }
+    if (queue?.full(body.selection.provider)) {
+      return Response.json({ error: "Too many runs are waiting. Try again later.", code: "busy" }, { status: 429, headers: { "retry-after": String(BUSY_RETRY_AFTER_SEC) } });
+    }
     const tracked = startRun(req.signal);
     const runId = tracked.id;
     const timeoutMs = (options.approvalTimeoutSec ?? 300) * 1000;
@@ -219,7 +225,13 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
     const events = (async function* (): AsyncGenerator<FunnelEvent | { type: "run"; runId: string }> {
       yield { type: "run", runId };
       try {
-        for await (const e of stream) yield e;
+        const release = queue ? yield* waitForSlot(queue, body.selection.provider, tracked.signal) : () => undefined;
+        if (!release) return yield { type: "done", text: "", finishReason: "cancelled" };
+        try {
+          for await (const e of stream) yield e;
+        } finally {
+          release();
+        }
       } catch (err) {
         yield { type: "error", message: err instanceof Error ? err.message : String(err), code: (err as FunnelError).code };
       } finally {
