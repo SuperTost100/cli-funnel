@@ -23,12 +23,15 @@ describe("parseServeConfig", () => {
       fsRoots: ["/srv/code", "repos"],
       approvalTimeoutSec: 60,
       cors: "https://app.example.com",
+      logJsonl: "logs/runs.jsonl",
+      logContent: false,
       basePath: "/funnel",
       openai: { cwd: "scratch", access: "none" },
       openaiCompatible: [{ id: "lm", name: "LM", baseUrl: "http://127.0.0.1:1234/v1" }],
     });
     expect(config.fsRoots).toEqual(["/srv/code", "/etc/cf/repos"]);
     expect(config.cwd).toBe("/etc/project");
+    expect(config.logJsonl).toBe("/etc/cf/logs/runs.jsonl");
     expect(config.openai).toEqual({ cwd: "/etc/cf/scratch", access: "none" });
   });
 
@@ -44,6 +47,8 @@ describe("parseServeConfig", () => {
     expect(() => parse({ approvalTimeoutSec: 0 })).toThrow(/"approvalTimeoutSec"/);
     expect(() => parse({ token: "" })).toThrow(/"token"/);
     expect(() => parse({ cors: true })).toThrow(/"cors"/);
+    expect(() => parse({ logJsonl: "" })).toThrow(/"logJsonl"/);
+    expect(() => parse({ logContent: "yes" })).toThrow(/"logContent"/);
     expect(() => parse({})).not.toThrow();
   });
 
@@ -92,6 +97,14 @@ describe("resolveServe", () => {
     expect(resolveServe({}, { access: "none" }, {}, where).handler.openai?.access).toBe("none");
     expect(resolveServe({}, { access: "none", openai: { access: "full" } }, {}, where).handler.openai?.access).toBe("full");
     expect(resolveServe({ access: "supervised" }, { access: "none" }, {}, where).handler.openai?.access).toBe("supervised");
+  });
+
+  it("logs nothing unless a file is named, and keeps text out unless asked", () => {
+    expect(resolveServe({}, {}, {}, where).log).toBeUndefined();
+    expect(resolveServe({ "log-jsonl": "runs.jsonl" }, {}, {}, where).log).toEqual({ file: "runs.jsonl", content: false });
+    expect(resolveServe({ "log-content": true }, { logJsonl: "/var/log/cf.jsonl" }, {}, where).log).toEqual({ file: "/var/log/cf.jsonl", content: true });
+    expect(resolveServe({ "log-jsonl": "a" }, { logJsonl: "b", logContent: true }, {}, where).log).toEqual({ file: "a", content: true });
+    expect(() => resolveServe({ "log-content": true }, {}, {}, where)).toThrow(/--log-jsonl/);
   });
 
   it("rejects bad numbers and levels", () => {

@@ -1,3 +1,4 @@
+import { observeRun } from "./run-log.js";
 import { loadManifest } from "./catalog/manifest.js";
 import { validateSelection } from "./selection.js";
 import { createRunFolder } from "./providers/base.js";
@@ -17,6 +18,7 @@ import {
   type Provider,
   type ProviderId,
   type PullEvent,
+  type RunEventRecord,
   type RunInput,
   type RunResult,
   type UpdateResult,
@@ -40,6 +42,13 @@ export interface FunnelOptions {
    * 500 sessions. Pass `fileHistory(dir)` to keep them across restarts.
    */
   history?: HistoryStore;
+  /**
+   * Called with every event of every run, with the run id, provider, model and a timestamp. Use it for metrics and audit.
+   * It is not awaited, and an error or rejection inside it is ignored, so it cannot slow down or break a run. Keep it
+   * quick: a synchronous handler still runs on the event loop. The record repeats the prompt, so do not store that
+   * without the user's consent. See `jsonlRunLog` for a ready-made handler.
+   */
+  onEvent?: (record: RunEventRecord) => unknown;
 }
 
 export interface ProviderOverview {
@@ -122,10 +131,11 @@ export function createFunnel(options: FunnelOptions = {}) {
   }
 
   function stream(input: RunInput): RunStream {
-    const events = (async function* () {
+    const source = (async function* () {
       const p = await prepare(input);
       yield* p.run(input.history ? input : { ...input, history });
     })();
+    const events = options.onEvent ? observeRun(options.onEvent, input, source) : source;
     // Fold events as they pass, so `.result` works next to `for await` without keeping them.
     const folder = createRunFolder(input);
     let settle!: { resolve: (r: RunResult) => void; reject: (e: unknown) => void };
