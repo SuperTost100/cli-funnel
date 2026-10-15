@@ -5,12 +5,14 @@ import {
   ACCESS_LEVELS,
   FunnelError,
   type AccessLevel,
-  type Attachment,
+  type ContentPart,
   type FinishReason,
   type FunnelEvent,
+  type ImageAttachment,
+  type Message,
   type ProviderId,
   type ProviderOptions,
-  type RunInput,
+  type RunRequest,
   type Usage,
 } from "../types.js";
 import { BodyError, DEFAULT_MAX_BODY_BYTES, readJson } from "./body.js";
@@ -101,21 +103,34 @@ const text = (c: ChatMessage["content"]) =>
 
 const IMAGE_DATA_URL = /^data:(image\/(?:png|jpeg|webp|gif));base64,(.+)$/;
 
-/** Images from the last user turn. Only data URLs: fetching remote URLs would make this server a proxy. */
-function toAttachments(messages: ChatMessage[]): Attachment[] {
-  const last = [...messages].reverse().find((m) => m.role === "user");
-  if (!last || typeof last.content === "string" || !last.content) return [];
-  return last.content.flatMap((p): Attachment[] => {
-    const m = p.type === "image_url" && p.image_url ? IMAGE_DATA_URL.exec(p.image_url.url) : null;
-    return m ? [{ type: "image", mediaType: m[1] as Attachment["mediaType"], data: m[2]! }] : [];
-  });
-}
+const SYSTEM_ROLES = new Set(["system", "developer"]);
 
-/** Flattens a chat into one prompt. The CLI keeps its own history when sessionId is set, so only the last user turn is sent then. */
-function toPrompt(messages: ChatMessage[], resumed: boolean): string {
-  if (resumed) return text([...messages].reverse().find((m) => m.role === "user")?.content ?? "");
-  if (messages.length === 1) return text(messages[0]!.content);
-  return messages.map((m) => `${m.role.toUpperCase()}: ${text(m.content)}`).join("\n\n");
+/**
+ * The chat as typed messages, without the system ones. Images must be data URLs: fetching remote URLs would make this
+ * server a proxy. Returns the problem when a message cannot be mapped.
+ */
+function toMessages(messages: ChatMessage[]): { messages: Message[] } | { message: string; param: string } {
+  const out: Message[] = [];
+  for (const [i, m] of messages.entries()) {
+    if (SYSTEM_ROLES.has(m.role)) continue;
+    if (m.role !== "user" && m.role !== "assistant") return { message: `messages[${i}].role "${m.role}" is not supported.`, param: `messages[${i}].role` };
+    if (typeof m.content === "string" || m.content == null) {
+      out.push({ role: m.role, content: m.content ?? "" });
+      continue;
+    }
+    const parts: ContentPart[] = [];
+    for (const [j, p] of m.content.entries()) {
+      const param = `messages[${i}].content[${j}]`;
+      if (p.type === "text") parts.push({ type: "text", text: p.text ?? "" });
+      else if (p.type === "image_url" && m.role === "user") {
+        const data = IMAGE_DATA_URL.exec(p.image_url?.url ?? "");
+        if (!data) return { message: `${param}: images must be base64 data URLs of png, jpeg, webp or gif.`, param };
+        parts.push({ type: "image", mediaType: data[1] as ImageAttachment["mediaType"], data: data[2]! });
+      } else return { message: `${param}: content part "${p.type}" is not supported here.`, param };
+    }
+    out.push({ role: m.role, content: parts });
+  }
+  return { messages: out };
 }
 
 const finish = (r: FinishReason) => (r === "denied" ? "content_filter" : r === "length" ? "length" : "stop");
@@ -257,9 +272,11 @@ export async function handleOpenAI(
     return json({ error: { message: "An addDirs entry in x_funnel.providerOptions does not exist or is outside the allowed roots." } }, 403);
   }
 
-  const system = body.messages.filter((m) => m.role === "system").map((m) => text(m.content)).join("\n\n");
+  const chat = toMessages(body.messages);
+  if (!("messages" in chat)) return fail(400, chat.message, { param: chat.param });
+  const system = body.messages.filter((m) => SYSTEM_ROLES.has(m.role)).map((m) => text(m.content)).join("\n\n");
   const run = startRun(req.signal);
-  const input: RunInput = {
+  const input: RunRequest = {
     runId: run.id,
     selection: {
       provider,
@@ -270,10 +287,9 @@ export async function handleOpenAI(
       cwd,
       access,
     },
-    // System messages become the run's system prompt instead of a line in the flattened chat.
-    prompt: toPrompt(body.messages.filter((m) => m.role !== "system"), !!body.x_funnel?.sessionId),
+    // System messages become the run's system prompt. The funnel renders the rest for providers without typed turns.
+    messages: chat.messages,
     system: system || undefined,
-    attachments: toAttachments(body.messages),
     responseSchema:
       body.response_format?.type === "json_schema" && body.response_format.json_schema?.schema
         ? { name: body.response_format.json_schema.name, schema: body.response_format.json_schema.schema }

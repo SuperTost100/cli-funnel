@@ -10,7 +10,7 @@ import {
   type FunnelEvent,
   type LoginSession,
   type ProviderId,
-  type RunInput,
+  type RunRequest,
   type Selection,
 } from "../types.js";
 import { BodyError, DEFAULT_MAX_BODY_BYTES, readJson } from "./body.js";
@@ -164,7 +164,7 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
   };
 
   async function run(req: Request): Promise<Response> {
-    const body = (await readBody(req)) as Pick<RunInput, "prompt" | "sessionId" | "system" | "attachments" | "responseSchema" | "maxOutputTokens" | "providerOptions"> & {
+    const body = (await readBody(req)) as Pick<RunRequest, "prompt" | "messages" | "sessionId" | "system" | "attachments" | "responseSchema" | "maxOutputTokens" | "providerOptions"> & {
       selection: Selection;
     };
     // Providers with no access levels (Ollama, API providers) have no machine to protect, so cwd means nothing to them.
@@ -193,10 +193,11 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
     };
     // Closing the request and cancelling the run by id both abort this signal.
     tracked.signal.addEventListener("abort", settleAll, { once: true });
-    const input: RunInput = {
+    const input: RunRequest = {
       runId,
       selection: body.selection,
       prompt: body.prompt,
+      messages: body.messages,
       system: body.system,
       attachments: body.attachments,
       responseSchema: body.responseSchema,

@@ -1,13 +1,16 @@
 import { readSSE } from "../util/sse.js";
 import { redactErrors } from "../util/redact.js";
 import { anthropicAdaptive, anthropicEfforts, geminiEfforts, openaiEfforts } from "./efforts.js";
+import { textOf } from "../messages.js";
 import { runWithHistory } from "./history.js";
 import { fetchRetrying, mergeHeaders, type RetryOptions } from "./http.js";
 import { parseHttpLimit } from "./limits.js";
 import {
   FunnelError,
   type ApiProviderId,
+  type ContentPart,
   type FunnelEvent,
+  type Message,
   type ModelInfo,
   type Provider,
   type RunInput,
@@ -69,8 +72,8 @@ interface ApiSpec {
   authHeaders(key: string): Record<string, string>;
   listModels(ctx: ApiContext): Promise<ModelInfo[]>;
   stream(ctx: ApiContext, input: RunInput, messages: Msg[], turn: Turn): AsyncGenerator<FunnelEvent>;
-  /** The user turn in this vendor's content format. */
-  userContent(input: RunInput): string | unknown[];
+  /** Typed messages in this vendor's message format. */
+  toMessages(messages: Message[]): Msg[];
 }
 
 /** A failed response as events: a `limit` first when the API answered 429, then the error. */
@@ -80,6 +83,10 @@ async function* httpError(label: string, res: Response): AsyncGenerator<FunnelEv
   if (limit) yield limit;
   yield { type: "error", message: `${label} ${res.status}: ${body}`, code: "cli-failed" };
 }
+
+/** Maps each message, keeping a string as a string and each part through `part`. */
+const mapMessages = (messages: Message[], part: (p: ContentPart) => unknown): Msg[] =>
+  messages.map((m) => ({ role: m.role, content: typeof m.content === "string" ? m.content : m.content.map(part) }));
 
 const MODEL_BASE = { contextWindows: [], fast: false, source: "cli" as const };
 
@@ -180,13 +187,8 @@ const anthropic: ApiSpec = {
       finishReason: stop === "refusal" ? "denied" : stop === "max_tokens" || stop === "model_context_window_exceeded" ? "length" : "stop",
     };
   },
-  userContent(input) {
-    if (!input.attachments?.length) return input.prompt;
-    return [
-      ...input.attachments.map((a) => ({ type: "image", source: { type: "base64", media_type: a.mediaType, data: a.data } })),
-      { type: "text", text: input.prompt },
-    ];
-  },
+  toMessages: (messages) =>
+    mapMessages(messages, (p) => (p.type === "text" ? { type: "text", text: p.text } : { type: "image", source: { type: "base64", media_type: p.mediaType, data: p.data } })),
 };
 
 export interface ChatCompletionsOptions {
@@ -304,13 +306,13 @@ export async function* streamChatCompletions(opts: ChatCompletionsOptions, input
   yield { type: "done", text: "", finishReason: stop === "content_filter" || stop === "refusal" ? "denied" : stop === "length" ? "length" : "stop" };
 }
 
-/** The user turn in Chat Completions format. */
-export function chatUserContent(input: RunInput): string | unknown[] {
-  if (!input.attachments?.length) return input.prompt;
-  return [
-    { type: "text", text: input.prompt },
-    ...input.attachments.map((a) => ({ type: "image_url", image_url: { url: `data:${a.mediaType};base64,${a.data}` } })),
-  ];
+/** Typed messages in Chat Completions format. Assistant turns are plain text, which every server takes. */
+export function chatMessages(messages: Message[]): Msg[] {
+  return messages.map((m) =>
+    m.role === "assistant"
+      ? { role: m.role, content: textOf(m) }
+      : mapMessages([m], (p) => (p.type === "text" ? { type: "text", text: p.text } : { type: "image_url", image_url: { url: `data:${p.mediaType};base64,${p.data}` } }))[0]!,
+  );
 }
 
 /**
@@ -344,7 +346,7 @@ const openai: ApiSpec = {
   // The key is already in ctx.headers, so it is passed as a header and not as `key`.
   stream: (ctx, input, messages) =>
     streamChatCompletions({ baseUrl: ctx.baseUrl, headers: ctx.headers, retry: ctx.retry, maxTokensField: "max_completion_tokens", label: "OpenAI API", strictSchema: true }, input, messages),
-  userContent: chatUserContent,
+  toMessages: chatMessages,
 };
 
 /** Gemini ids that are aliases or models without text chat. Aliases like `gemini-flash-latest` break the versioned-id rule. */
@@ -463,10 +465,7 @@ const gemini: ApiSpec = {
     if (GEMINI_FAILED.has(stop)) return yield { type: "error", message: `Gemini API stopped with ${stop}.`, code: "cli-failed" };
     yield { type: "done", text: "", finishReason: GEMINI_BLOCKED.has(stop) ? "denied" : stop === "MAX_TOKENS" ? "length" : "stop" };
   },
-  userContent(input) {
-    if (!input.attachments?.length) return input.prompt;
-    return [...input.attachments.map((a) => ({ inlineData: { mimeType: a.mediaType, data: a.data } })), { text: input.prompt }];
-  },
+  toMessages: (messages) => mapMessages(messages, (p) => (p.type === "text" ? { text: p.text } : { inlineData: { mimeType: p.mediaType, data: p.data } })),
 };
 
 /** Turns an aborted fetch into a cancelled run and a network failure into an error event, as the other providers do. */
@@ -506,6 +505,7 @@ function makeApiProvider(spec: ApiSpec, getKey: () => string | undefined, config
       resume: true,
       approvals: false,
       images: true,
+      messages: true,
       system: "native",
       schema: "native",
       sampling: true,
@@ -531,10 +531,9 @@ function makeApiProvider(spec: ApiSpec, getKey: () => string | undefined, config
     update: async () => ({ changed: false, output: "API providers have nothing to update." }),
     models: async () => spec.listModels(context()),
     run(input) {
-      const user: Msg = { role: "user", content: spec.userContent(input) };
       const turn: Turn = {};
       return redactErrors(
-        runWithHistory(input, user, (text): Msg => ({ role: "assistant", content: turn.assistantContent ?? text }), (messages) =>
+        runWithHistory(input, spec.toMessages, (text): Msg => ({ role: "assistant", content: turn.assistantContent ?? text }), (messages) =>
           settle(spec, input, () => spec.stream(context(), input, messages, turn)),
         ),
         [getKey() ?? process.env[spec.envVar], ...Object.values(config.headers ?? {})],

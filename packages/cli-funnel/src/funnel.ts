@@ -1,4 +1,5 @@
 import { observeRun } from "./run-log.js";
+import { toRunInput } from "./messages.js";
 import { loadManifest } from "./catalog/manifest.js";
 import { validateProviderOptions, validateSelection } from "./selection.js";
 import { SessionPool, type LiveSessionInfo, type SessionOptions } from "./sessions.js";
@@ -22,6 +23,7 @@ import {
   type PullEvent,
   type RunEventRecord,
   type RunInput,
+  type RunRequest,
   type RunResult,
   type UpdateResult,
 } from "./types.js";
@@ -181,8 +183,18 @@ export function createFunnel(options: FunnelOptions = {}) {
     return p;
   }
 
-  function stream(input: RunInput): RunStream {
+  function stream(request: RunRequest): RunStream {
+    // A bad request fails like a bad selection: as the first thing the stream does, not as a throw from stream().
+    let input: RunInput;
+    let invalid: unknown;
+    try {
+      input = toRunInput(request);
+    } catch (err) {
+      invalid = err;
+      input = { ...request, prompt: request.prompt ?? "" };
+    }
     const source = (async function* (): AsyncGenerator<FunnelEvent> {
+      if (invalid) throw invalid;
       const p = await prepare(input);
       const runInput = input.history ? input : { ...input, history };
       const run = (i: RunInput) => (pool ? pool.run(p, i) : p.run(i));
@@ -298,7 +310,7 @@ export function createFunnel(options: FunnelOptions = {}) {
     },
 
     /** Runs one turn and resolves with the final text, usage and tool calls. */
-    async run(input: RunInput): Promise<RunResult> {
+    async run(input: RunRequest): Promise<RunResult> {
       const s = stream(input);
       for await (const _ of s) {
         /* drain */

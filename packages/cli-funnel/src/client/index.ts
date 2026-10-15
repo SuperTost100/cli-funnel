@@ -6,7 +6,7 @@ import type {
   ModelInfo,
   ProviderId,
   PullEvent,
-  RunInput,
+  RunRequest,
   Selection,
   UpdateResult,
 } from "../types.js";
@@ -96,7 +96,7 @@ export function createClient(options: ClientOptions) {
 
     /** Streams run events. The first event is `{ type: "run", runId }`, needed to answer approvals. */
     run: (
-      input: Pick<RunInput, "prompt" | "sessionId" | "system" | "attachments" | "responseSchema" | "maxOutputTokens" | "providerOptions"> & { selection: Selection },
+      input: Pick<RunRequest, "prompt" | "messages" | "sessionId" | "system" | "attachments" | "responseSchema" | "maxOutputTokens" | "providerOptions"> & { selection: Selection },
       signal?: AbortSignal,
     ) =>
       events<RunEvent>("/run", input, signal),

@@ -177,7 +177,7 @@ describe("api providers", () => {
     await drain(p, input({ provider: "openai-api" }, { system: "S", attachments: [IMAGE], responseSchema: SCHEMA, maxOutputTokens: 100 }));
     const b = bodies[0];
     expect(b.messages[0]).toEqual({ role: "system", content: "S" });
-    expect(b.messages[1].content[1]).toEqual({ type: "image_url", image_url: { url: `data:image/png;base64,${IMAGE.data}` } });
+    expect(b.messages[1].content[0]).toEqual({ type: "image_url", image_url: { url: `data:image/png;base64,${IMAGE.data}` } });
     expect(b.response_format.json_schema).toMatchObject({ name: "response", schema: SCHEMA.schema });
     expect(b.max_completion_tokens).toBe(100);
   });
