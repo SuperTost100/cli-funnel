@@ -59,7 +59,7 @@ It starts the real binary. Your runs count against the login the CLI already has
 
 Every "no" in this table is a limit of the CLI, not of cli-funnel. cli-funnel does not fake a feature. When a CLI cannot enforce something headlessly, the option is not offered. [Access levels](docs/access-levels.md) explains each gap.
 
-No CLI exposes a selectable context window today. When one does, the picker shows it.
+Claude Code is the only CLI with a selectable context window. Models that run at 200k by default, such as `claude-opus-4-6`, offer a 1M variant, and the picker shows the choice for them. Newer Claude models already run at 1M.
 
 ## Install
 

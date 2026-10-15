@@ -57,13 +57,21 @@ describe("claude args", () => {
     expect(full).not.toContain("--permission-prompt-tool");
     expect(full).not.toContain("--bare");
   });
+
+  it("selects the 1M context variant with the [1m] suffix", () => {
+    const args = (contextWindow?: number) => buildArgs({ prompt: "x", selection: sel({ model: "claude-opus-4-6", contextWindow }) });
+    expect(args(1_000_000)).toEqual(expect.arrayContaining(["--model", "claude-opus-4-6[1m]"]));
+    expect(args(200_000)).toEqual(expect.arrayContaining(["--model", "claude-opus-4-6"]));
+    expect(args()).toEqual(expect.arrayContaining(["--model", "claude-opus-4-6"]));
+  });
 });
 
 describe("claude models", () => {
   it("lists concrete ids from the manifest", async () => {
     const models = await claudeProvider.models();
-    expect(models.map((m) => m.id)).toEqual(["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"]);
+    expect(models.map((m) => m.id)).toEqual(["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5", "claude-opus-4-6", "claude-haiku-4-5-20251001"]);
     expect(models.every((m) => !m.fast)).toBe(true);
+    expect(models.find((m) => m.id === "claude-opus-4-6")).toMatchObject({ contextWindows: [200_000, 1_000_000], defaultContextWindow: 200_000 });
   });
 });
 

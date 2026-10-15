@@ -19,7 +19,7 @@ const PERMISSION_MODE: Record<AccessLevel, string> = {
 const capabilities: Capabilities = {
   access: ["none", "supervised", "accept-edits", "auto", "full"],
   effort: true,
-  contextWindow: false,
+  contextWindow: true,
   fast: false,
   resume: true,
   approvals: true,
@@ -35,6 +35,11 @@ const capabilities: Capabilities = {
  */
 const NO_TOOLS = ["--tools", "", "--strict-mcp-config", "--setting-sources", ""];
 
+/** Claude Code picks the 1M context variant of a model through the `[1m]` suffix on the model id. */
+export function cliModel(selection: RunInput["selection"]): string {
+  return selection.contextWindow === 1_000_000 && !selection.model.endsWith("[1m]") ? `${selection.model}[1m]` : selection.model;
+}
+
 export function buildArgs(input: RunInput): string[] {
   const { selection } = input;
   const args = [
@@ -43,7 +48,7 @@ export function buildArgs(input: RunInput): string[] {
     "--output-format", "stream-json",
     "--verbose",
     "--include-partial-messages",
-    "--model", selection.model,
+    "--model", cliModel(selection),
     "--permission-mode", PERMISSION_MODE[selection.access],
   ];
   if (selection.effort) args.push("--effort", selection.effort);
