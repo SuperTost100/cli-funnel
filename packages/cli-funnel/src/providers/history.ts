@@ -55,7 +55,9 @@ export function fileHistory(dir: string, maxSessions = MAX_SESSIONS, graceMs = 5
       );
       // Ties on the modification time fall back to the name, so the order does not depend on the directory listing.
       dated.sort((a, b) => a.t - b.t || a.n.localeCompare(b.n));
-      const evictable = dated.filter(({ n, t }) => n !== basename(target) && now - t >= graceMs);
+      // mtimes carry fractions of a millisecond and Date.now() does not, so a file written this millisecond can look newer
+      // than now. Without a grace period every other file may go.
+      const evictable = dated.filter(({ n, t }) => n !== basename(target) && (graceMs <= 0 || now - t >= graceMs));
       await Promise.all(evictable.slice(0, names.length - maxSessions).map(({ n }) => unlink(join(dir, n)).catch(() => {})));
     },
   };

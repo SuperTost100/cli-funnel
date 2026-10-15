@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync } from "node:fs";
+import { mkdtempSync, readdirSync, utimesSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -248,6 +248,25 @@ describe("history store (#38)", () => {
     await old.set("d", ["d"]);
     expect(readdirSync(dir)).toHaveLength(1);
     expect(await old.get("d")).toEqual(["d"]);
+  });
+
+  it("fileHistory with no grace period evicts a file whose mtime is a fraction of a millisecond ahead of Date.now()", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cf-history-"));
+    const store = fileHistory(dir, 1, 0);
+    await store.set("a", ["a"]);
+    // File systems keep sub-millisecond mtimes while Date.now() is whole milliseconds, so a file written in the same
+    // millisecond can look newer than now.
+    const [name] = readdirSync(dir);
+    const now = Date.now() + 1000;
+    utimesSync(join(dir, name!), (now + 0.5) / 1000, (now + 0.5) / 1000);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      await store.set("b", ["b"]);
+    } finally {
+      clock.mockRestore();
+    }
+    expect(readdirSync(dir)).toHaveLength(1);
+    expect(await store.get("b")).toEqual(["b"]);
   });
 });
 
