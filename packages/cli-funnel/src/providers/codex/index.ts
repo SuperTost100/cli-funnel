@@ -1,8 +1,9 @@
-import { fromManifest, loadBundledManifest } from "../../catalog/manifest.js";
-import type { ApprovalDecision, AuthStatus, FunnelEvent, ModelInfo, Provider, RunInput } from "../../types.js";
+import { fromManifest, loadManifest } from "../../catalog/manifest.js";
+import type { ApprovalDecision, AuthStatus, FunnelEvent, ModelInfo, Provider, ProviderContext, RunInput } from "../../types.js";
 import { Channel } from "../../util/channel.js";
 import { exec, spawnStream } from "../../util/process.js";
 import { detectInstallation, findBinary, runLogout, runUpdate, spawnLogin } from "../base.js";
+import { requireMachine } from "../../selection.js";
 import { planAccess } from "./access.js";
 import { toApprovalRequest, toReply, type ServerRequest } from "./approvals.js";
 import { parseLoginStatus } from "./auth.js";
@@ -21,7 +22,7 @@ async function authStatus(): Promise<AuthStatus> {
   return parseLoginStatus(res.stdout + res.stderr);
 }
 
-async function models(): Promise<ModelInfo[]> {
+async function models(ctx?: ProviderContext): Promise<ModelInfo[]> {
   const path = findBinary(BINARY);
   if (path) {
     try {
@@ -32,7 +33,7 @@ async function models(): Promise<ModelInfo[]> {
       /* fall back to the bundled list */
     }
   }
-  return fromManifest(await loadBundledManifest(), "codex");
+  return fromManifest(await loadManifest(ctx?.manifestUrl), "codex");
 }
 
 async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
@@ -42,7 +43,8 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
     return;
   }
   const sel = input.selection;
-  const plan = planAccess(sel.access);
+  const machine = requireMachine(sel);
+  const plan = planAccess(machine.access);
   const out = new Channel<FunnelEvent>();
   const proc = spawnStream(path, ["app-server"], { cwd: sel.cwd, env: input.env });
   let translator: Translator | undefined;
@@ -122,7 +124,7 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
         sandbox: plan.sandbox,
         ...(sel.fast ? { serviceTier: "priority" } : {}),
         ...(input.system ? { developerInstructions: input.system } : {}),
-        ...(sel.access === "none" ? { config: await noToolsConfig(path, sel.cwd, input.env) } : {}),
+        ...(sel.access === "none" ? { config: await noToolsConfig(path, machine.cwd, input.env) } : {}),
       };
       const started = input.sessionId
         ? await rpc.request("thread/resume", { threadId: input.sessionId, ...settings })

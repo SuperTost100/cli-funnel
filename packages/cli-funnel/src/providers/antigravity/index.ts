@@ -1,4 +1,4 @@
-import { fromManifest, loadBundledManifest, mergeModels } from "../../catalog/manifest.js";
+import { fromManifest, loadManifest, mergeModels } from "../../catalog/manifest.js";
 import { Channel } from "../../util/channel.js";
 import { exec, spawnStream } from "../../util/process.js";
 import {
@@ -9,6 +9,7 @@ import {
   type LoginSession,
   type ModelInfo,
   type Provider,
+  type ProviderContext,
   type RunInput,
   type Selection,
 } from "../../types.js";
@@ -74,8 +75,8 @@ export function noneWorkspace(): Promise<string> {
   return ownedWorkspace("antigravity-none", { ".agents/hooks.json": `${JSON.stringify(noneHooks(), null, 2)}\n` });
 }
 
-async function loadManifestModels(): Promise<ModelInfo[]> {
-  return fromManifest(await loadBundledManifest(), "antigravity");
+async function loadManifestModels(manifestUrl?: string): Promise<ModelInfo[]> {
+  return fromManifest(await loadManifest(manifestUrl), "antigravity");
 }
 
 /** How often `login()` asks `agy models` whether the user has signed in. */
@@ -189,8 +190,8 @@ export const antigravityProvider: Provider = {
     );
   },
   update: () => runUpdate("agy", ["update"]),
-  async models() {
-    const fallback = await loadManifestModels();
+  async models(ctx?: ProviderContext) {
+    const fallback = await loadManifestModels(ctx?.manifestUrl);
     const path = findBinary("agy");
     if (!path) return fallback;
     const res = await exec(path, ["models"], { timeoutMs: 20_000 }).catch(() => undefined);

@@ -280,7 +280,7 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [status, setStatus] = useState<"idle" | "running" | "done" | "error">("idle");
   const [error, setError] = useState<string>();
-  const [session, setSession] = useState<{ id: string; provider: string; cwd: string }>();
+  const [session, setSession] = useState<{ id: string; provider: string; cwd?: string }>();
   // What the run was started with. Later changes to the picker must not relabel its answer.
   const [started, setStarted] = useState<{ provider: Selection["provider"]; model: string }>();
   const runId = useRef<string | undefined>(undefined);

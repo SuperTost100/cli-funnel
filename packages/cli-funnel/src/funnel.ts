@@ -1,6 +1,6 @@
 import { loadManifest } from "./catalog/manifest.js";
 import { validateSelection } from "./selection.js";
-import { collect } from "./providers/base.js";
+import { createRunFolder } from "./providers/base.js";
 import { PROVIDERS } from "./providers/index.js";
 import { createApiProviders, type ApiKeys } from "./providers/api.js";
 import { createOllamaProvider, type OllamaOptions } from "./providers/ollama/index.js";
@@ -54,6 +54,9 @@ export interface RunStream extends AsyncIterable<FunnelEvent> {
   result: Promise<RunResult>;
 }
 
+/** How long a provider's installation and model list are reused. `refresh()` drops them sooner. */
+const CACHE_TTL_MS = 60_000;
+
 export function createFunnel(options: FunnelOptions = {}) {
   const registry: Record<ProviderId, Provider> = {
     ...PROVIDERS,
@@ -68,13 +71,45 @@ export function createFunnel(options: FunnelOptions = {}) {
     return p;
   };
 
+  // One entry per provider. A pending entry has `expires: Infinity`, so concurrent callers share its promise.
+  type Entry<T> = { value: Promise<T>; expires: number };
+  const installations = new Map<ProviderId, Entry<Installation>>();
+  const modelLists = new Map<ProviderId, Entry<ModelInfo[]>>();
+  function cached<T>(map: Map<ProviderId, Entry<T>>, id: ProviderId, load: () => Promise<T>, keep: (v: T) => boolean = () => true): Promise<T> {
+    const hit = map.get(id);
+    if (hit && hit.expires > Date.now()) return hit.value;
+    const entry: Entry<T> = { value: Promise.resolve().then(load), expires: Infinity };
+    map.set(id, entry);
+    entry.value.then(
+      (v) => {
+        if (keep(v)) entry.expires = Date.now() + CACHE_TTL_MS;
+        else if (map.get(id) === entry) map.delete(id);
+      },
+      () => {
+        if (map.get(id) === entry) map.delete(id);
+      },
+    );
+    return entry.value;
+  }
+  // A CLI that is not installed is not cached, so installing it takes effect on the next call.
+  const detect = (p: Provider) => cached(installations, p.id, () => p.detect(), (i) => i.installed);
+  const modelsOf = (p: Provider) => cached(modelLists, p.id, () => p.models({ manifestUrl: options.manifestUrl }));
+
+  function refresh(id?: ProviderId): void {
+    if (id) provider(id);
+    for (const map of [installations, modelLists]) {
+      if (id) map.delete(id);
+      else map.clear();
+    }
+  }
+
   async function prepare(input: RunInput) {
     const p = provider(input.selection.provider);
-    const install = await p.detect();
+    const install = await detect(p);
     if (!install.installed) throw new FunnelError(install.detail ?? `${p.displayName} CLI is not installed.`, "not-installed");
-    const models = options.allowUnlistedModels ? undefined : await p.models();
+    const models = options.allowUnlistedModels ? undefined : await modelsOf(p);
     validateSelection(input.selection, p, models);
-    if (input.selection.access === "supervised" && !input.onApproval) {
+    if (p.capabilities.access.length > 0 && input.selection.access === "supervised" && !input.onApproval) {
       throw new FunnelError('access "supervised" needs an onApproval callback.', "invalid-selection");
     }
     if (input.attachments?.length && !p.capabilities.images) {
@@ -88,37 +123,44 @@ export function createFunnel(options: FunnelOptions = {}) {
       const p = await prepare(input);
       yield* p.run(options.history && !input.history ? { ...input, history: options.history } : input);
     })();
-    // Tee the stream so both `for await` and `.result` work without double-consuming.
-    const buffered: FunnelEvent[] = [];
-    let resolveDone!: () => void;
-    const done = new Promise<void>((r) => (resolveDone = r));
-    let failure: unknown;
+    // Fold events as they pass, so `.result` works next to `for await` without keeping them.
+    const folder = createRunFolder(input);
+    let settle!: { resolve: (r: RunResult) => void; reject: (e: unknown) => void };
+    const result = new Promise<RunResult>((resolve, reject) => (settle = { resolve, reject }));
+    result.catch(() => {});
     const iterable: AsyncIterable<FunnelEvent> = {
       async *[Symbol.asyncIterator]() {
+        let failed = false;
+        let failure: unknown;
+        let ended = false;
+        let terminal = false;
         try {
           for await (const e of events) {
-            buffered.push(e);
+            if (!failed) {
+              try {
+                folder.add(e);
+              } catch (err) {
+                failed = true;
+                failure = err;
+              }
+            }
+            if (e.type === "done" || e.type === "error") terminal = true;
             yield e;
           }
+          ended = true;
         } catch (err) {
-          failure = err;
+          if (!failed) {
+            failed = true;
+            failure = err;
+          }
           throw err;
         } finally {
-          resolveDone();
+          // A consumer that stops before a terminal event closes `events`, which stops the provider. The answer is partial.
+          if (failed) settle.reject(failure);
+          else settle.resolve(folder.finish(ended || terminal ? undefined : "cancelled"));
         }
       },
     };
-    const result = (async () => {
-      await done;
-      if (failure) throw failure;
-      return collect(
-        (async function* () {
-          yield* buffered;
-        })(),
-        input,
-      );
-    })();
-    result.catch(() => {});
     return Object.assign(iterable, { result });
   }
 
@@ -129,18 +171,27 @@ export function createFunnel(options: FunnelOptions = {}) {
     async overview(): Promise<ProviderOverview[]> {
       return Promise.all(
         Object.values(registry).map(async (p) => {
-          const installation = await (async () => p.detect())().catch((): Installation => ({ installed: false, testedRange: { min: "0" } }));
+          const installation = await detect(p).catch((): Installation => ({ installed: false, testedRange: { min: "0" } }));
           const auth = installation.installed ? await (async () => p.authStatus())().catch(() => undefined) : undefined;
           return { id: p.id, displayName: p.displayName, capabilities: p.capabilities, installation, auth };
         }),
       );
     },
 
-    models: async (id: ProviderId): Promise<ModelInfo[]> => provider(id).models(),
+    models: async (id: ProviderId): Promise<ModelInfo[]> => modelsOf(provider(id)),
+    /** Drops the cached installation and model list of one provider, or of all. The next call looks again. */
+    refresh,
     authStatus: async (id: ProviderId): Promise<AuthStatus> => provider(id).authStatus(),
     login: (id: ProviderId, opts?: { signal?: AbortSignal; device?: boolean }): LoginSession => provider(id).login(opts),
     logout: async (id: ProviderId): Promise<void> => provider(id).logout(),
-    update: async (id: ProviderId): Promise<UpdateResult> => provider(id).update(),
+    async update(id: ProviderId): Promise<UpdateResult> {
+      try {
+        return await provider(id).update();
+      } finally {
+        // The version and the model list may have changed.
+        refresh(id);
+      }
+    },
     /** Downloads a model on providers with `capabilities.manageModels`. Throws `unsupported` elsewhere. */
     pullModel(id: ProviderId, name: string, opts?: { signal?: AbortSignal }): AsyncIterable<PullEvent> {
       const p = provider(id);

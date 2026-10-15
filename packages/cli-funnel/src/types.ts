@@ -65,9 +65,13 @@ export interface Selection {
   effort?: string;
   contextWindow?: number;
   fast?: boolean;
-  /** Absolute project directory the agent works in. */
-  cwd: string;
-  access: AccessLevel;
+  /**
+   * Absolute project directory the agent works in. Required for providers that list access levels (the CLIs).
+   * Providers without a machine (Ollama, the API providers, OpenAI-compatible servers) ignore it.
+   */
+  cwd?: string;
+  /** Required for providers that list access levels (the CLIs). Providers without a machine ignore it. */
+  access?: AccessLevel;
 }
 
 export interface Usage {
@@ -218,6 +222,12 @@ export interface UpdateResult {
   output: string;
 }
 
+/** What the funnel passes to `Provider.models()`. */
+export interface ProviderContext {
+  /** URL of a models.json that replaces the bundled model list. The CLI providers read their fallback list from it. */
+  manifestUrl?: string;
+}
+
 export interface Provider {
   readonly id: ProviderId;
   readonly displayName: string;
@@ -233,7 +243,7 @@ export interface Provider {
   login(options?: { signal?: AbortSignal; device?: boolean }): LoginSession;
   logout(): Promise<void>;
   update(): Promise<UpdateResult>;
-  models(): Promise<ModelInfo[]>;
+  models(ctx?: ProviderContext): Promise<ModelInfo[]>;
   run(input: RunInput): AsyncIterable<FunnelEvent>;
   /** Downloads a model so it can run. Present when `capabilities.manageModels` is true. Aborting the signal ends the stream. */
   pullModel?(name: string, options?: { signal?: AbortSignal }): AsyncIterable<PullEvent>;

@@ -4,6 +4,7 @@ import { childEnv, cliCommand, compareVersions, exec, firstUrl, parseVersion, re
 import {
   FunnelError,
   type AuthStatus,
+  type FinishReason,
   type FunnelEvent,
   type Installation,
   type LoginEvent,
@@ -161,11 +162,15 @@ function cliFailure(binary: string, action: string, res: ExecResult): FunnelErro
   return new FunnelError(detail || `${binary} ${action} failed (exit ${res.code}).`, "cli-failed");
 }
 
-/** Folds an event stream into an API-shaped result. */
-export async function collect(
-  events: AsyncIterable<FunnelEvent>,
-  input: RunInput,
-): Promise<RunResult> {
+/** Folds events into an API-shaped result one at a time, so a caller never has to keep the events themselves. */
+export interface RunFolder {
+  /** Throws on an `error` event. */
+  add(event: FunnelEvent): void;
+  /** `finishReason` replaces the one the events carried, for a run that was cut off before its terminal event. */
+  finish(finishReason?: FinishReason): RunResult;
+}
+
+export function createRunFolder(input: RunInput): RunFolder {
   const result: RunResult = {
     text: "",
     provider: input.selection.provider,
@@ -175,48 +180,63 @@ export async function collect(
     deniedActions: [],
   };
   const tools = new Map<string, RunResult["toolCalls"][number]>();
-  for await (const e of events) {
-    switch (e.type) {
-      case "session":
-        result.sessionId = e.sessionId;
-        if (e.model) result.model = e.model;
-        break;
-      case "text.delta":
-        result.text += e.text;
-        break;
-      case "tool.start": {
-        const call = { id: e.id, name: e.name, input: e.input };
-        tools.set(e.id, call);
-        result.toolCalls.push(call);
-        break;
+  return {
+    add(e) {
+      switch (e.type) {
+        case "session":
+          result.sessionId = e.sessionId;
+          if (e.model) result.model = e.model;
+          break;
+        case "text.delta":
+          result.text += e.text;
+          break;
+        case "tool.start": {
+          const call = { id: e.id, name: e.name, input: e.input };
+          tools.set(e.id, call);
+          result.toolCalls.push(call);
+          break;
+        }
+        case "tool.end": {
+          const call = tools.get(e.id);
+          if (call && e.error) call.error = e.error;
+          if (e.error?.startsWith("denied:")) result.deniedActions.push(call?.name ?? e.error.slice(7).trim());
+          break;
+        }
+        case "usage":
+          result.usage = e.usage;
+          break;
+        case "structured":
+          result.structured = e.data;
+          break;
+        case "done":
+          if (e.text) result.text = e.text;
+          result.finishReason = e.finishReason;
+          break;
+        case "error":
+          result.finishReason = "error";
+          throw Object.assign(new Error(e.message), { code: e.code });
       }
-      case "tool.end": {
-        const call = tools.get(e.id);
-        if (call && e.error) call.error = e.error;
-        if (e.error?.startsWith("denied:")) result.deniedActions.push(call?.name ?? e.error.slice(7).trim());
-        break;
+    },
+    finish(finishReason) {
+      if (finishReason) result.finishReason = finishReason;
+      if (input.responseSchema && result.structured === undefined && (result.finishReason === "stop" || result.finishReason === "length")) {
+        try {
+          result.structured = parseJsonAnswer(result.text);
+        } catch (err) {
+          result.structuredError = `The answer is not JSON: ${err instanceof Error ? err.message : String(err)}`;
+        }
       }
-      case "usage":
-        result.usage = e.usage;
-        break;
-      case "structured":
-        result.structured = e.data;
-        break;
-      case "done":
-        if (e.text) result.text = e.text;
-        result.finishReason = e.finishReason;
-        break;
-      case "error":
-        result.finishReason = "error";
-        throw Object.assign(new Error(e.message), { code: e.code });
-    }
-  }
-  if (input.responseSchema && result.structured === undefined && (result.finishReason === "stop" || result.finishReason === "length")) {
-    try {
-      result.structured = parseJsonAnswer(result.text);
-    } catch (err) {
-      result.structuredError = `The answer is not JSON: ${err instanceof Error ? err.message : String(err)}`;
-    }
-  }
-  return result;
+      return result;
+    },
+  };
+}
+
+/** Folds an event stream into an API-shaped result. */
+export async function collect(
+  events: AsyncIterable<FunnelEvent>,
+  input: RunInput,
+): Promise<RunResult> {
+  const folder = createRunFolder(input);
+  for await (const e of events) folder.add(e);
+  return folder.finish();
 }

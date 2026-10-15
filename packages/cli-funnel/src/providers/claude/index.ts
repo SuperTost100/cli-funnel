@@ -1,7 +1,8 @@
-import { FunnelError, type AccessLevel, type ApprovalDecision, type ApprovalRequest, type AuthStatus, type Capabilities, type FunnelEvent, type Provider, type RunInput } from "../../types.js";
+import { FunnelError, type AccessLevel, type ApprovalDecision, type ApprovalRequest, type AuthStatus, type Capabilities, type FunnelEvent, type Provider, type ProviderContext, type RunInput } from "../../types.js";
 import { detectInstallation, findBinary, runLogout, runUpdate, spawnLogin } from "../base.js";
 import { fromManifest, loadManifest, mergeModels } from "../../catalog/manifest.js";
 import { compareVersions, exec, spawnStream } from "../../util/process.js";
+import { requireMachine } from "../../selection.js";
 import { parseClaudeMessage } from "./parser.js";
 
 const BIN = "claude";
@@ -49,7 +50,7 @@ export function buildArgs(input: RunInput): string[] {
     "--verbose",
     "--include-partial-messages",
     "--model", cliModel(selection),
-    "--permission-mode", PERMISSION_MODE[selection.access],
+    "--permission-mode", PERMISSION_MODE[requireMachine(selection).access],
   ];
   if (selection.effort) args.push("--effort", selection.effort);
   if (selection.access === "none") args.push(...NO_TOOLS);
@@ -158,8 +159,8 @@ export const claudeProvider: Provider = {
   login: (options) => spawnLogin(BIN, ["auth", "login"], authStatus, { signal: options?.signal, opensBrowser: true }),
   logout: () => runLogout(BIN, ["auth", "logout"]),
   update: () => runUpdate(BIN, ["update"]),
-  async models() {
-    const [manifest, install] = await Promise.all([loadManifest(), claudeProvider.detect()]);
+  async models(ctx?: ProviderContext) {
+    const [manifest, install] = await Promise.all([loadManifest(ctx?.manifestUrl), claudeProvider.detect()]);
     return mergeModels([], fromManifest(manifest, "claude", install.version, compareVersions));
   },
   run,

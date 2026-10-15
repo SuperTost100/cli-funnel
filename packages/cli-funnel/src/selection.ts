@@ -1,6 +1,13 @@
-import { ACCESS_LEVELS, FunnelError, type ModelInfo, type Provider, type Selection } from "./types.js";
+import { ACCESS_LEVELS, FunnelError, type AccessLevel, type ModelInfo, type Provider, type Selection } from "./types.js";
 import { existsSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
+
+/** The `cwd` and `access` of a selection for a provider that runs on the machine. Throws `invalid-selection` when either is missing. */
+export function requireMachine(selection: Selection): { cwd: string; access: AccessLevel } {
+  const { cwd, access } = selection;
+  if (!cwd || !access) throw new FunnelError(`${selection.provider} needs both cwd and access in the selection.`, "invalid-selection");
+  return { cwd, access };
+}
 
 /** Throws FunnelError("invalid-selection") when the selection asks for something the provider cannot do. */
 export function validateSelection(selection: Selection, provider: Provider, models?: ModelInfo[]): void {
@@ -8,13 +15,18 @@ export function validateSelection(selection: Selection, provider: Provider, mode
     throw new FunnelError(msg, "invalid-selection");
   };
   if (selection.provider !== provider.id) bad(`Selection is for ${selection.provider}, not ${provider.id}.`);
-  if (!ACCESS_LEVELS.includes(selection.access)) bad(`Unknown access level "${selection.access}".`);
+  const { access, cwd } = selection;
+  if (access !== undefined && !ACCESS_LEVELS.includes(access)) bad(`Unknown access level "${access}".`);
+  // Providers that list no access levels (Ollama, the API providers) have no machine: cwd and access mean nothing.
   const hasMachineAccess = provider.capabilities.access.length > 0;
-  if (hasMachineAccess && !provider.capabilities.access.includes(selection.access)) {
-    bad(`${provider.displayName} cannot enforce access "${selection.access}". Supported: ${provider.capabilities.access.join(", ")}.`);
-  }
-  if (hasMachineAccess && (!isAbsolute(selection.cwd) || !existsSync(selection.cwd) || !statSync(selection.cwd).isDirectory())) {
-    bad(`cwd must be an existing absolute directory: ${selection.cwd}`);
+  if (hasMachineAccess) {
+    if (!access) bad(`${provider.displayName} needs an access level. Supported: ${provider.capabilities.access.join(", ")}.`);
+    else if (!provider.capabilities.access.includes(access)) {
+      bad(`${provider.displayName} cannot enforce access "${access}". Supported: ${provider.capabilities.access.join(", ")}.`);
+    }
+    if (!cwd || !isAbsolute(cwd) || !existsSync(cwd) || !statSync(cwd).isDirectory()) {
+      bad(`cwd must be an existing absolute directory: ${cwd ?? "(missing)"}`);
+    }
   }
   const { capabilities: cap } = provider;
   if (selection.effort && !cap.effort) bad(`${provider.displayName} has no effort setting.`);
