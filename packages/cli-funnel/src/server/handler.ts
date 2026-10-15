@@ -13,6 +13,7 @@ import {
   type RunInput,
   type Selection,
 } from "../types.js";
+import { BodyError, DEFAULT_MAX_BODY_BYTES, readJson } from "./body.js";
 import { handleOpenAI, type OpenAIDefaults } from "./openai.js";
 import { json, sse, sseHeaders } from "./sse.js";
 
@@ -34,8 +35,10 @@ export interface HandlerOptions {
   tailscale?: boolean;
   /** Directories the folder picker may browse and runs may use as their project folder. Default: the home directory. */
   fsRoots?: string[];
-  /** Defaults for the OpenAI-compatible endpoints, which cannot carry a full Selection. */
+  /** Defaults for the OpenAI-compatible endpoints, which cannot carry a full Selection. `openai.cwd` must be inside `fsRoots`. */
   openai?: OpenAIDefaults;
+  /** Largest request body the handler reads, in bytes. Larger requests get a 413. Default 10 MB. */
+  maxBodyBytes?: number;
   /** Seconds to wait for an approval before denying it. Default 300. */
   approvalTimeoutSec?: number;
   /**
@@ -106,12 +109,19 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
   const cors = options.cors === undefined ? undefined : corsOrigin(options.cors);
   const corsMatch = (req: Request) => !!cors && req.headers.get("origin")?.toLowerCase() === cors;
 
+  const maxBody = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
+  const readBody = (req: Request) => readJson(req, maxBody);
+
   const insideRoots = (p: string) => roots.some((r) => p === r || p.startsWith(r + sep));
   // Checks the real path, so a symlink inside a root cannot point a run or the picker outside it.
   const cwdAllowed = (cwd: string) => {
     const p = isAbsolute(cwd) ? real(cwd) : undefined;
     return !!p && insideRoots(p);
   };
+  const openai = options.openai?.cwd ? { ...options.openai, cwd: resolve(options.openai.cwd) } : options.openai;
+  if (openai?.cwd && !cwdAllowed(openai.cwd)) {
+    throw new Error(`openai.cwd ${openai.cwd} does not exist or is outside fsRoots. Add it to fsRoots or choose another folder.`);
+  }
   // A Host that is a domain name we do not know means DNS rebinding. An Origin on another host means another website.
   const allowed = (options.allowedHosts ?? []).map((h) => h.toLowerCase());
   const listed = (name: string) => allowed.some((h) => h === "*" || h === name || (h.startsWith(".") && (name.endsWith(h) || name === h.slice(1))));
@@ -139,14 +149,26 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
   };
 
   async function run(req: Request): Promise<Response> {
-    const body = (await req.json()) as Pick<RunInput, "prompt" | "sessionId" | "system" | "attachments" | "responseSchema" | "maxOutputTokens"> & {
+    const body = (await readBody(req)) as Pick<RunInput, "prompt" | "sessionId" | "system" | "attachments" | "responseSchema" | "maxOutputTokens"> & {
       selection: Selection;
     };
-    if (!cwdAllowed(body.selection?.cwd ?? "")) {
+    // Providers with no access levels (Ollama, API providers) have no machine to protect, so cwd means nothing to them.
+    const provider = funnel.providers[body.selection?.provider];
+    if ((!provider || provider.capabilities.access.length > 0) && !cwdAllowed(body.selection?.cwd ?? "")) {
       return json({ error: "cwd does not exist or is outside the allowed roots. Set fsRoots on the handler." }, 403);
     }
     const runId = `run_${++seq}_${Date.now().toString(36)}`;
     const timeoutMs = (options.approvalTimeoutSec ?? 300) * 1000;
+    // Approvals this run is waiting on. An aborted or finished run answers them with deny, so nothing outlives it.
+    const pending = new Set<string>();
+    // Set once the run is over. An approval the provider asks for after that, which can happen when the body is
+    // cancelled between the approval event and the provider's call to onApproval, is denied at once.
+    let over = false;
+    const settleAll = () => {
+      over = true;
+      for (const key of [...pending]) approvals.get(key)?.resolve("deny");
+    };
+    req.signal.addEventListener("abort", settleAll, { once: true });
     const input: RunInput = {
       runId,
       selection: body.selection,
@@ -159,6 +181,7 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
       signal: req.signal,
       onApproval: (request) =>
         new Promise<ApprovalDecision>((resolveDecision) => {
+          if (over || req.signal.aborted) return resolveDecision("deny");
           const key = `${runId}:${request.id}`;
           const early = earlyDecisions.get(key);
           if (early) {
@@ -166,11 +189,14 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
             return resolveDecision(early);
           }
           const timer = setTimeout(() => finish("deny"), timeoutMs);
+          timer.unref();
           const finish = (d: ApprovalDecision) => {
             clearTimeout(timer);
             approvals.delete(key);
+            pending.delete(key);
             resolveDecision(d);
           };
+          pending.add(key);
           approvals.set(key, { resolve: finish });
         }),
     };
@@ -181,9 +207,13 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
         for await (const e of stream) yield e;
       } catch (err) {
         yield { type: "error", message: err instanceof Error ? err.message : String(err), code: (err as FunnelError).code };
+      } finally {
+        settleAll();
+        req.signal.removeEventListener("abort", settleAll);
       }
     })();
-    return new Response(sse(events), { headers: sseHeaders });
+    // The generator may be blocked inside the provider, so a cancelled body settles the approvals itself.
+    return new Response(sse(events, { onCancel: settleAll }), { headers: sseHeaders });
   }
 
   async function login(id: ProviderId, req: Request): Promise<Response> {
@@ -237,7 +267,7 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
       const seg = path.split("/").filter(Boolean);
       const m = req.method;
 
-      if (path.startsWith("/v1/")) return await handleOpenAI(funnel, req, path, options.openai, cwdAllowed);
+      if (path.startsWith("/v1/")) return await handleOpenAI(funnel, req, path, openai, cwdAllowed, maxBody);
 
       if (m === "GET" && path === "/providers") return json(await funnel.overview());
       if (m === "GET" && path === "/fs") return await listDirs(url);
@@ -248,12 +278,12 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
         if (!funnel.providers[id]) return json({ error: `Unknown provider ${id}` }, 404);
         if (m === "GET" && seg[2] === "models" && !seg[3]) return json(await funnel.models(id));
         if (m === "POST" && seg[2] === "models" && seg[3] === "pull") {
-          const { name } = (await req.json()) as { name?: string };
+          const { name } = (await readBody(req)) as { name?: string };
           if (!name) return json({ error: "name is required" }, 400);
           return new Response(sse(funnel.pullModel(id, name, { signal: req.signal })), { headers: sseHeaders });
         }
         if (m === "POST" && seg[2] === "models" && seg[3] === "delete") {
-          const { name } = (await req.json()) as { name?: string };
+          const { name } = (await readBody(req)) as { name?: string };
           if (!name) return json({ error: "name is required" }, 400);
           await funnel.deleteModel(id, name);
           return json({ ok: true });
@@ -271,7 +301,7 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
         const session = logins.get(seg[1]);
         if (!session) return json({ error: "Unknown login" }, 404);
         if (seg[2] === "code") {
-          const { code } = (await req.json()) as { code: string };
+          const { code } = (await readBody(req)) as { code: string };
           session.sendCode(code);
         } else if (seg[2] === "cancel") session.cancel();
         return json({ ok: true });
@@ -279,7 +309,7 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
 
       if (m === "POST" && seg[0] === "approvals" && seg[1] && seg[2]) {
         const key = `${seg[1]}:${seg[2]}`;
-        const { decision } = (await req.json()) as { decision: ApprovalDecision };
+        const { decision } = (await readBody(req)) as { decision: ApprovalDecision };
         const answer: ApprovalDecision = decision === "allow" ? "allow" : "deny";
         const pending = approvals.get(key);
         if (pending) pending.resolve(answer);
@@ -293,6 +323,7 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
 
       return json({ error: "Not found" }, 404);
     } catch (err) {
+      if (err instanceof BodyError) return json({ error: err.message }, err.status);
       const status = err instanceof FunnelError ? (err.code === "invalid-selection" ? 400 : 409) : 500;
       return json({ error: err instanceof Error ? err.message : String(err), code: (err as FunnelError).code }, status);
     }
