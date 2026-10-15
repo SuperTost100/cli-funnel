@@ -205,6 +205,11 @@ export function createRunFolder(input: RunInput): RunFolder {
         case "usage":
           result.usage = e.usage;
           break;
+        case "limit": {
+          const { type: _, ...limit } = e;
+          result.limit ??= limit;
+          break;
+        }
         case "retry":
           result.retries = (result.retries ?? 0) + 1;
           break;
@@ -218,7 +223,7 @@ export function createRunFolder(input: RunInput): RunFolder {
           break;
         case "error":
           result.finishReason = "error";
-          throw Object.assign(new Error(e.message), { code: e.code });
+          throw Object.assign(new Error(e.message), { code: e.code, ...(result.limit ? { limit: result.limit } : {}) });
       }
     },
     finish(finishReason) {

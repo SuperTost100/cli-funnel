@@ -3,6 +3,7 @@ import { redactErrors } from "../util/redact.js";
 import { anthropicAdaptive, anthropicEfforts, geminiEfforts, openaiEfforts } from "./efforts.js";
 import { runWithHistory } from "./history.js";
 import { fetchRetrying, mergeHeaders, type RetryOptions } from "./http.js";
+import { parseHttpLimit } from "./limits.js";
 import {
   FunnelError,
   type ApiProviderId,
@@ -72,6 +73,14 @@ interface ApiSpec {
   userContent(input: RunInput): string | unknown[];
 }
 
+/** A failed response as events: a `limit` first when the API answered 429, then the error. */
+async function* httpError(label: string, res: Response): AsyncGenerator<FunnelEvent> {
+  const body = await res.text();
+  const limit = parseHttpLimit(res.status, res.headers, body);
+  if (limit) yield limit;
+  yield { type: "error", message: `${label} ${res.status}: ${body}`, code: "cli-failed" };
+}
+
 const MODEL_BASE = { contextWindows: [], fast: false, source: "cli" as const };
 
 const EPHEMERAL = { type: "ephemeral" };
@@ -136,7 +145,7 @@ const anthropic: ApiSpec = {
       { method: "POST", signal: input.signal, headers: { ...ctx.headers, "content-type": "application/json" }, body: JSON.stringify(anthropicBody(input, messages)) },
       ctx.retry,
     );
-    if (!res.ok) return yield { type: "error", message: `Anthropic API ${res.status}: ${await res.text()}`, code: "cli-failed" };
+    if (!res.ok) return yield* httpError("Anthropic API", res);
     let inTok = 0;
     let outTok = 0;
     let cached = 0;
@@ -249,7 +258,7 @@ export async function* streamChatCompletions(opts: ChatCompletionsOptions, input
   let finished = false;
   try {
     // The error body is read inside the try, so an abort while reading it ends the run as cancelled.
-    if (!res.ok) return yield { type: "error", message: `${opts.label} ${res.status}: ${await res.text()}`, code: "cli-failed" };
+    if (!res.ok) return yield* httpError(opts.label, res);
     for await (const { data } of readSSE(res)) {
       if (data === "[DONE]") {
         finished = true;
@@ -403,7 +412,7 @@ const gemini: ApiSpec = {
       },
       ctx.retry,
     );
-    if (!res.ok) return yield { type: "error", message: `Gemini API ${res.status}: ${await res.text()}`, code: "cli-failed" };
+    if (!res.ok) return yield* httpError("Gemini API", res);
     let usage: Record<string, number> | undefined;
     let stop = "STOP";
     let finished = false;

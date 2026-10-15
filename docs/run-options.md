@@ -159,3 +159,24 @@ Over HTTP:
 - `useRun().queued` is the number of runs ahead while the run waits, and undefined once it starts.
 
 `createFunnel` and `createHandler` keep separate queues. Set the limit on one of them, usually the handler.
+
+## Rate limits and quotas
+
+When a provider hits a limit or reports one, the stream carries a `limit` event:
+
+```ts
+{ type: "limit", kind: "rate", resetAt: "2026-10-15T13:00:00.000Z", detail: "Claude five-hour limit reached." }
+```
+
+`kind` is `rate` for a limit that clears within hours: requests per minute, or a subscription's five-hour window. It is `quota` for one that lasts longer: a weekly window, used-up credits or a billing cap. `retryAfterMs` and `resetAt` are there when the provider says. `detail` is the provider's own message.
+
+A limit usually ends the run with an `error` event right after. The API providers retry a 429 on their own first, with a `retry` event each time, and report the limit only when the last attempt fails. `result.limit` holds the first limit of the run. When the run fails, the error that `run()` throws carries it as `err.limit`.
+
+| Provider | Where the limit comes from |
+|---|---|
+| Claude Code | `rate_limit_event` with status `rejected`, and a result that failed with HTTP 429 |
+| Codex | `account/rateLimits/updated` when a window reaches 100%, and errors marked `usageLimitExceeded` or `rateLimitExceeded`, also when Codex retries them itself |
+| Anthropic, OpenAI and Gemini APIs, OpenAI-compatible servers | a 429 answer: `retry-after`, `retry-after-ms`, the `anthropic-ratelimit-*` and `x-ratelimit-*` headers, and Gemini's `RetryInfo` |
+| Cursor Agent, Antigravity, Ollama | nothing: they report no limits cli-funnel can read |
+
+`useRun().result.limit` has the same value in the browser. `cli-funnel run` prints the limit on stderr.

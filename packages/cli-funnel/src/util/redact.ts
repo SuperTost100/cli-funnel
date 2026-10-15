@@ -22,7 +22,11 @@ export function redact(text: string, secrets: (string | undefined)[] = []): stri
     .replace(/\bAIza[0-9A-Za-z_-]{16,}/g, MASK);
 }
 
-/** Redacts the message of every `error` event. */
+/** Redacts the message of every `error` event and the detail of every `limit` event. Both can quote the server's answer. */
 export async function* redactErrors(events: AsyncIterable<FunnelEvent>, secrets: (string | undefined)[]): AsyncGenerator<FunnelEvent> {
-  for await (const e of events) yield e.type === "error" ? { ...e, message: redact(e.message, secrets) } : e;
+  for await (const e of events) {
+    if (e.type === "error") yield { ...e, message: redact(e.message, secrets) };
+    else if (e.type === "limit") yield { ...e, detail: redact(e.detail, secrets) };
+    else yield e;
+  }
 }

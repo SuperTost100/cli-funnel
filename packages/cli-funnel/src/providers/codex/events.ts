@@ -1,6 +1,39 @@
 import type { FunnelEvent, Usage } from "../../types.js";
 
 type Params = Record<string, any>;
+type LimitEvent = Extract<FunnelEvent, { type: "limit" }>;
+
+/** Windows up to five hours count as a rate limit. Longer windows count as a quota. */
+const RATE_WINDOW_MINS = 300;
+
+const REACHED: Record<string, string> = {
+  workspace_owner_credits_depleted: "Codex workspace credits are used up.",
+  workspace_member_credits_depleted: "Codex workspace credits are used up.",
+  workspace_owner_usage_limit_reached: "Codex workspace usage limit reached.",
+  workspace_member_usage_limit_reached: "Codex workspace usage limit reached.",
+};
+
+/** A limit from `codexErrorInfo` on an error. Other error kinds give none. */
+function errorLimit(error: Params | undefined): LimitEvent[] {
+  const info = error?.codexErrorInfo;
+  if (info !== "usageLimitExceeded" && info !== "rateLimitExceeded") return [];
+  return [{ type: "limit", kind: info === "usageLimitExceeded" ? "quota" : "rate", detail: error?.message ?? "Codex hit a usage limit." }];
+}
+
+/** A limit from an `account/rateLimits/updated` snapshot, when it says one was reached. Usage below 100% gives none. */
+export function snapshotLimit(snapshot: Params | undefined): LimitEvent[] {
+  if (!snapshot) return [];
+  const windows = [snapshot.primary, snapshot.secondary].filter((w): w is Params => !!w);
+  const full = windows.find((w) => w.usedPercent >= 100);
+  const reached: string | undefined = snapshot.rateLimitReachedType ?? undefined;
+  if (!full && !reached) return [];
+  const window = full ?? windows[0];
+  const shortWindow = typeof window?.windowDurationMins === "number" && window.windowDurationMins <= RATE_WINDOW_MINS;
+  const kind = reached && reached !== "rate_limit_reached" ? "quota" : shortWindow ? "rate" : "quota";
+  const limit: LimitEvent = { type: "limit", kind, detail: (reached && REACHED[reached]) ?? "Codex usage limit reached." };
+  if (typeof window?.resetsAt === "number") limit.resetAt = new Date(window.resetsAt * 1000).toISOString();
+  return [limit];
+}
 
 export interface Translated {
   events: FunnelEvent[];
@@ -16,6 +49,8 @@ export class Translator {
   /** Message phase by item id, from `item/started`. Deltas carry only the item id. */
   private phases = new Map<string, string | null>();
   private usage: Usage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, totalTokens: 0 };
+  /** Codex sends a rate-limit snapshot after every turn. A reached limit is reported once per run. */
+  private limitReported = false;
 
   constructor(private threadId: string) {}
 
@@ -44,9 +79,16 @@ export class Translator {
         u.totalTokens += l.totalTokens;
         return { events: [{ type: "usage", usage: { ...u } }] };
       }
+      case "account/rateLimits/updated": {
+        if (this.limitReported) return { events: [] };
+        const events = snapshotLimit(p.rateLimits);
+        this.limitReported = events.length > 0;
+        return { events };
+      }
       case "error":
-        if (p.willRetry) return { events: [] };
-        return { events: [{ type: "error", message: p.error?.message ?? "Codex reported an error." }], finished: true };
+        // Codex retries some errors itself. A limit is still worth reporting then.
+        if (p.willRetry) return { events: errorLimit(p.error) };
+        return { events: [...errorLimit(p.error), { type: "error", message: p.error?.message ?? "Codex reported an error." }], finished: true };
       case "turn/completed":
         return this.turnCompleted(p.turn);
       default:
@@ -118,7 +160,7 @@ export class Translator {
 
   private turnCompleted(turn: Params): Translated {
     if (turn?.status === "failed") {
-      return { events: [{ type: "error", message: turn.error?.message ?? "Turn failed." }], finished: true };
+      return { events: [...errorLimit(turn.error), { type: "error", message: turn.error?.message ?? "Turn failed." }], finished: true };
     }
     const finishReason = turn?.status === "interrupted" ? "cancelled" : "stop";
     return { events: [{ type: "done", text: this.messages.join("\n\n"), finishReason }], finished: true };

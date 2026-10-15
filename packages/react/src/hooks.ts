@@ -6,6 +6,7 @@ import type {
   FinishReason,
   FunnelClient,
   FunnelEvent,
+  Limit,
   LoginEvent,
   ModelInfo,
   ProviderOverview,
@@ -393,6 +394,8 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
       deniedActions: [] as string[],
       /** The parsed answer when the provider reports structured output itself. */
       structured: undefined as unknown,
+      /** The first limit the provider reported, as in RunResult.limit. */
+      limit: undefined as Limit | undefined,
     };
     for (const e of events) {
       if (e.type === "session") {
@@ -406,7 +409,10 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
         if (e.error?.startsWith("denied:")) out.deniedActions.push(call?.name ?? e.error.slice(7).trim());
       } else if (e.type === "usage") out.usage = e.usage;
       else if (e.type === "structured") out.structured = e.data;
-      else if (e.type === "done") {
+      else if (e.type === "limit") {
+        const { type: _, ...limit } = e;
+        out.limit ??= limit;
+      } else if (e.type === "done") {
         if (e.text) out.text = e.text;
         out.finishReason = e.finishReason;
       }
