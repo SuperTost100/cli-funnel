@@ -1,0 +1,9 @@
+{
+  "object": "list",
+  "data": [
+    { "id": "gpt-5.5", "object": "model", "created": 1790000000, "owned_by": "system" },
+    { "id": "gpt-5-chat-latest", "object": "model", "created": 1790000000, "owned_by": "system" },
+    { "id": "o4-mini", "object": "model", "created": 1780000000, "owned_by": "system" },
+    { "id": "gpt-4.1", "object": "model", "created": 1770000000, "owned_by": "system" }
+  ]
+}

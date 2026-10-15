@@ -103,7 +103,8 @@ describe("gemini-api", () => {
     const calls = stubFetch((url) => Response.json(url.includes("pageToken=p2") ? pages[1] : pages[0]));
     const models = await provider().models();
     expect(models.map((m) => m.id)).toEqual(["gemini-3.1-pro", "gemini-3.8-flash", "gemma-4-27b-it"]);
-    expect(models.find((m) => m.id === "gemini-3.8-flash")).toMatchObject({ name: "Gemini 3.8 Flash", provider: "gemini-api", efforts: [] });
+    expect(models.find((m) => m.id === "gemini-3.8-flash")).toMatchObject({ name: "Gemini 3.8 Flash", provider: "gemini-api" });
+    expect(models.map((m) => [m.id, m.efforts.length])).toEqual([["gemini-3.1-pro", 3], ["gemini-3.8-flash", 3], ["gemma-4-27b-it", 0]]);
     expect(calls.map((c) => c.headers["x-goog-api-key"])).toEqual(["test-key", "test-key"]);
   });
 

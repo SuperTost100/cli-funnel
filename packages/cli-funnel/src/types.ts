@@ -48,6 +48,8 @@ export interface Capabilities {
   system: "native" | "prompt";
   /** `native` when the CLI or API enforces `responseSchema`. `prompt` means the schema is only asked for in the prompt. */
   schema: "native" | "prompt";
+  /** True when the provider passes `RunInput.sampling` to the model. Runs that set `sampling` on other providers are refused. */
+  sampling?: boolean;
   /** True when `pullModel` and `deleteModel` work. Model servers such as Ollama. */
   manageModels?: boolean;
 }
@@ -166,6 +168,16 @@ export interface RunResult {
   structuredError?: string;
 }
 
+/** Sampling controls. Each provider sends the fields its vendor accepts and ignores the rest. */
+export interface Sampling {
+  temperature?: number;
+  topP?: number;
+  /** Strings that end the answer when the model writes them. */
+  stop?: string[];
+  /** For repeatable output. The Anthropic API has no seed and ignores it. */
+  seed?: number;
+}
+
 export interface RunInput {
   selection: Selection;
   prompt: string;
@@ -177,6 +189,8 @@ export interface RunInput {
   responseSchema?: ResponseSchema;
   /** Upper bound on output tokens. API providers only. CLIs set their own limit. */
   maxOutputTokens?: number;
+  /** Temperature, top-p, stop sequences and seed. See `capabilities.sampling`. The vendor may reject values its models do not allow, for example a non-default temperature on recent Claude and OpenAI reasoning models. */
+  sampling?: Sampling;
   /** Continue an earlier conversation. Use the `sessionId` from a previous result. */
   sessionId?: string;
   signal?: AbortSignal;
