@@ -9,7 +9,7 @@ export function json(body: unknown, status = 200): Response {
 }
 
 /** Turns an async iterable into an SSE body. Each item becomes one `data:` line of JSON. */
-export function sse(items: AsyncIterable<unknown>, opts: { done?: string } = {}): ReadableStream<Uint8Array> {
+export function sse(items: AsyncIterable<unknown>, opts: { done?: string; onCancel?: () => void } = {}): ReadableStream<Uint8Array> {
   const enc = new TextEncoder();
   const it = items[Symbol.asyncIterator]();
   return new ReadableStream({
@@ -28,6 +28,7 @@ export function sse(items: AsyncIterable<unknown>, opts: { done?: string } = {})
       }
     },
     async cancel() {
+      opts.onCancel?.();
       await it.return?.();
     },
   });

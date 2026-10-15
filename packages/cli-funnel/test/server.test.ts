@@ -66,7 +66,7 @@ describe("server", () => {
         yield { type: "done", text: "", finishReason: "stop" };
       },
     };
-    const h = createHandler(createFunnel({ providers: { agent: echo } }), { openai: { cwd: tmpdir(), access: "accept-edits" } });
+    const h = createHandler(createFunnel({ providers: { agent: echo } }), { fsRoots: [tmpdir()], openai: { cwd: tmpdir(), access: "accept-edits" } });
     const ask = async (extra: object = {}) =>
       (await h(new Request("http://x/v1/chat/completions", { method: "POST", body: JSON.stringify({ model: "agent/fake-1", messages: [{ role: "user", content: "hi" }], ...extra }) })))
         .json();

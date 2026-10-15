@@ -21,7 +21,7 @@ const res = await client.chat.completions.create({
 
 ## Model ids
 
-Ids are `<provider>/<model>`, for example `claude/claude-sonnet-5`, `codex/gpt-5.3-codex`, `ollama/llama3.2:3b` or `openai-compatible:lmstudio/qwen/qwen3-8b`. The provider id ends at the first slash. `GET /v1/models` lists every model from every installed provider.
+Ids are `<provider>/<model>`, for example `claude/claude-sonnet-5`, `codex/gpt-5.3-codex`, `ollama/llama3.2:3b` or `openai-compatible:lmstudio/qwen/qwen3-8b`. The provider id ends at the first slash. `GET /v1/models` lists the models of providers that are installed and signed in. `GET /v1/models/{id}` returns one of them, or a 404 in the OpenAI error format.
 
 ## Mapping
 
@@ -30,9 +30,10 @@ Ids are `<provider>/<model>`, for example `claude/claude-sonnet-5`, `codex/gpt-5
 | `messages` | Flattened into one prompt. With a session id, only the last user message is sent. |
 | `system` messages | `system`, joined in order |
 | `image_url` parts with a `data:` URL, last user message | `attachments`. Remote URLs are ignored, so the server never fetches for a client |
-| `response_format` of type `json_schema` | `responseSchema` |
+| `response_format` of type `json_schema` | `responseSchema`. `message.content` is the JSON of the structured answer. With `stream: true` it arrives as one content chunk at the end. |
 | `max_completion_tokens`, `max_tokens` | `maxOutputTokens` |
-| `stream: true` | Server-sent events, ending with `[DONE]`. |
+| `stream: true` | Server-sent events, ending with `[DONE]`. Errors that happen before the first event are a normal error response with a 4xx status. Later errors arrive as a `data:` line with an `error` object. |
+| `stream_options.include_usage` | A last chunk with `choices: []` and `usage`, as OpenAI sends it. Without the option, streams carry no usage. |
 | `reasoning_effort` | `selection.effort` |
 | `usage.prompt_tokens`, `completion_tokens`, `total_tokens` | From the CLI's usage report, when it gives one. |
 | `finish_reason` | `length` for `finishReason: "length"`, `content_filter` for `denied`, `stop` otherwise |
@@ -45,10 +46,14 @@ Chat completions cannot carry a folder or an access level, so the server takes t
 { "x_funnel": { "cwd": "/path", "access": "full", "sessionId": "abc", "fast": true, "contextWindow": 1000000 } }
 ```
 
-The response carries `x_funnel.sessionId`, `toolCalls` and `deniedActions`. Send the session id back to continue the conversation.
+The response carries `x_funnel.sessionId`, `toolCalls` and `deniedActions`. A streamed response carries them on the chunk with `finish_reason`. Send the session id back to continue the conversation.
+
+The folder is checked against the server's `fsRoots` on every request, the default one included. Providers with no access levels (Ollama, API providers, OpenAI-compatible servers) ignore it.
 
 ## Limits
 
 The OpenAI wire format has no approve button. Requests to this endpoint therefore deny anything that needs approval, and `supervised` behaves as deny-by-default. Use `accept-edits`, `auto` or `full` here, or use the `/run` route and `useRun` when a human should approve actions.
 
 Tool calls happen inside the CLI. They do not appear as OpenAI `tool_calls`.
+
+Fields the server cannot honour get a 400 with `error.param` set, instead of being ignored: `tools` (when not empty), `tool_choice` (other than `none` or `auto`), `n` other than 1, `stop`, `temperature` or `top_p` other than 1, `seed`, and `response_format` of type `json_object`. A body that is not valid JSON, or has no `model` string or no non-empty `messages` array of objects with a `role`, gets a 400 too. Bodies over 10 MB get a 413. `maxBodyBytes` on the handler changes the limit.

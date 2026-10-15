@@ -32,6 +32,12 @@ The `Origin`, when the browser sends one, must be loopback, in `allowedHosts`, o
 
 The folder picker only lists directories inside `fsRoots`, which defaults to the home directory.
 
+`/run` and `/v1/chat/completions` refuse a project folder outside `fsRoots` with a 403, whatever the source of the folder. Providers with no access levels (Ollama, the API providers, OpenAI-compatible servers) skip the check, because they have no machine access. `createHandler` throws at startup when `openai.cwd` is set and is not inside `fsRoots`.
+
+Every route that reads a body stops at `maxBodyBytes` (default 10 MB) and answers 413. A body that is not valid JSON, or not a JSON object, gets a 400.
+
+A run that ends or is cancelled while it waits for an approval gets `deny` for it at once. Approvals that nobody answers are denied after `approvalTimeoutSec` (default 300).
+
 ## Client
 
 ```ts
