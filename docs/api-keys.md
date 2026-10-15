@@ -23,9 +23,15 @@ Without `apiKeys`, the providers read the environment variables.
 
 They stream text and report usage. They have no tools, no file access and no approvals, so `capabilities.access` is empty and `cwd` and `access` are ignored. The picker hides those controls.
 
-Model lists come live from each vendor's `/models` endpoint, so they need a valid key.
+Model lists come live from each vendor's `/models` endpoint, so they need a valid key. The OpenAI list leaves out models that only work with the Responses API (`-pro`, `-codex`, deep research) and aliases such as `chatgpt-4o-latest`. Fine-tuned `ft:` models stay.
 
-Conversation history for `sessionId` lives in the process memory by default. It is gone after a restart, and only the 500 most recently used sessions are kept. A turn that fails or is cancelled is not added, so the next turn in the session sends the same history again.
+Usage on the Anthropic API counts cache reads and cache writes in `inputTokens`, as Claude Code does, and reports the writes as `cacheCreationInputTokens`. `finishReason` is `denied` for a refusal and `length` for `max_tokens` or a full context window. The OpenAI API sends `responseSchema` with `strict: true`, so every object in the schema needs `additionalProperties: false` and all its properties listed in `required`. OpenAI-compatible servers get the schema without `strict`.
+
+Error messages never carry a key. The configured key, `Bearer` values, `sk-` and `AIza` tokens and URL query strings are removed from them.
+
+Conversation history for `sessionId` lives in the process memory by default, one store per `createFunnel()`. It is gone after a restart, and only the 500 most recently used sessions are kept. A turn that fails, is cancelled or ends early is not added, so the next turn in the session sends the same history again. A stream that closes before the vendor's end marker (`message_stop`, `[DONE]` or a finish reason) ends with an `error` event with code `stream-truncated`, and its partial text is not stored.
+
+A session belongs to the provider that started it. The same `sessionId` on another provider starts a new conversation, because each provider stores messages in its own format. Turns on one session run one after another, and a turn is stored before its `done` event is yielded.
 
 To keep sessions across restarts, pass a file store:
 
@@ -35,7 +41,7 @@ import { createFunnel, fileHistory } from "cli-funnel";
 const funnel = createFunnel({ history: fileHistory("/path/to/sessions") });
 ```
 
-`fileHistory` writes one JSON file per session, readable by the owner only, and keeps the 500 most recently written. For a database, pass any object with `get(sessionId)` and `set(sessionId, messages)`. Both may return a promise. The messages are in the provider's own format, so store them as they are. `cli-funnel run` and `cli-funnel serve` use a file store in `$XDG_STATE_HOME/cli-funnel/sessions`, or `~/.local/state/cli-funnel/sessions` when that variable is unset.
+`fileHistory` writes one JSON file per session, readable by the owner only, and keeps the 500 most recently written. It never removes a file written in the last 5 seconds, so a store can briefly hold a few more. For a database, pass any object with `get(key)` and `set(key, messages)`. The key is `<provider id>:<sessionId>`. Both may return a promise. The messages are in the provider's own format, so store them as they are. `cli-funnel run` and `cli-funnel serve` use a file store in `$XDG_STATE_HOME/cli-funnel/sessions`, or `~/.local/state/cli-funnel/sessions` when that variable is unset.
 
 ## Gemini API
 
@@ -46,6 +52,8 @@ const funnel = createFunnel({ history: fileHistory("/path/to/sessions") });
 - Thought parts, when the model sends them, become `reasoning.delta` events. Thinking tokens count as output tokens and also appear as `reasoningTokens`.
 - A `SAFETY`, `RECITATION`, `BLOCKLIST`, `PROHIBITED_CONTENT` or `SPII` stop, or a blocked prompt, ends the run with `finishReason: "denied"`.
 - Effort is not offered. The model's default thinking level applies.
+- The answer is stored with its `thoughtSignature`, and sent back on the next turn so the model keeps its reasoning.
+- A `MALFORMED_FUNCTION_CALL` or `OTHER` stop ends the run with an `error` event.
 
 Prefer passing the key through `apiKeys`. `agy` also reads `GEMINI_API_KEY` as a sign-in method, so the variable in the environment of a process that runs Antigravity may switch it to API billing.
 

@@ -12,6 +12,7 @@ const reply = (text: string) =>
       { type: "message_start", message: { usage: { input_tokens: 3 } } },
       { type: "content_block_delta", delta: { type: "text_delta", text } },
       { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+      { type: "message_stop" },
     ]
       .map((e) => `data: ${JSON.stringify(e)}\n\n`)
       .join(""),
@@ -37,7 +38,7 @@ describe("fileHistory", () => {
 
   it("drops the least recently written sessions past the limit", async () => {
     const dir = mkdtempSync(join(tmpdir(), "cf-history-"));
-    const store = fileHistory(dir, 2);
+    const store = fileHistory(dir, 2, 0);
     for (const id of ["a", "b", "c"]) {
       await store.set(id, [id]);
       await new Promise((r) => setTimeout(r, 20));
@@ -82,6 +83,6 @@ describe("funnel history option", () => {
       prompt: "Hi.",
       history: mine,
     });
-    expect(await mine.get(r.sessionId!)).toHaveLength(2);
+    expect(await mine.get(`anthropic-api:${r.sessionId}`)).toHaveLength(2);
   });
 });

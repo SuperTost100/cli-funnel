@@ -2,11 +2,19 @@ import type { FunnelEvent, ModelInfo, PullEvent, Usage } from "../../types.js";
 
 type Json = Record<string, any>;
 
+/** Embedding-only models. Older servers do not list `capabilities`, so the family and the name decide. */
+const EMBEDDING_NAME = /embed|bge-|minilm|mxbai|\be5\b|gte-/i;
+
+function embeddingOnly(m: Json): boolean {
+  if (Array.isArray(m.capabilities)) return !m.capabilities.includes("completion");
+  return /bert/i.test(String(m.details?.family ?? "")) || EMBEDDING_NAME.test(String(m.name));
+}
+
 /** Ollama ids such as `llama3.2:latest` are passed through as the server reports them. The digest pins the weights. */
 export function parseTags(body: unknown): ModelInfo[] {
   const models: Json[] = (body as Json)?.models ?? [];
   return models
-    .filter((m) => typeof m.name === "string" && !(m.capabilities && !m.capabilities.includes("completion")))
+    .filter((m) => typeof m.name === "string" && !embeddingOnly(m))
     .map((m) => ({
       id: m.name as string,
       name: m.digest ? `${m.name} (${String(m.digest).slice(0, 8)})` : m.name,

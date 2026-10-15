@@ -1,4 +1,5 @@
 import { readNDJSON } from "../../util/ndjson.js";
+import { redactErrors } from "../../util/redact.js";
 import { compareVersions } from "../../util/process.js";
 import { FunnelError, type AuthStatus, type FunnelEvent, type Installation, type ModelInfo, type Provider, type PullEvent, type RunInput } from "../../types.js";
 import { runWithHistory } from "../history.js";
@@ -82,20 +83,29 @@ export function createOllamaProvider(options: OllamaOptions = {}): Provider {
   async function* chat(input: RunInput, messages: ChatMessage[]): AsyncGenerator<FunnelEvent> {
     const cancelled: FunnelEvent = { type: "done", text: "", finishReason: "cancelled" };
     let finished = false;
+    // The first line that was not JSON. A proxy error page looks like this, and it is what the user needs to see.
+    let raw: string | undefined;
     try {
       const res = await fetch(`${base()}/api/chat`, { method: "POST", signal: input.signal, headers: headers(true), body: JSON.stringify(chatBody(input, messages)) });
       if (!res.ok) return yield { type: "error", message: `Ollama ${res.status}: ${await errorText(res)}`, code: "cli-failed" };
       for await (const line of readNDJSON(res)) {
+        if (line && typeof line === "object" && "__raw" in line) {
+          raw ??= String(line.__raw).slice(0, 200);
+          continue;
+        }
         for (const e of mapChatLine(line)) {
           if (e.type === "done" || e.type === "error") finished = true;
           yield e;
         }
+        // Stop at the terminal event. A proxy may hold the connection open, and returning cancels the body.
+        if (finished) return;
       }
     } catch (err) {
       if (input.signal?.aborted) return yield cancelled;
       return yield { type: "error", message: finished ? String(err) : `${notRunning()} ${String(err)}`, code: "cli-failed" };
     }
-    if (!finished) yield { type: "error", message: "Ollama closed the stream before the answer finished.", code: "cli-failed" };
+    if (raw) yield { type: "error", message: `Ollama sent a line that is not JSON: ${raw}`, code: "cli-failed" };
+    else yield { type: "error", message: "Ollama closed the stream before the answer finished.", code: "stream-truncated" };
   }
 
   async function* pullModel(name: string, opts: { signal?: AbortSignal } = {}): AsyncGenerator<PullEvent> {
@@ -156,6 +166,10 @@ export function createOllamaProvider(options: OllamaOptions = {}): Provider {
     models,
     pullModel,
     deleteModel,
-    run: (input) => runWithHistory(input, userMessage(input), (text): ChatMessage => ({ role: "assistant", content: text }), (messages) => chat(input, messages)),
+    run: (input) =>
+      redactErrors(
+        runWithHistory(input, userMessage(input), (text): ChatMessage => ({ role: "assistant", content: text }), (messages) => chat(input, messages)),
+        [options.apiKey],
+      ),
   };
 }

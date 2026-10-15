@@ -78,6 +78,8 @@ export interface Usage {
   inputTokens: number;
   outputTokens: number;
   cachedInputTokens?: number;
+  /** Input tokens written to the prompt cache. Counted in `inputTokens`. Anthropic only. */
+  cacheCreationInputTokens?: number;
   reasoningTokens?: number;
   totalTokens: number;
   /** Set only when the CLI reports it. Subscription runs often do not. */
