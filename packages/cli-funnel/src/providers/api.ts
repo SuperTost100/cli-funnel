@@ -1,5 +1,6 @@
 import { readSSE } from "../util/sse.js";
 import { redactErrors } from "../util/redact.js";
+import { anthropicAdaptive, anthropicEfforts, geminiEfforts, openaiEfforts } from "./efforts.js";
 import { runWithHistory } from "./history.js";
 import {
   FunnelError,
@@ -33,7 +34,30 @@ interface ApiSpec {
   userContent(input: RunInput): string | unknown[];
 }
 
-const NO_EFFORT = { efforts: [], contextWindows: [], fast: false, source: "cli" as const };
+const MODEL_BASE = { contextWindows: [], fast: false, source: "cli" as const };
+
+/** The Messages request body. */
+export function anthropicBody(input: RunInput, messages: Msg[]): Record<string, unknown> {
+  const { effort, model } = input.selection;
+  const { sampling } = input;
+  const outputConfig = {
+    ...(effort ? { effort } : {}),
+    ...(input.responseSchema ? { format: { type: "json_schema", schema: input.responseSchema.schema } } : {}),
+  };
+  return {
+    model,
+    max_tokens: input.maxOutputTokens ?? 8192,
+    stream: true,
+    ...(input.system ? { system: input.system } : {}),
+    // The newest models hide thinking text unless `display` asks for it. Effort turns thinking on where it is off by default.
+    ...(effort && anthropicAdaptive(model) ? { thinking: { type: "adaptive", display: "summarized" } } : {}),
+    ...(Object.keys(outputConfig).length ? { output_config: outputConfig } : {}),
+    ...(sampling?.temperature !== undefined ? { temperature: sampling.temperature } : {}),
+    ...(sampling?.topP !== undefined ? { top_p: sampling.topP } : {}),
+    ...(sampling?.stop?.length ? { stop_sequences: sampling.stop } : {}),
+    messages,
+  };
+}
 
 const anthropic: ApiSpec = {
   id: "anthropic-api",
@@ -50,7 +74,7 @@ const anthropic: ApiSpec = {
       });
       if (!res.ok) throw new FunnelError(`Anthropic API returned ${res.status}.`, "cli-failed");
       const body = (await res.json()) as { data: { id: string; display_name?: string }[]; has_more?: boolean; last_id?: string };
-      for (const m of body.data) out.push({ id: m.id, name: m.display_name ?? m.id, provider: "anthropic-api", ...NO_EFFORT });
+      for (const m of body.data) out.push({ id: m.id, name: m.display_name ?? m.id, provider: "anthropic-api", efforts: anthropicEfforts(m.id), ...MODEL_BASE });
       if (!body.has_more || !body.last_id) break;
       after = body.last_id;
     }
@@ -61,14 +85,7 @@ const anthropic: ApiSpec = {
       method: "POST",
       signal: input.signal,
       headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: JSON.stringify({
-        model: input.selection.model,
-        max_tokens: input.maxOutputTokens ?? 8192,
-        stream: true,
-        ...(input.system ? { system: input.system } : {}),
-        ...(input.responseSchema ? { output_config: { format: { type: "json_schema", schema: input.responseSchema.schema } } } : {}),
-        messages,
-      }),
+      body: JSON.stringify(anthropicBody(input, messages)),
     });
     if (!res.ok) return yield { type: "error", message: `Anthropic API ${res.status}: ${await res.text()}`, code: "cli-failed" };
     let inTok = 0;
@@ -84,6 +101,8 @@ const anthropic: ApiSpec = {
         cached = e.message.usage?.cache_read_input_tokens ?? 0;
         created = e.message.usage?.cache_creation_input_tokens ?? 0;
       } else if (e.type === "content_block_delta" && e.delta?.type === "text_delta") yield { type: "text.delta", text: e.delta.text };
+      // With display "omitted" the deltas carry an empty string.
+      else if (e.type === "content_block_delta" && e.delta?.type === "thinking_delta" && e.delta.thinking) yield { type: "reasoning.delta", text: e.delta.thinking };
       else if (e.type === "message_delta") {
         outTok = e.usage?.output_tokens ?? outTok;
         stop = e.delta?.stop_reason ?? stop;
@@ -142,6 +161,11 @@ export async function* streamChatCompletions(opts: ChatCompletionsOptions, input
         stream: true,
         stream_options: { include_usage: true },
         ...(input.maxOutputTokens ? { [opts.maxTokensField]: input.maxOutputTokens } : {}),
+        ...(input.selection.effort ? { reasoning_effort: input.selection.effort } : {}),
+        ...(input.sampling?.temperature !== undefined ? { temperature: input.sampling.temperature } : {}),
+        ...(input.sampling?.topP !== undefined ? { top_p: input.sampling.topP } : {}),
+        ...(input.sampling?.stop?.length ? { stop: input.sampling.stop } : {}),
+        ...(input.sampling?.seed !== undefined ? { seed: input.sampling.seed } : {}),
         ...(input.responseSchema
           ? {
               response_format: {
@@ -246,7 +270,7 @@ const openai: ApiSpec = {
     const body = (await res.json()) as { data: { id: string }[] };
     return body.data
       .filter((m) => openaiChatModel(m.id))
-      .map((m) => ({ id: m.id, name: m.id, provider: "openai-api" as const, ...NO_EFFORT }))
+      .map((m) => ({ id: m.id, name: m.id, provider: "openai-api" as const, efforts: openaiEfforts(m.id), ...MODEL_BASE }))
       .sort((a, b) => a.id.localeCompare(b.id));
   },
   stream: (key, input, messages) =>
@@ -285,7 +309,7 @@ const gemini: ApiSpec = {
       for (const m of body.models ?? []) {
         const id = m.name.replace(/^models\//, "");
         if (!m.supportedGenerationMethods?.includes("generateContent") || GEMINI_SKIP.test(id)) continue;
-        out.push({ id, name: m.displayName ?? id, provider: "gemini-api", ...NO_EFFORT });
+        out.push({ id, name: m.displayName ?? id, provider: "gemini-api", efforts: geminiEfforts(id), ...MODEL_BASE });
       }
       page = body.nextPageToken ?? "";
     } while (page);
@@ -304,6 +328,11 @@ const gemini: ApiSpec = {
         ...(input.system ? { systemInstruction: { parts: [{ text: input.system }] } } : {}),
         generationConfig: {
           ...(input.maxOutputTokens ? { maxOutputTokens: input.maxOutputTokens } : {}),
+          ...(input.selection.effort ? { thinkingConfig: { thinkingLevel: input.selection.effort, includeThoughts: true } } : {}),
+          ...(input.sampling?.temperature !== undefined ? { temperature: input.sampling.temperature } : {}),
+          ...(input.sampling?.topP !== undefined ? { topP: input.sampling.topP } : {}),
+          ...(input.sampling?.stop?.length ? { stopSequences: input.sampling.stop } : {}),
+          ...(input.sampling?.seed !== undefined ? { seed: input.sampling.seed } : {}),
           ...(input.responseSchema ? { responseMimeType: "application/json", responseJsonSchema: input.responseSchema.schema } : {}),
         },
       }),
@@ -388,7 +417,7 @@ function makeApiProvider(spec: ApiSpec, getKey: () => string | undefined): Provi
     binary: "fetch",
     capabilities: {
       access: [],
-      effort: false,
+      effort: true,
       contextWindow: false,
       fast: false,
       resume: true,
@@ -396,6 +425,7 @@ function makeApiProvider(spec: ApiSpec, getKey: () => string | undefined): Provi
       images: true,
       system: "native",
       schema: "native",
+      sampling: true,
     },
     detect: async () => ({ installed: true, testedRange: { min: "0" }, withinTestedRange: true }),
     authStatus: async () => ({ loggedIn: !!(getKey() ?? process.env[spec.envVar]), method: "API key" }),
