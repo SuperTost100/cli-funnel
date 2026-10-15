@@ -55,7 +55,7 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
     finished = true;
     for (const e of events) out.push(e);
     out.end();
-    proc.child.kill("SIGTERM");
+    proc.kill();
   };
 
   const decide = async (req: ServerRequest): Promise<ApprovalDecision> => {
@@ -149,7 +149,7 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
     yield* out;
   } finally {
     input.signal?.removeEventListener("abort", onAbort);
-    proc.child.kill("SIGTERM");
+    proc.kill();
   }
 }
 

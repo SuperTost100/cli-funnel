@@ -155,7 +155,7 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
     }
   } finally {
     // Runs too when the caller stops reading early. The CLI must not keep working unattended.
-    if (stream.child.exitCode === null) stream.child.kill("SIGTERM");
+    stream.kill();
   }
   const code = await stream.exited;
   if (mapper.finished) return;

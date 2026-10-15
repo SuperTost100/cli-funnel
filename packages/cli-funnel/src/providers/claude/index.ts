@@ -1,4 +1,4 @@
-import { FunnelError, type AccessLevel, type AuthStatus, type Capabilities, type FunnelEvent, type Provider, type RunInput } from "../../types.js";
+import { FunnelError, type AccessLevel, type ApprovalDecision, type ApprovalRequest, type AuthStatus, type Capabilities, type FunnelEvent, type Provider, type RunInput } from "../../types.js";
 import { detectInstallation, findBinary, runLogout, runUpdate, spawnLogin } from "../base.js";
 import { fromManifest, loadManifest, mergeModels } from "../../catalog/manifest.js";
 import { compareVersions, exec, spawnStream } from "../../util/process.js";
@@ -87,24 +87,47 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
         }
         const request = { id: String(req.tool_use_id ?? msg.request_id), tool: String(req.tool_name), input: req.input, description: req.description };
         yield { type: "approval.request", request };
-        const decision = await input.onApproval!(request);
+        const decision = await awaitApproval(input, request, proc.exited);
+        // Cancelled or exited while waiting: the loop ends with the process and the run reports why below.
+        if (decision === undefined) continue;
         const response = decision === "allow" ? { behavior: "allow", updatedInput: req.input } : { behavior: "deny", message: "Denied by the user." };
         proc.write(JSON.stringify({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response } }));
         continue;
       }
+      // `result` is the last message of the turn. Close stdin before yielding it, since a consumer that stops at
+      // `done` never resumes this loop, and Claude Code waits on stdin for another turn until it closes.
+      if (msg.type === "result") proc.closeStdin();
       for (const e of parseClaudeMessage(raw)) {
         if (e.type === "done" || e.type === "error") finished = true;
         yield e;
       }
-      if (msg.type === "result") proc.closeStdin();
     }
   } finally {
-    if (!finished) proc.child.kill("SIGTERM");
+    proc.closeStdin();
+    // After a result Claude Code exits on its own once stdin closes. Give it a moment to save the session, then stop it.
+    if (finished) setTimeout(() => proc.kill(), 2000).unref();
+    else proc.kill();
   }
   if (finished) return;
   await proc.exited;
   if (input.signal?.aborted) yield { type: "done", text: "", finishReason: "cancelled" };
   else yield { type: "error", message: proc.stderr().trim() || "Claude Code exited without a result.", code: "cli-failed" };
+}
+
+/** Waits for the caller's decision, or undefined once the run is aborted or the CLI has exited. */
+async function awaitApproval(input: RunInput, request: ApprovalRequest, exited: Promise<unknown>): Promise<ApprovalDecision | undefined> {
+  const signal = input.signal;
+  if (signal?.aborted) return undefined;
+  let onAbort!: () => void;
+  const aborted = new Promise<undefined>((resolve) => {
+    onAbort = () => resolve(undefined);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([Promise.resolve(input.onApproval!(request)), aborted, exited.then(() => undefined)]);
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+  }
 }
 
 async function authStatus(): Promise<AuthStatus> {
