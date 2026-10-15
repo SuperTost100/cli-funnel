@@ -27,6 +27,7 @@ const anthropicText = (text: string) =>
     { type: "message_start", message: { usage: { input_tokens: 3 } } },
     { type: "content_block_delta", delta: { type: "text_delta", text } },
     { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+    { type: "message_stop" },
   ]
     .map((e) => `data: ${JSON.stringify(e)}\n\n`)
     .join("");
@@ -128,7 +129,7 @@ describe("output limit", () => {
   };
 
   it("ends a cut-off answer with finishReason length", async () => {
-    const anthropic = events([{ type: "message_delta", delta: { stop_reason: "max_tokens" }, usage: { output_tokens: 1 } }]);
+    const anthropic = events([{ type: "message_delta", delta: { stop_reason: "max_tokens" }, usage: { output_tokens: 1 } }, { type: "message_stop" }]);
     expect(await run("anthropic-api", anthropic)).toMatchObject({ finishReason: "length" });
     const openai = events([{ choices: [{ delta: { content: "a" }, finish_reason: "length" }] }]);
     expect(await run("openai-api", openai)).toMatchObject({ finishReason: "length" });

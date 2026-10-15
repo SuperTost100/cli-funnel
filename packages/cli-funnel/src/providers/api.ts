@@ -1,4 +1,5 @@
 import { readSSE } from "../util/sse.js";
+import { redactErrors } from "../util/redact.js";
 import { runWithHistory } from "./history.js";
 import {
   FunnelError,
@@ -15,13 +16,19 @@ export interface Msg {
   content: string | unknown[];
 }
 
+/** What a stream hands back besides events. */
+interface Turn {
+  /** Replaces the plain answer text as the assistant message in history, for vendors that need more than text back. */
+  assistantContent?: unknown[];
+}
+
 interface ApiSpec {
   id: ApiProviderId;
   displayName: string;
   envVar: string;
   keyHint: string;
   listModels(key: string): Promise<ModelInfo[]>;
-  stream(key: string, input: RunInput, messages: Msg[]): AsyncGenerator<FunnelEvent>;
+  stream(key: string, input: RunInput, messages: Msg[], turn: Turn): AsyncGenerator<FunnelEvent>;
   /** The user turn in this vendor's content format. */
   userContent(input: RunInput): string | unknown[];
 }
@@ -34,12 +41,20 @@ const anthropic: ApiSpec = {
   envVar: "ANTHROPIC_API_KEY",
   keyHint: "console.anthropic.com",
   async listModels(key) {
-    const res = await fetch("https://api.anthropic.com/v1/models?limit=1000", {
-      headers: { "x-api-key": key, "anthropic-version": "2023-06-01" },
-    });
-    if (!res.ok) throw new FunnelError(`Anthropic API returned ${res.status}.`, "cli-failed");
-    const body = (await res.json()) as { data: { id: string; display_name?: string }[] };
-    return body.data.map((m) => ({ id: m.id, name: m.display_name ?? m.id, provider: "anthropic-api", ...NO_EFFORT }));
+    const out: ModelInfo[] = [];
+    let after = "";
+    // The list is short today, but it is paged, so follow `has_more`. The cap stops a server that never ends.
+    for (let page = 0; page < 20; page++) {
+      const res = await fetch(`https://api.anthropic.com/v1/models?limit=1000${after ? `&after_id=${encodeURIComponent(after)}` : ""}`, {
+        headers: { "x-api-key": key, "anthropic-version": "2023-06-01" },
+      });
+      if (!res.ok) throw new FunnelError(`Anthropic API returned ${res.status}.`, "cli-failed");
+      const body = (await res.json()) as { data: { id: string; display_name?: string }[]; has_more?: boolean; last_id?: string };
+      for (const m of body.data) out.push({ id: m.id, name: m.display_name ?? m.id, provider: "anthropic-api", ...NO_EFFORT });
+      if (!body.has_more || !body.last_id) break;
+      after = body.last_id;
+    }
+    return out;
   },
   async *stream(key, input, messages) {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -59,20 +74,34 @@ const anthropic: ApiSpec = {
     let inTok = 0;
     let outTok = 0;
     let cached = 0;
-    let stop = "stop";
+    let created = 0;
+    let stop = "end_turn";
+    let stopped = false;
     for await (const { data } of readSSE(res)) {
       const e = JSON.parse(data);
       if (e.type === "message_start") {
         inTok = e.message.usage?.input_tokens ?? 0;
         cached = e.message.usage?.cache_read_input_tokens ?? 0;
+        created = e.message.usage?.cache_creation_input_tokens ?? 0;
       } else if (e.type === "content_block_delta" && e.delta?.type === "text_delta") yield { type: "text.delta", text: e.delta.text };
       else if (e.type === "message_delta") {
         outTok = e.usage?.output_tokens ?? outTok;
         stop = e.delta?.stop_reason ?? stop;
-      } else if (e.type === "error") return yield { type: "error", message: e.error?.message ?? "API error" };
+      } else if (e.type === "message_stop") stopped = true;
+      else if (e.type === "error") return yield { type: "error", message: e.error?.message ?? "API error" };
     }
-    yield { type: "usage", usage: { inputTokens: inTok, outputTokens: outTok, cachedInputTokens: cached, totalTokens: inTok + outTok } };
-    yield { type: "done", text: "", finishReason: stop === "refusal" ? "denied" : stop === "max_tokens" ? "length" : "stop" };
+    if (!stopped) return yield truncated("Anthropic API");
+    // Cache reads and writes are input tokens the model processed, as in the Claude Code parser.
+    const inputTokens = inTok + cached + created;
+    yield {
+      type: "usage",
+      usage: { inputTokens, outputTokens: outTok, cachedInputTokens: cached, cacheCreationInputTokens: created, totalTokens: inputTokens + outTok },
+    };
+    yield {
+      type: "done",
+      text: "",
+      finishReason: stop === "refusal" ? "denied" : stop === "max_tokens" || stop === "model_context_window_exceeded" ? "length" : "stop",
+    };
   },
   userContent(input) {
     if (!input.attachments?.length) return input.prompt;
@@ -91,7 +120,12 @@ export interface ChatCompletionsOptions {
   maxTokensField: "max_completion_tokens" | "max_tokens";
   /** Prefix for error messages, for example "OpenAI API". */
   label: string;
+  /** Send `strict: true` with the JSON schema, so the server enforces it. Only OpenAI is known to take it everywhere. */
+  strictSchema?: boolean;
 }
+
+/** The stream ended without the vendor's own end marker, so the answer may be cut off. */
+const truncated = (label: string): FunnelEvent => ({ type: "error", message: `${label} closed the stream before the answer finished.`, code: "stream-truncated" });
 
 /** Streams one Chat Completions turn. Shared by `openai-api` and the OpenAI-compatible endpoints. */
 export async function* streamChatCompletions(opts: ChatCompletionsOptions, input: RunInput, messages: Msg[]): AsyncGenerator<FunnelEvent> {
@@ -109,7 +143,12 @@ export async function* streamChatCompletions(opts: ChatCompletionsOptions, input
         stream_options: { include_usage: true },
         ...(input.maxOutputTokens ? { [opts.maxTokensField]: input.maxOutputTokens } : {}),
         ...(input.responseSchema
-          ? { response_format: { type: "json_schema", json_schema: { name: input.responseSchema.name ?? "response", schema: input.responseSchema.schema } } }
+          ? {
+              response_format: {
+                type: "json_schema",
+                json_schema: { name: input.responseSchema.name ?? "response", schema: input.responseSchema.schema, ...(opts.strictSchema ? { strict: true } : {}) },
+              },
+            }
           : {}),
       }),
     });
@@ -117,12 +156,25 @@ export async function* streamChatCompletions(opts: ChatCompletionsOptions, input
     if (input.signal?.aborted) return yield { type: "done", text: "", finishReason: "cancelled" };
     return yield { type: "error", message: `${opts.label} is not reachable at ${opts.baseUrl}: ${String(err)}`, code: "cli-failed" };
   }
-  if (!res.ok) return yield { type: "error", message: `${opts.label} ${res.status}: ${await res.text()}`, code: "cli-failed" };
-  let usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number; prompt_tokens_details?: { cached_tokens?: number } } | undefined;
+  let usage:
+    | {
+        prompt_tokens: number;
+        completion_tokens: number;
+        total_tokens: number;
+        prompt_tokens_details?: { cached_tokens?: number };
+        completion_tokens_details?: { reasoning_tokens?: number };
+      }
+    | undefined;
   let stop = "stop";
+  let finished = false;
   try {
+    // The error body is read inside the try, so an abort while reading it ends the run as cancelled.
+    if (!res.ok) return yield { type: "error", message: `${opts.label} ${res.status}: ${await res.text()}`, code: "cli-failed" };
     for await (const { data } of readSSE(res)) {
-      if (data === "[DONE]") break;
+      if (data === "[DONE]") {
+        finished = true;
+        break;
+      }
       const e = JSON.parse(data);
       if (e.error) return yield { type: "error", message: String(e.error.message ?? e.error), code: "cli-failed" };
       const choice = e.choices?.[0];
@@ -130,26 +182,37 @@ export async function* streamChatCompletions(opts: ChatCompletionsOptions, input
       const reasoning = choice?.delta?.reasoning_content ?? choice?.delta?.reasoning;
       if (typeof reasoning === "string" && reasoning) yield { type: "reasoning.delta", text: reasoning };
       if (choice?.delta?.content) yield { type: "text.delta", text: choice.delta.content };
-      if (choice?.finish_reason) stop = choice.finish_reason;
+      // A refusal streams in its own field instead of `content`.
+      if (choice?.delta?.refusal) {
+        yield { type: "text.delta", text: choice.delta.refusal };
+        stop = "refusal";
+      }
+      if (choice?.finish_reason) {
+        if (stop !== "refusal") stop = choice.finish_reason;
+        finished = true;
+      }
       if (e.usage) usage = e.usage;
     }
   } catch (err) {
     if (input.signal?.aborted) return yield { type: "done", text: "", finishReason: "cancelled" };
     throw err;
   }
+  if (!finished) return yield truncated(opts.label);
   if (usage) {
     const cached = usage.prompt_tokens_details?.cached_tokens;
+    const reasoning = usage.completion_tokens_details?.reasoning_tokens;
     yield {
       type: "usage",
       usage: {
         inputTokens: usage.prompt_tokens,
         outputTokens: usage.completion_tokens,
         ...(cached !== undefined ? { cachedInputTokens: cached } : {}),
+        ...(reasoning !== undefined ? { reasoningTokens: reasoning } : {}),
         totalTokens: usage.total_tokens ?? usage.prompt_tokens + usage.completion_tokens,
       },
     };
   }
-  yield { type: "done", text: "", finishReason: stop === "content_filter" ? "denied" : stop === "length" ? "length" : "stop" };
+  yield { type: "done", text: "", finishReason: stop === "content_filter" || stop === "refusal" ? "denied" : stop === "length" ? "length" : "stop" };
 }
 
 /** The user turn in Chat Completions format. */
@@ -159,6 +222,17 @@ export function chatUserContent(input: RunInput): string | unknown[] {
     { type: "text", text: input.prompt },
     ...input.attachments.map((a) => ({ type: "image_url", image_url: { url: `data:${a.mediaType};base64,${a.data}` } })),
   ];
+}
+
+/**
+ * True for ids that Chat Completions takes. Drops models without text chat, Responses-only models (`-pro`, `-codex`,
+ * deep research, computer use) and aliases (`chatgpt-*`, `*-latest`). Fine-tunes (`ft:<base>:...`) are judged by their base.
+ */
+export function openaiChatModel(id: string): boolean {
+  const base = id.startsWith("ft:") ? id.slice(3).split(":")[0]! : id;
+  if (!/^(gpt-|o\d)/.test(base)) return false;
+  if (!id.startsWith("ft:") && /-latest$/.test(id)) return false;
+  return !/(audio|realtime|tts|transcribe|image|search|embedding|moderation|instruct|codex|deep-research|computer-use|-pro(-|$))/.test(base);
 }
 
 const openai: ApiSpec = {
@@ -171,12 +245,12 @@ const openai: ApiSpec = {
     if (!res.ok) throw new FunnelError(`OpenAI API returned ${res.status}.`, "cli-failed");
     const body = (await res.json()) as { data: { id: string }[] };
     return body.data
-      .filter((m) => /^(gpt-|o\d|chatgpt)/.test(m.id) && !/(audio|realtime|tts|transcribe|image|search|embedding|moderation|instruct)/.test(m.id))
+      .filter((m) => openaiChatModel(m.id))
       .map((m) => ({ id: m.id, name: m.id, provider: "openai-api" as const, ...NO_EFFORT }))
       .sort((a, b) => a.id.localeCompare(b.id));
   },
   stream: (key, input, messages) =>
-    streamChatCompletions({ baseUrl: "https://api.openai.com/v1", key, maxTokensField: "max_completion_tokens", label: "OpenAI API" }, input, messages),
+    streamChatCompletions({ baseUrl: "https://api.openai.com/v1", key, maxTokensField: "max_completion_tokens", label: "OpenAI API", strictSchema: true }, input, messages),
   userContent: chatUserContent,
 };
 
@@ -184,6 +258,9 @@ const GEMINI = "https://generativelanguage.googleapis.com/v1beta";
 
 /** Gemini ids that are aliases or models without text chat. Aliases like `gemini-flash-latest` break the versioned-id rule. */
 const GEMINI_SKIP = /latest|embedding|aqa|tts|image|imagen|veo|live|audio|robotics|computer-use/;
+
+/** Finish reasons where the run failed rather than ended. */
+const GEMINI_FAILED = new Set(["MALFORMED_FUNCTION_CALL", "OTHER"]);
 
 /** Finish reasons where Gemini withheld or cut the answer for policy reasons. */
 const GEMINI_BLOCKED = new Set(["SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY"]);
@@ -214,7 +291,7 @@ const gemini: ApiSpec = {
     } while (page);
     return out.sort((a, b) => a.id.localeCompare(b.id));
   },
-  async *stream(key, input, messages) {
+  async *stream(key, input, messages, turn) {
     const res = await fetch(`${GEMINI}/models/${encodeURIComponent(input.selection.model)}:streamGenerateContent?alt=sse`, {
       method: "POST",
       signal: input.signal,
@@ -234,18 +311,36 @@ const gemini: ApiSpec = {
     if (!res.ok) return yield { type: "error", message: `Gemini API ${res.status}: ${await res.text()}`, code: "cli-failed" };
     let usage: Record<string, number> | undefined;
     let stop = "STOP";
+    let finished = false;
+    // The whole answer, so `thoughtSignature` goes back with the next turn. Adjacent plain text parts are joined.
+    const parts: Record<string, unknown>[] = [];
     for await (const { data } of readSSE(res)) {
       const e = JSON.parse(data);
       if (e.error) return yield { type: "error", message: e.error.message ?? "Gemini API error" };
-      if (e.promptFeedback?.blockReason) stop = "SAFETY";
+      if (e.promptFeedback?.blockReason) {
+        stop = "SAFETY";
+        finished = true;
+      }
       const candidate = e.candidates?.[0];
       for (const part of candidate?.content?.parts ?? []) {
+        // Thought summaries are not sent back, but a signature on one must be.
+        if (!part.thought || part.thoughtSignature) {
+          const last = parts[parts.length - 1];
+          const plain = (p: Record<string, unknown>) => Object.keys(p).every((k) => k === "text");
+          if (last && typeof part.text === "string" && plain(part) && plain(last)) last.text = String(last.text) + part.text;
+          else parts.push({ ...part });
+        }
         if (typeof part.text !== "string" || !part.text) continue;
         yield part.thought ? { type: "reasoning.delta", text: part.text } : { type: "text.delta", text: part.text };
       }
-      if (candidate?.finishReason) stop = candidate.finishReason;
+      if (candidate?.finishReason) {
+        stop = candidate.finishReason;
+        finished = true;
+      }
       if (e.usageMetadata) usage = e.usageMetadata;
     }
+    if (!finished) return yield truncated("Gemini API");
+    if (parts.length) turn.assistantContent = parts;
     if (usage) {
       const inputTokens = usage.promptTokenCount ?? 0;
       // Thinking tokens are billed as output.
@@ -261,6 +356,7 @@ const gemini: ApiSpec = {
         },
       };
     }
+    if (GEMINI_FAILED.has(stop)) return yield { type: "error", message: `Gemini API stopped with ${stop}.`, code: "cli-failed" };
     yield { type: "done", text: "", finishReason: GEMINI_BLOCKED.has(stop) ? "denied" : stop === "MAX_TOKENS" ? "length" : "stop" };
   },
   userContent(input) {
@@ -319,8 +415,12 @@ function makeApiProvider(spec: ApiSpec, getKey: () => string | undefined): Provi
     models: async () => spec.listModels(key()),
     run(input) {
       const user: Msg = { role: "user", content: spec.userContent(input) };
-      return runWithHistory(input, user, (text): Msg => ({ role: "assistant", content: text }), (messages) =>
-        settle(spec, input, () => spec.stream(key(), input, messages)),
+      const turn: Turn = {};
+      return redactErrors(
+        runWithHistory(input, user, (text): Msg => ({ role: "assistant", content: turn.assistantContent ?? text }), (messages) =>
+          settle(spec, input, () => spec.stream(key(), input, messages, turn)),
+        ),
+        [getKey() ?? process.env[spec.envVar]],
       );
     },
   };

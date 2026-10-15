@@ -63,7 +63,7 @@ A run is one `POST /api/chat` with `stream: true`. The stream is newline-delimit
 | `done: true` | `usage` from `prompt_eval_count` and `eval_count`, then `done` |
 | `error` | `error` |
 
-A stream that ends without `done: true` ends with an error. Aborting the signal ends the run with `finishReason: "cancelled"`. Thinking models think by default. There is no effort control yet.
+A stream that ends without `done: true` ends with an `error` event with code `stream-truncated`. If a line was not JSON, the error shows its first 200 characters instead. The run returns as soon as `done: true` arrives, even if the connection stays open. Aborting the signal ends the run with `finishReason: "cancelled"`. Thinking models think by default. There is no effort control yet.
 
 ## Pull and delete models
 

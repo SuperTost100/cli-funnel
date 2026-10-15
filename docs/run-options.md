@@ -36,7 +36,7 @@ When `responseSchema` is set, `result.structured` holds the parsed answer. Claud
 
 cli-funnel does not validate the answer against the schema. `schema: "native"` means the vendor enforces it. `schema: "prompt"` means the model was only asked. Validate either way before you trust it.
 
-Codex and the Anthropic API need `additionalProperties: false` on every object in the schema.
+Codex, the Anthropic API and the OpenAI API need `additionalProperties: false` on every object in the schema. The OpenAI API also needs every property in `required`, because it enforces the schema with `strict: true`.
 
 ## Text only: access `none`
 

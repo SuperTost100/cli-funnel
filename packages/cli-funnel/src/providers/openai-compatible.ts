@@ -1,5 +1,6 @@
 import { FunnelError, type AuthStatus, type Installation, type ModelInfo, type Provider, type ProviderId } from "../types.js";
 import { chatUserContent, streamChatCompletions, type Msg } from "./api.js";
+import { redact, redactErrors } from "../util/redact.js";
 import { runWithHistory } from "./history.js";
 
 /** One OpenAI-compatible server: LM Studio, llama.cpp server, vLLM, a hosted gateway. */
@@ -37,16 +38,18 @@ export function createOpenAICompatibleProvider(endpoint: OpenAICompatibleEndpoin
   if (!ID.test(endpoint.id)) throw new FunnelError(`OpenAI-compatible id "${endpoint.id}" must use lowercase letters, digits and dashes.`, "invalid-selection");
   const id = openAICompatibleId(endpoint);
   const base = endpoint.baseUrl.trim().replace(/\/+$/, "");
+  // Gateways sometimes take the key in the query string, so the URL is not safe to show.
+  const shown = redact(base, [endpoint.apiKey]);
   const headers = (): Record<string, string> => (endpoint.apiKey ? { authorization: `Bearer ${endpoint.apiKey}` } : {});
   const listing = (timeoutMs = PROBE_MS) => fetch(`${base}/models`, { headers: headers(), signal: AbortSignal.timeout(timeoutMs) }).catch(() => undefined);
-  const notReachable = () => `${endpoint.name} is not reachable at ${base}.`;
+  const notReachable = () => `${endpoint.name} is not reachable at ${shown}.`;
   const configured = (): ModelInfo[] =>
     (endpoint.models ?? []).map((m) => ({ id: m, name: m, provider: id, efforts: [], contextWindows: [], fast: false, source: "manifest" as const }));
 
   async function detect(): Promise<Installation> {
     // Any HTTP answer means the server is up. Some servers have no /models route and answer 404.
     const res = await listing();
-    return res ? { installed: true, path: base, testedRange: { min: "0" } } : { installed: false, testedRange: { min: "0" }, detail: notReachable() };
+    return res ? { installed: true, path: shown, testedRange: { min: "0" } } : { installed: false, testedRange: { min: "0" }, detail: notReachable() };
   }
 
   async function authStatus(): Promise<AuthStatus> {
@@ -63,7 +66,7 @@ export function createOpenAICompatibleProvider(endpoint: OpenAICompatibleEndpoin
     if (listed.length) return listed;
     if (endpoint.models?.length) return configured();
     if (!res) throw new FunnelError(notReachable(), "not-installed");
-    throw new FunnelError(`${endpoint.name} lists no models at ${base}/models. Pass models: [...] for this endpoint.`, "cli-failed");
+    throw new FunnelError(`${endpoint.name} lists no models at ${shown}/models. Pass models: [...] for this endpoint.`, "cli-failed");
   }
 
   return {
@@ -99,8 +102,11 @@ export function createOpenAICompatibleProvider(endpoint: OpenAICompatibleEndpoin
     models,
     run(input) {
       const user: Msg = { role: "user", content: chatUserContent(input) };
-      return runWithHistory(input, user, (text): Msg => ({ role: "assistant", content: text }), (messages) =>
-        streamChatCompletions({ baseUrl: base, key: endpoint.apiKey, maxTokensField: "max_tokens", label: endpoint.name }, input, messages),
+      return redactErrors(
+        runWithHistory(input, user, (text): Msg => ({ role: "assistant", content: text }), (messages) =>
+          streamChatCompletions({ baseUrl: base, key: endpoint.apiKey, maxTokensField: "max_tokens", label: endpoint.name }, input, messages),
+        ),
+        [endpoint.apiKey],
       );
     },
   };

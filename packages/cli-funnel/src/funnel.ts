@@ -2,6 +2,7 @@ import { loadManifest } from "./catalog/manifest.js";
 import { validateSelection } from "./selection.js";
 import { collect } from "./providers/base.js";
 import { PROVIDERS } from "./providers/index.js";
+import { memoryHistory } from "./providers/history.js";
 import { createApiProviders, type ApiKeys } from "./providers/api.js";
 import { createOllamaProvider, type OllamaOptions } from "./providers/ollama/index.js";
 import { createOpenAICompatibleProviders, type OpenAICompatibleEndpoint } from "./providers/openai-compatible.js";
@@ -62,6 +63,8 @@ export function createFunnel(options: FunnelOptions = {}) {
     ...createOpenAICompatibleProviders(options.openaiCompatible),
     ...options.providers,
   } as Record<ProviderId, Provider>;
+  // One store per funnel, so two funnels in a process never read each other's sessions.
+  const history = options.history ?? memoryHistory();
   const provider = (id: ProviderId): Provider => {
     const p = registry[id];
     if (!p) throw new FunnelError(`Unknown provider "${id}".`, "invalid-selection");
@@ -86,7 +89,7 @@ export function createFunnel(options: FunnelOptions = {}) {
   function stream(input: RunInput): RunStream {
     const events = (async function* () {
       const p = await prepare(input);
-      yield* p.run(options.history && !input.history ? { ...input, history: options.history } : input);
+      yield* p.run(input.history ? input : { ...input, history });
     })();
     // Tee the stream so both `for await` and `.result` work without double-consuming.
     const buffered: FunnelEvent[] = [];
