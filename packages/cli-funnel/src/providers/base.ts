@@ -1,15 +1,16 @@
 import { Channel } from "../util/channel.js";
 import { spawn, type ChildProcess } from "node:child_process";
-import { childEnv, cliCommand, compareVersions, exec, firstUrl, parseVersion, resolveBinary } from "../util/process.js";
-import type {
-  AuthStatus,
-  FunnelEvent,
-  Installation,
-  LoginEvent,
-  LoginSession,
-  RunResult,
-  RunInput,
-  UpdateResult,
+import { childEnv, cliCommand, compareVersions, exec, firstUrl, parseVersion, resolveBinary, type ExecResult } from "../util/process.js";
+import {
+  FunnelError,
+  type AuthStatus,
+  type FunnelEvent,
+  type Installation,
+  type LoginEvent,
+  type LoginSession,
+  type RunResult,
+  type RunInput,
+  type UpdateResult,
 } from "../types.js";
 import { parseJsonAnswer } from "./prompt.js";
 
@@ -142,13 +143,22 @@ export async function runUpdate(
   };
   const from = await read();
   const res = await exec(path, updateArgs, { timeoutMs: 600_000 });
+  if (res.code !== 0) throw cliFailure(binary, "update", res);
   const to = await read();
   return { from, to, changed: !!from && !!to && from !== to, output: (res.stdout + res.stderr).trim() };
 }
 
 export async function runLogout(binary: string, args: string[]): Promise<void> {
   const path = findBinary(binary);
-  if (path) await exec(path, args, { timeoutMs: 30_000 });
+  if (!path) return;
+  const res = await exec(path, args, { timeoutMs: 30_000 });
+  if (res.code !== 0) throw cliFailure(binary, "logout", res);
+}
+
+/** The error for a CLI command that failed. A null code means the timeout killed it. */
+function cliFailure(binary: string, action: string, res: ExecResult): FunnelError {
+  const detail = (res.stderr.trim() || res.stdout.trim()).slice(0, 500);
+  return new FunnelError(detail || `${binary} ${action} failed (exit ${res.code}).`, "cli-failed");
 }
 
 /** Folds an event stream into an API-shaped result. */
