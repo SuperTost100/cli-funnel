@@ -52,6 +52,35 @@ for await (const event of stream) {
 const result = await stream.result;
 ```
 
+## Run from a terminal
+
+```bash
+npx cli-funnel run claude claude-sonnet-5 "Summarize this repo"
+```
+
+Pass `-` as the prompt, or no prompt, to read it from stdin. Use this for long prompts and for output from other commands:
+
+```bash
+cat spec.md | npx cli-funnel run claude claude-sonnet-5 -
+```
+
+Options for scripts:
+
+| Flag | Effect |
+|---|---|
+| `--image <file>` | Attaches a PNG, JPEG, WebP or GIF. Repeat it for more images. The type comes from the file contents. |
+| `--schema <file.json>` | Asks for an answer that matches the JSON Schema in the file, and prints only that answer. Exits with 1 and says why on stderr when there is none. |
+| `--json` | Prints only the result object on stdout. The text is not streamed. Tool markers go to stderr. |
+| `--quiet` | Drops the stream. Alone, it prints the final text once. With `--json`, stderr stays empty apart from the session id. |
+
+The session id is always on stderr, so stdout can go straight into `jq`:
+
+```bash
+npx cli-funnel run claude claude-sonnet-5 "Name the color of this curve" --image graph.png --schema color.json --quiet | jq .color
+```
+
+Not every provider takes images or enforces a schema. See [Run options](run-options.md). With `--access supervised` the prompt has to be an argument, because approvals are asked on the terminal.
+
 ## Pick a model
 
 Model ids are always concrete, versioned names. There is no "latest" alias. List what your CLI offers today:

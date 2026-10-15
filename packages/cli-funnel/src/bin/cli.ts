@@ -11,6 +11,7 @@ import { createHandler } from "../server/handler.js";
 import { serveNode } from "../server/node.js";
 import { fileHistory } from "../providers/history.js";
 import type { OpenAICompatibleEndpoint } from "../providers/openai-compatible.js";
+import { UsageError, loadImages, loadSchema, renderRun, resolvePrompt } from "./run-input.js";
 import { ACCESS_LEVELS, type AccessLevel, type ProviderId } from "../types.js";
 
 const HELP = `cli-funnel <command>
@@ -22,11 +23,16 @@ const HELP = `cli-funnel <command>
   update <provider>            Run the CLI's own updater
   pull <provider> <model>      Download a model (Ollama)
   rm <provider> <model>        Delete a downloaded model (Ollama)
-  run <provider> <model> <prompt>
+  run <provider> <model> [prompt | -]
        [--effort x] [--fast] [--context tokens] [--cwd dir] [--access ${ACCESS_LEVELS.join("|")}]
-       [--system text] [--session id] [--max-tokens n] [--json]
+       [--system text] [--session id] [--max-tokens n]
+       [--image file]... [--schema file.json] [--json] [--quiet]
                                Prints a session id on stderr. Pass it to --session to continue.
+                               The prompt is read from stdin when it is - or missing and stdin is piped.
+                               --image attaches a PNG, JPEG, WebP or GIF (repeatable).
+                               --schema asks for JSON that matches the file and prints only that answer.
                                --json prints the full result as JSON on stdout and nothing else.
+                               --quiet drops the stream and prints the final text once.
                                Exits 1 when the run gives no text and does not finish with "stop".
   serve [--port 4747] [--host 127.0.0.1] [--cwd dir] [--access level] [--token secret]
                                HTTP API, SSE streaming and OpenAI-compatible /v1 endpoints
@@ -57,6 +63,9 @@ const { values, positionals } = parseArgs({
     host: { type: "string" },
     token: { type: "string" },
     json: { type: "boolean" },
+    quiet: { type: "boolean" },
+    image: { type: "string", multiple: true },
+    schema: { type: "string" },
     system: { type: "string" },
     session: { type: "string" },
     "max-tokens": { type: "string" },
@@ -200,10 +209,22 @@ async function main() {
 
   if (command === "run") {
     const [model, ...words] = rest;
-    if (!model || !words.length) return usage("Usage: cli-funnel run <provider> <model> <prompt>");
+    if (!model) return usage("Usage: cli-funnel run <provider> <model> [prompt | -]");
     const access = (values.access ?? "accept-edits") as AccessLevel;
     const contextWindow = wholeNumber("context", values.context);
     const maxOutputTokens = wholeNumber("max-tokens", values["max-tokens"]);
+    const promptFromStdin = words.length === 0 || (words.length === 1 && words[0] === "-");
+    // Approvals are asked on the terminal, and stdin is the prompt here.
+    if (access === "supervised" && promptFromStdin) return usage("--access supervised asks for approvals on the terminal. Pass the prompt as an argument instead of stdin.");
+    let prompt: string, attachments, responseSchema;
+    try {
+      prompt = await resolvePrompt(words, process.stdin);
+      attachments = await loadImages(values.image);
+      responseSchema = await loadSchema(values.schema);
+    } catch (err) {
+      if (err instanceof UsageError) return usage(err.message);
+      throw err;
+    }
     // Questions go to stderr so that stdout carries only the answer, or only the JSON with --json.
     const rl = access === "supervised" ? createInterface({ input: process.stdin, output: process.stderr }) : undefined;
     const stream = funnel.stream({
@@ -216,7 +237,9 @@ async function main() {
         cwd: values.cwd ?? process.cwd(),
         access,
       },
-      prompt: words.join(" "),
+      prompt,
+      attachments,
+      responseSchema,
       system: values.system,
       sessionId: values.session,
       maxOutputTokens,
@@ -228,18 +251,18 @@ async function main() {
           }
         : undefined,
     });
-    for await (const e of stream) {
-      if (e.type === "text.delta" && !values.json) process.stdout.write(e.text);
-      else if (e.type === "tool.start") process.stderr.write(`\n[tool] ${e.name}\n`);
-    }
-    const result = await stream.result;
+    const { result, structured } = await renderRun(stream, {
+      json: values.json,
+      quiet: values.quiet,
+      schema: !!responseSchema,
+      stdout: (s) => process.stdout.write(s),
+      stderr: (s) => process.stderr.write(s),
+    });
     rl?.close();
-    if (!values.json) process.stdout.write("\n");
-    if (result.sessionId) process.stderr.write(`session ${result.sessionId}\n`);
+    if (!structured) process.exitCode = 1;
     if (result.deniedActions.length) {
       process.stderr.write(`Denied: ${[...new Set(result.deniedActions)].join(", ")}. Use --access supervised to approve tools one by one.\n`);
     }
-    if (values.json) out(JSON.stringify(result, null, 2));
     if (!result.text && result.finishReason !== "stop") {
       process.stderr.write(`The run ended without text. Finish reason: ${result.finishReason}\n`);
       process.exitCode = 1;
