@@ -3,13 +3,15 @@ import { redactErrors } from "../../util/redact.js";
 import { compareVersions } from "../../util/process.js";
 import { FunnelError, type AuthStatus, type FunnelEvent, type Installation, type ModelInfo, type Provider, type PullEvent, type RunInput } from "../../types.js";
 import { runWithHistory } from "../history.js";
-import { mapChatLine, mapPullLine, normalizeBaseUrl, parseTags } from "./parser.js";
+import { mapChatLine, mapPullLine, normalizeBaseUrl, parseTags, thinkValue } from "./parser.js";
 
 export interface OllamaOptions {
   /** Server URL. Defaults to `OLLAMA_HOST`, then `http://127.0.0.1:11434`. */
   baseUrl?: string;
   /** Sent as a Bearer token, for a server behind a proxy that checks one. */
   apiKey?: string;
+  /** How long the server keeps a model loaded after a run, for every run. A duration such as `"30m"`, seconds as a number, or `-1` for good. A run can override it with `ollama.keepAlive`. Without it the server's own default applies, 5 minutes unless configured. */
+  keepAlive?: string | number;
 }
 
 const TESTED = { min: "0.35.0" };
@@ -27,14 +29,32 @@ export function userMessage(input: RunInput): ChatMessage {
   return { role: "user", content: input.prompt, ...(images?.length ? { images } : {}) };
 }
 
-export function chatBody(input: RunInput, messages: ChatMessage[]): Record<string, unknown> {
+/** The `options` object of a chat request. Entries the caller passes in `ollama.options` come last and win. */
+function requestOptions(input: RunInput): Record<string, unknown> {
+  const { sampling } = input;
+  return {
+    ...(input.selection.contextWindow ? { num_ctx: input.selection.contextWindow } : {}),
+    ...(input.maxOutputTokens ? { num_predict: input.maxOutputTokens } : {}),
+    ...(sampling?.temperature !== undefined ? { temperature: sampling.temperature } : {}),
+    ...(sampling?.topP !== undefined ? { top_p: sampling.topP } : {}),
+    ...(sampling?.stop?.length ? { stop: sampling.stop } : {}),
+    ...(sampling?.seed !== undefined ? { seed: sampling.seed } : {}),
+    ...input.ollama?.options,
+  };
+}
+
+export function chatBody(input: RunInput, messages: ChatMessage[], keepAlive?: string | number): Record<string, unknown> {
+  const options = requestOptions(input);
+  const keep = input.ollama?.keepAlive ?? keepAlive;
   return {
     model: input.selection.model,
     // The system message is sent on every call and never stored in the session history.
     messages: input.system ? [{ role: "system", content: input.system }, ...messages] : messages,
     stream: true,
     ...(input.responseSchema ? { format: input.responseSchema.schema } : {}),
-    ...(input.maxOutputTokens ? { options: { num_predict: input.maxOutputTokens } } : {}),
+    ...(input.selection.effort ? { think: thinkValue(input.selection.effort) } : {}),
+    ...(keep !== undefined ? { keep_alive: keep } : {}),
+    ...(Object.keys(options).length ? { options } : {}),
   };
 }
 
@@ -86,7 +106,7 @@ export function createOllamaProvider(options: OllamaOptions = {}): Provider {
     // The first line that was not JSON. A proxy error page looks like this, and it is what the user needs to see.
     let raw: string | undefined;
     try {
-      const res = await fetch(`${base()}/api/chat`, { method: "POST", signal: input.signal, headers: headers(true), body: JSON.stringify(chatBody(input, messages)) });
+      const res = await fetch(`${base()}/api/chat`, { method: "POST", signal: input.signal, headers: headers(true), body: JSON.stringify(chatBody(input, messages, options.keepAlive)) });
       if (!res.ok) return yield { type: "error", message: `Ollama ${res.status}: ${await errorText(res)}`, code: "cli-failed" };
       for await (const line of readNDJSON(res)) {
         if (line && typeof line === "object" && "__raw" in line) {
@@ -138,14 +158,15 @@ export function createOllamaProvider(options: OllamaOptions = {}): Provider {
     binary: "http",
     capabilities: {
       access: [],
-      effort: false,
-      contextWindow: false,
+      effort: true,
+      contextWindow: true,
       fast: false,
       resume: true,
       approvals: false,
       images: true,
       system: "native",
       schema: "native",
+      sampling: true,
       manageModels: true,
     },
     detect,

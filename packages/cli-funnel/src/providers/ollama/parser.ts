@@ -1,4 +1,4 @@
-import type { FunnelEvent, ModelInfo, PullEvent, Usage } from "../../types.js";
+import type { EffortOption, FunnelEvent, ModelInfo, PullEvent, Usage } from "../../types.js";
 
 type Json = Record<string, any>;
 
@@ -10,6 +10,33 @@ function embeddingOnly(m: Json): boolean {
   return /bert/i.test(String(m.details?.family ?? "")) || EMBEDDING_NAME.test(String(m.name));
 }
 
+const LEVELS: EffortOption[] = [
+  { id: "low", label: "Low" },
+  { id: "medium", label: "Medium" },
+  { id: "high", label: "High" },
+];
+
+/**
+ * Ollama's `think` is on or off for most models, so those get one level, `on`. The gpt-oss models take
+ * `low`, `medium` and `high`. A model without the `thinking` capability gets none.
+ */
+export function thinkingEfforts(model: Json): EffortOption[] {
+  if (!Array.isArray(model.capabilities) || !model.capabilities.includes("thinking")) return [];
+  return /^gpt-oss/.test(String(model.name)) ? LEVELS : [{ id: "on", label: "On" }];
+}
+
+/** The `think` value for a selected effort. */
+export const thinkValue = (effort: string): boolean | string => (effort === "on" ? true : effort);
+
+const CONTEXT_STEPS = [4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576];
+
+/** Context sizes to offer: doubling steps below the model's limit, then the limit. Empty when the server does not report it. */
+export function contextSizes(model: Json): number[] {
+  const max = model.details?.context_length;
+  if (typeof max !== "number" || !(max > 0)) return [];
+  return [...CONTEXT_STEPS.filter((s) => s < max), max];
+}
+
 /** Ollama ids such as `llama3.2:latest` are passed through as the server reports them. The digest pins the weights. */
 export function parseTags(body: unknown): ModelInfo[] {
   const models: Json[] = (body as Json)?.models ?? [];
@@ -19,8 +46,8 @@ export function parseTags(body: unknown): ModelInfo[] {
       id: m.name as string,
       name: m.digest ? `${m.name} (${String(m.digest).slice(0, 8)})` : m.name,
       provider: "ollama" as const,
-      efforts: [],
-      contextWindows: [],
+      efforts: thinkingEfforts(m),
+      contextWindows: contextSizes(m),
       fast: false,
       source: "cli" as const,
     }))

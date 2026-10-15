@@ -260,3 +260,94 @@ describe.skipIf(process.env.CLI_FUNNEL_LIVE !== "1" || !LIVE_MODEL)("ollama live
     await expect(funnel.deleteModel("ollama", name)).rejects.toMatchObject({ code: "invalid-selection" });
   }, 600_000);
 });
+
+describe("ollama controls", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const provider = (over = {}) => createOllamaProvider({ baseUrl: "http://box:1", ...over });
+  const sel = (over: Record<string, unknown> = {}) => ({ ...input().selection, ...over });
+
+  it("offers thinking models an effort and every model its context sizes", () => {
+    const [qwen, smol] = parseTags(JSON.parse(fx("tags.json")));
+    expect(qwen!.efforts).toEqual([{ id: "on", label: "On" }]);
+    expect(qwen!.contextWindows).toEqual([4096, 8192, 16384, 32768, 40960]);
+    expect(smol!.efforts).toEqual([]);
+    expect(smol!.contextWindows).toEqual([4096, 8192]);
+  });
+
+  it("gives gpt-oss low, medium and high, and nothing when the server reports no capabilities", () => {
+    const models = parseTags({
+      models: [
+        { name: "gpt-oss:20b", capabilities: ["completion", "tools", "thinking"], details: { context_length: 131072 } },
+        { name: "old:1b" },
+        { name: "tiny:1b", details: { context_length: 2048 } },
+      ],
+    });
+    expect(models.find((m) => m.id === "gpt-oss:20b")!.efforts.map((e) => e.id)).toEqual(["low", "medium", "high"]);
+    expect(models.find((m) => m.id === "gpt-oss:20b")!.contextWindows.at(-1)).toBe(131072);
+    expect(models.find((m) => m.id === "old:1b")).toMatchObject({ efforts: [], contextWindows: [] });
+    expect(models.find((m) => m.id === "tiny:1b")!.contextWindows).toEqual([2048]);
+  });
+
+  it("declares effort, context window and sampling", () => {
+    expect(provider().capabilities).toMatchObject({ effort: true, contextWindow: true, sampling: true });
+  });
+
+  it("sends think from the effort", async () => {
+    const calls = stubFetch(() => ndjson(fx("thinking.ndjson")));
+    await drain(provider().run(input({ selection: sel({ model: "qwen3:0.6b", effort: "on" }) })));
+    await drain(provider().run(input({ selection: sel({ model: "gpt-oss:20b", effort: "high" }) })));
+    await drain(provider().run(input()));
+    expect(calls[0]!.body.think).toBe(true);
+    expect(calls[1]!.body.think).toBe("high");
+    expect(calls[2]!.body).not.toHaveProperty("think");
+  });
+
+  it("maps thinking lines to reasoning.delta", async () => {
+    stubFetch(() => ndjson(fx("thinking.ndjson")));
+    const events = await drain(provider().run(input({ selection: sel({ model: "qwen3:0.6b", effort: "on" }) })));
+    expect(events.some((e) => e.type === "reasoning.delta")).toBe(true);
+  });
+
+  it("sends sampling, the output limit and num_ctx as options", async () => {
+    const calls = stubFetch(() => ndjson(fx("chat.ndjson")));
+    await drain(
+      provider().run(
+        input({
+          selection: sel({ contextWindow: 16384 }),
+          maxOutputTokens: 50,
+          sampling: { temperature: 0, topP: 0.9, stop: ["END"], seed: 7 },
+        }),
+      ),
+    );
+    expect(calls[0]!.body.options).toEqual({ num_ctx: 16384, num_predict: 50, temperature: 0, top_p: 0.9, stop: ["END"], seed: 7 });
+  });
+
+  it("lets ollama.options add entries and override ours", async () => {
+    const calls = stubFetch(() => ndjson(fx("chat.ndjson")));
+    await drain(provider().run(input({ sampling: { temperature: 0.5 }, ollama: { options: { top_k: 40, temperature: 0.1 } } })));
+    expect(calls[0]!.body.options).toEqual({ temperature: 0.1, top_k: 40 });
+  });
+
+  it("sends no options and no keep_alive by default", async () => {
+    const calls = stubFetch(() => ndjson(fx("chat.ndjson")));
+    await drain(provider().run(input()));
+    expect(calls[0]!.body).not.toHaveProperty("options");
+    expect(calls[0]!.body).not.toHaveProperty("keep_alive");
+  });
+
+  it("sends keep_alive from the funnel, and lets a run override it, including with 0", async () => {
+    const calls = stubFetch(() => ndjson(fx("chat.ndjson")));
+    const p = provider({ keepAlive: "30m" });
+    await drain(p.run(input()));
+    await drain(p.run(input({ ollama: { keepAlive: -1 } })));
+    await drain(p.run(input({ ollama: { keepAlive: 0 } })));
+    expect(calls.map((c) => c.body.keep_alive)).toEqual(["30m", -1, 0]);
+  });
+
+  it("validates effort and context window against the listed model", async () => {
+    stubFetch((url) => Response.json(JSON.parse(fx(url.endsWith("/api/version") ? "version.json" : "tags.json"))));
+    const funnel = createFunnel({ ollama: { baseUrl: "http://box:1" } });
+    await expect(funnel.run(input({ selection: sel({ effort: "on" }) }))).rejects.toMatchObject({ code: "invalid-selection" });
+    await expect(funnel.run(input({ selection: sel({ contextWindow: 999999 }) }))).rejects.toMatchObject({ code: "invalid-selection" });
+  });
+});
