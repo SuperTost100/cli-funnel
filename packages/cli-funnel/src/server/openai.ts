@@ -13,8 +13,14 @@ import {
   type ProviderId,
   type ProviderOptions,
   type RunRequest,
+  type ToolCall,
+  type ToolCallPart,
+  type ToolChoice,
+  type ToolDefinition,
+  type ToolResultPart,
   type Usage,
 } from "../types.js";
+import { parseArguments, stringifyArguments } from "../messages.js";
 import { BodyError, DEFAULT_MAX_BODY_BYTES, readJson } from "./body.js";
 import { json, sse, sseHeaders } from "./sse.js";
 import { BUSY_RETRY_AFTER_SEC, type RunQueue } from "../queue.js";
@@ -44,6 +50,10 @@ export interface TrackedRun {
 interface ChatMessage {
   role: string;
   content: string | { type: string; text?: string; image_url?: { url: string } }[] | null;
+  /** On assistant messages. */
+  tool_calls?: { id?: string; type?: string; function?: { name?: string; arguments?: string } }[];
+  /** On `tool` messages. */
+  tool_call_id?: string;
 }
 
 interface ChatBody {
@@ -107,15 +117,35 @@ const SYSTEM_ROLES = new Set(["system", "developer"]);
 
 /**
  * The chat as typed messages, without the system ones. Images must be data URLs: fetching remote URLs would make this
- * server a proxy. Returns the problem when a message cannot be mapped.
+ * server a proxy. Assistant `tool_calls` become tool call parts. Each run of `tool` messages becomes one user message
+ * of tool results. Returns the problem when a message cannot be mapped.
  */
 function toMessages(messages: ChatMessage[]): { messages: Message[] } | { message: string; param: string } {
   const out: Message[] = [];
   for (const [i, m] of messages.entries()) {
     if (SYSTEM_ROLES.has(m.role)) continue;
+    if (m.role === "tool") {
+      if (typeof m.tool_call_id !== "string" || !m.tool_call_id) return { message: `messages[${i}].tool_call_id is required on tool messages.`, param: `messages[${i}].tool_call_id` };
+      const result: ToolResultPart = { type: "tool_result", toolCallId: m.tool_call_id, output: text(m.content) };
+      const last = out.at(-1);
+      // Several tool messages in a row answer one assistant turn, so they share one user message.
+      if (last?.role === "user" && Array.isArray(last.content) && last.content.every((p) => p.type === "tool_result")) last.content.push(result);
+      else out.push({ role: "user", content: [result] });
+      continue;
+    }
     if (m.role !== "user" && m.role !== "assistant") return { message: `messages[${i}].role "${m.role}" is not supported.`, param: `messages[${i}].role` };
+    const calls: ToolCallPart[] = [];
+    if (m.role === "assistant" && m.tool_calls != null) {
+      if (!Array.isArray(m.tool_calls)) return { message: `messages[${i}].tool_calls must be an array.`, param: `messages[${i}].tool_calls` };
+      for (const [j, c] of m.tool_calls.entries()) {
+        if (typeof c?.id !== "string" || typeof c.function?.name !== "string") {
+          return { message: `messages[${i}].tool_calls[${j}] needs an id and a function name.`, param: `messages[${i}].tool_calls[${j}]` };
+        }
+        calls.push({ type: "tool_call", id: c.id, name: c.function.name, input: parseArguments(c.function.arguments ?? "") });
+      }
+    }
     if (typeof m.content === "string" || m.content == null) {
-      out.push({ role: m.role, content: m.content ?? "" });
+      out.push({ role: m.role, content: calls.length ? [...(m.content ? [{ type: "text" as const, text: m.content }] : []), ...calls] : m.content ?? "" });
       continue;
     }
     const parts: ContentPart[] = [];
@@ -128,12 +158,51 @@ function toMessages(messages: ChatMessage[]): { messages: Message[] } | { messag
         parts.push({ type: "image", mediaType: data[1] as ImageAttachment["mediaType"], data: data[2]! });
       } else return { message: `${param}: content part "${p.type}" is not supported here.`, param };
     }
-    out.push({ role: m.role, content: parts });
+    out.push({ role: m.role, content: [...parts, ...calls] });
   }
   return { messages: out };
 }
 
-const finish = (r: FinishReason) => (r === "denied" ? "content_filter" : r === "length" ? "length" : "stop");
+const finish = (r: FinishReason) => (r === "denied" ? "content_filter" : r === "length" ? "length" : r === "tool_calls" ? "tool_calls" : "stop");
+
+/** Calls to the client's tools in the Chat Completions shape. */
+const toolCallsOut = (calls: ToolCall[]) =>
+  calls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: stringifyArguments(c.input) } }));
+
+/**
+ * `tools` and `tool_choice` as run options. Only function tools exist in this API. Returns the problem when the
+ * request asks for something the provider cannot do.
+ */
+function toolOptions(
+  body: Record<string, unknown>,
+  canCall: boolean,
+): { tools?: ToolDefinition[]; toolChoice?: ToolChoice } | { message: string; param: string } {
+  const list = body.tools == null ? [] : body.tools;
+  const choice = body.tool_choice;
+  if (!Array.isArray(list)) return { message: "tools must be an array.", param: "tools" };
+  if (!canCall) {
+    // Tools inside a CLI are its own. `none` and `auto` without tools ask for nothing, so they pass.
+    const unsupported = (param: string) => ({ message: `${param} is not supported by this provider with this value. It runs its own tools.`, param });
+    if (list.length) return unsupported("tools");
+    if (choice != null && choice !== "none" && choice !== "auto") return unsupported("tool_choice");
+    return {};
+  }
+  const tools: ToolDefinition[] = [];
+  for (const [i, t] of list.entries()) {
+    const fn = isObject(t) && t.type === "function" && isObject(t.function) ? t.function : undefined;
+    if (!fn || typeof fn.name !== "string" || !fn.name) return { message: `tools[${i}] must be a function tool with a name.`, param: `tools[${i}]` };
+    tools.push({
+      name: fn.name,
+      ...(typeof fn.description === "string" ? { description: fn.description } : {}),
+      ...(isObject(fn.parameters) ? { parameters: fn.parameters } : {}),
+    });
+  }
+  let toolChoice: ToolChoice | undefined;
+  if (choice === "auto" || choice === "none" || choice === "required") toolChoice = choice;
+  else if (isObject(choice) && choice.type === "function" && isObject(choice.function) && typeof choice.function.name === "string") toolChoice = { name: choice.function.name };
+  else if (choice != null) return { message: 'tool_choice must be "auto", "none", "required" or a function.', param: "tool_choice" };
+  return { ...(tools.length ? { tools } : {}), ...(toolChoice ? { toolChoice } : {}) };
+}
 
 const usageOut = (u?: Usage) =>
   u ? { prompt_tokens: u.inputTokens, completion_tokens: u.outputTokens, total_tokens: u.totalTokens } : undefined;
@@ -174,9 +243,8 @@ function badShape(body: Record<string, unknown>): { message: string; param: stri
 function unsupportedField(body: Record<string, unknown>): string | undefined {
   const set = (v: unknown) => v !== undefined && v !== null;
   const notOne = (v: unknown) => set(v) && v !== 1;
+  // `tools` and `tool_choice` depend on the provider, so `toolOptions` checks them.
   const checks: [string, boolean][] = [
-    ["tools", Array.isArray(body.tools) ? body.tools.length > 0 : set(body.tools)],
-    ["tool_choice", set(body.tool_choice) && body.tool_choice !== "none" && body.tool_choice !== "auto"],
     ["n", notOne(body.n)],
     ["stop", set(body.stop) && !(Array.isArray(body.stop) && body.stop.length === 0)],
     ["temperature", notOne(body.temperature)],
@@ -274,6 +342,8 @@ export async function handleOpenAI(
 
   const chat = toMessages(body.messages);
   if (!("messages" in chat)) return fail(400, chat.message, { param: chat.param });
+  const tools = toolOptions(raw, !!funnel.providers[provider]!.capabilities.tools);
+  if ("message" in tools) return fail(400, tools.message, { param: tools.param, code: "unsupported_value" });
   const system = body.messages.filter((m) => SYSTEM_ROLES.has(m.role)).map((m) => text(m.content)).join("\n\n");
   const run = startRun(req.signal);
   const input: RunRequest = {
@@ -295,6 +365,7 @@ export async function handleOpenAI(
         ? { name: body.response_format.json_schema.name, schema: body.response_format.json_schema.schema }
         : undefined,
     maxOutputTokens: body.max_completion_tokens ?? body.max_tokens,
+    ...tools,
     sessionId: body.x_funnel?.sessionId,
     signal: run.signal,
     timeoutMs: run.timeoutMs,
@@ -334,12 +405,15 @@ export async function handleOpenAI(
     }
     if (!body.stream) {
       const r = await funnel.run(input);
+      const calls = r.pendingToolCalls ?? [];
+      // OpenAI sends null content next to tool calls when the model wrote no text.
+      const message = calls.length ? { role: "assistant", content: answerOf(r) || null, tool_calls: toolCallsOut(calls) } : { role: "assistant", content: answerOf(r) };
       return json({
         id,
         object: "chat.completion",
         created,
         model: body.model,
-        choices: [{ index: 0, message: { role: "assistant", content: answerOf(r) }, finish_reason: finish(r.finishReason) }],
+        choices: [{ index: 0, message, finish_reason: finish(r.finishReason) }],
         usage: usageOut(r.usage),
         x_funnel: { runId: run.id, queued, sessionId: r.sessionId, toolCalls: r.toolCalls, deniedActions: r.deniedActions },
       });
@@ -357,11 +431,22 @@ export async function handleOpenAI(
       yield chunk({ role: "assistant" }, null, { x_funnel: { runId: run.id, queued } });
       try {
         let streamed = "";
+        // Tool call index by id. The first chunk of a call carries its id and name; later ones only arguments.
+        const callIndex = new Map<string, number>();
+        const callChunk = (id: string, name: string, args: string) => {
+          const index = callIndex.get(id);
+          if (index !== undefined) return chunk({ tool_calls: [{ index, function: { arguments: args } }] });
+          callIndex.set(id, callIndex.size);
+          return chunk({ tool_calls: [{ index: callIndex.size - 1, id, type: "function", function: { name, arguments: args } }] });
+        };
         for await (const e of replay(first, it)) {
           if (e.type === "text.delta") {
             streamed += e.text;
             if (!input.responseSchema) yield chunk({ content: e.text });
-          } else if (e.type === "error") throw Object.assign(new Error(e.message), { code: e.code });
+          } else if (e.type === "tool_call.delta") yield callChunk(e.id, e.name, e.arguments);
+          // Vendors that send a call whole (Gemini, Ollama) have no deltas, so the call goes out in one chunk.
+          else if (e.type === "tool_call" && !callIndex.has(e.id)) yield callChunk(e.id, e.name, stringifyArguments(e.input));
+          else if (e.type === "error") throw Object.assign(new Error(e.message), { code: e.code });
         }
         const r = await stream.result;
         // Codex and Antigravity send the answer in `done.text`, not as deltas. Send whatever the deltas did not cover.

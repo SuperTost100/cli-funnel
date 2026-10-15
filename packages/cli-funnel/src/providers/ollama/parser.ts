@@ -77,7 +77,10 @@ export function mapPullLine(line: unknown): PullEvent | undefined {
   };
 }
 
-/** Maps one `/api/chat` stream line to events. The final line (`done: true`) carries the token counts. */
+/**
+ * Maps one `/api/chat` stream line to events. The final line (`done: true`) carries the token counts. Tool calls
+ * arrive whole, with arguments as an object. A call without an id gets an empty one, for the provider to fill.
+ */
 export function mapChatLine(line: unknown): FunnelEvent[] {
   const l = line as Json;
   if (!l || typeof l !== "object" || "__raw" in l) return [];
@@ -85,6 +88,10 @@ export function mapChatLine(line: unknown): FunnelEvent[] {
   const events: FunnelEvent[] = [];
   if (l.message?.thinking) events.push({ type: "reasoning.delta", text: l.message.thinking });
   if (l.message?.content) events.push({ type: "text.delta", text: l.message.content });
+  for (const c of Array.isArray(l.message?.tool_calls) ? l.message.tool_calls : []) {
+    if (typeof c?.function?.name !== "string") continue;
+    events.push({ type: "tool_call", id: typeof c.id === "string" ? c.id : "", name: c.function.name, input: c.function.arguments ?? {} });
+  }
   if (l.done) {
     const usage = toUsage(l);
     if (usage) events.push({ type: "usage", usage });

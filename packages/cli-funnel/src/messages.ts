@@ -13,6 +13,23 @@ export const textOf = (m: Message): string =>
 
 const imagesOf = (messages: Message[]): ImageAttachment[] => messages.flatMap((m) => partsOf(m).filter((p): p is ImageAttachment => p.type === "image"));
 
+/** True when a message list carries tool calls or tool results. */
+export const hasToolParts = (messages: Message[]): boolean =>
+  messages.some((m) => typeof m.content !== "string" && m.content.some((p) => p.type === "tool_call" || p.type === "tool_result"));
+
+/** Parses tool call arguments. Arguments that are not JSON stay a string; an empty string is an empty object. */
+export function parseArguments(raw: string): unknown {
+  if (!raw.trim()) return {};
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
+/** The arguments of a tool call as a JSON string, for vendors that take them that way. */
+export const stringifyArguments = (input: unknown): string => (typeof input === "string" ? input : JSON.stringify(input ?? {}));
+
 /** The messages after the last assistant message: what a resumed session has not seen yet. */
 export function pendingMessages(messages: Message[]): Message[] {
   return messages.slice(messages.findLastIndex((m) => m.role === "assistant") + 1);
@@ -45,7 +62,17 @@ export function checkMessages(messages: unknown): asserts messages is Message[] 
         if (!MEDIA_TYPES.has(String(part.mediaType)) || typeof part.data !== "string") throw invalid(`${at} must have a png, jpeg, webp or gif mediaType and base64 data.`);
         continue;
       }
-      throw invalid(`${at} must be a text or image part.`);
+      if (part?.type === "tool_call") {
+        if (role !== "assistant") throw invalid(`${at}: only assistant messages can carry tool calls.`);
+        if (typeof part.id !== "string" || !part.id || typeof part.name !== "string" || !part.name) throw invalid(`${at} needs a string id and name.`);
+        continue;
+      }
+      if (part?.type === "tool_result") {
+        if (role !== "user") throw invalid(`${at}: only user messages can carry tool results.`);
+        if (typeof part.toolCallId !== "string" || !part.toolCallId || typeof part.output !== "string") throw invalid(`${at} needs a string toolCallId and output.`);
+        continue;
+      }
+      throw invalid(`${at} must be a text, image, tool_call or tool_result part.`);
     }
   }
   if (messages.at(-1).role !== "user") throw invalid("messages must end with a user message.");

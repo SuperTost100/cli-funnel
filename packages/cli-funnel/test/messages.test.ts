@@ -69,7 +69,7 @@ describe("toRunInput", () => {
     [{ messages: [{ role: "system", content: "a" }] }, "system"],
     [{ messages: [{ role: "assistant", content: [IMAGE] }, { role: "user", content: "x" }] }, "only user messages"],
     [{ messages: [{ role: "user", content: [{ type: "image", mediaType: "image/bmp", data: "x" }] }] }, "png"],
-    [{ messages: [{ role: "user", content: [{ type: "audio" }] }] }, "text or image"],
+    [{ messages: [{ role: "user", content: [{ type: "audio" }] }] }, "text, image, tool_call or tool_result"],
     [{}, "Pass prompt or messages"],
   ])("refuses %j", (extra, message) => {
     expect(() => toRunInput({ ...base, ...(extra as object) } as RunRequest)).toThrow(message);

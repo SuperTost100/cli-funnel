@@ -12,6 +12,7 @@ import type {
   ProviderOverview,
   RunInput,
   Selection,
+  ToolCall,
   Usage,
 } from "cli-funnel/client";
 import { applyEvent, endTurn, startTurn, type Turn } from "./transcript.js";
@@ -392,6 +393,8 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
       toolCalls: [] as { id: string; name: string; input?: unknown; error?: string }[],
       /** Tool calls the CLI refused because nobody could approve them. */
       deniedActions: [] as string[],
+      /** Calls to `RunInput.tools` that wait for results. Set only when there are any. */
+      pendingToolCalls: undefined as ToolCall[] | undefined,
       /** The parsed answer when the provider reports structured output itself. */
       structured: undefined as unknown,
       /** The first limit the provider reported, as in RunResult.limit. */
@@ -407,7 +410,8 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
         const call = out.toolCalls.find((c) => c.id === e.id);
         if (call && e.error) call.error = e.error;
         if (e.error?.startsWith("denied:")) out.deniedActions.push(call?.name ?? e.error.slice(7).trim());
-      } else if (e.type === "usage") out.usage = e.usage;
+      } else if (e.type === "tool_call") (out.pendingToolCalls ??= []).push({ id: e.id, name: e.name, input: e.input });
+      else if (e.type === "usage") out.usage = e.usage;
       else if (e.type === "structured") out.structured = e.data;
       else if (e.type === "limit") {
         const { type: _, ...limit } = e;

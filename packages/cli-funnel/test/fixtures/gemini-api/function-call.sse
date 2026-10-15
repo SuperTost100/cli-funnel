@@ -1,0 +1,2 @@
+data: {"candidates": [{"content": {"parts": [{"functionCall": {"name": "get_weather","args": {"city": "Turin"}},"thoughtSignature": "CiQBjz1rX2sig"},{"functionCall": {"name": "get_time","args": {}}}],"role": "model"},"finishReason": "STOP","index": 0}],"usageMetadata": {"promptTokenCount": 60,"candidatesTokenCount": 12,"thoughtsTokenCount": 30,"totalTokenCount": 102},"modelVersion": "gemini-3.8-flash"}
+

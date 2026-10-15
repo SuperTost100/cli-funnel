@@ -92,9 +92,9 @@ function enqueue(store: HistoryStore, key: string): { ready: Promise<void>; rele
  * Runs one turn for a provider that keeps no server-side session. `convert` turns typed messages into the provider's
  * own format. On a resumed session the stored history comes first, followed by the messages the session has not seen:
  * the prompt, or the `RunInput.messages` after the last assistant message. Without stored history the whole
- * conversation is sent. Emits `session` and stores the conversation plus the streamed answer under the session id. A
- * turn that fails, is cancelled or produces no text is not stored: an empty assistant message makes some APIs reject
- * every later turn.
+ * conversation is sent. `convert` also gets the stored history, to look up earlier tool calls. Emits `session` and
+ * stores the conversation plus the answer under the session id. A turn that fails, is cancelled or produces neither
+ * text nor a tool call is not stored: an empty assistant message makes some APIs reject every later turn.
  *
  * Entries are keyed by provider and session id, so a session cannot be resumed on a provider whose message format
  * differs. Turns on one session run one after another. The turn is stored before `done` is yielded, so a consumer
@@ -102,7 +102,7 @@ function enqueue(store: HistoryStore, key: string): { ready: Promise<void>; rele
  */
 export async function* runWithHistory<M>(
   input: RunInput,
-  convert: (messages: Message[]) => M[],
+  convert: (messages: Message[], earlier: M[]) => M[],
   assistant: (text: string) => M,
   stream: (messages: M[]) => AsyncIterable<FunnelEvent>,
 ): AsyncGenerator<FunnelEvent> {
@@ -121,15 +121,17 @@ export async function* runWithHistory<M>(
     }
     const earlier = input.sessionId ? ((await store.get(key)) as M[] | undefined) : undefined;
     const conversation = runMessages(input);
-    const messages = earlier?.length ? [...earlier, ...convert(pendingMessages(conversation))] : convert(conversation);
+    const messages = earlier?.length ? [...earlier, ...convert(pendingMessages(conversation), earlier)] : convert(conversation, []);
     yield { type: "session", sessionId, model: input.selection.model };
     let text = "";
     let failed = false;
+    let called = false;
     for await (const e of stream(messages)) {
       if (e.type === "text.delta") text += e.text;
       if (e.type === "error") failed = true;
+      if (e.type === "tool_call") called = true;
       // A turn that did not finish leaves the store alone, so it cannot overwrite a turn that finished meanwhile.
-      if (e.type === "done" && e.finishReason !== "cancelled" && !failed && text) await store.set(key, [...messages, assistant(text)]);
+      if (e.type === "done" && e.finishReason !== "cancelled" && !failed && (text || called)) await store.set(key, [...messages, assistant(text)]);
       yield e;
     }
   } finally {

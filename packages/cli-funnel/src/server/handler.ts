@@ -164,7 +164,7 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
   };
 
   async function run(req: Request): Promise<Response> {
-    const body = (await readBody(req)) as Pick<RunRequest, "prompt" | "messages" | "sessionId" | "system" | "attachments" | "responseSchema" | "maxOutputTokens" | "providerOptions"> & {
+    const body = (await readBody(req)) as Pick<RunRequest, "prompt" | "messages" | "tools" | "toolChoice" | "sessionId" | "system" | "attachments" | "responseSchema" | "maxOutputTokens" | "providerOptions"> & {
       selection: Selection;
     };
     // Providers with no access levels (Ollama, API providers) have no machine to protect, so cwd means nothing to them.
@@ -198,6 +198,8 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
       selection: body.selection,
       prompt: body.prompt,
       messages: body.messages,
+      tools: body.tools,
+      toolChoice: body.toolChoice,
       system: body.system,
       attachments: body.attachments,
       responseSchema: body.responseSchema,

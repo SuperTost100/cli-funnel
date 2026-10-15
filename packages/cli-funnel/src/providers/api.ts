@@ -1,32 +1,46 @@
 import { readSSE } from "../util/sse.js";
 import { redactErrors } from "../util/redact.js";
 import { anthropicAdaptive, anthropicEfforts, geminiEfforts, openaiEfforts } from "./efforts.js";
-import { textOf } from "../messages.js";
+import { parseArguments } from "../messages.js";
 import { runWithHistory } from "./history.js";
 import { fetchRetrying, mergeHeaders, type RetryOptions } from "./http.js";
 import { parseHttpLimit } from "./limits.js";
 import {
+  anthropicMessages,
+  anthropicToolChoice,
+  anthropicTools,
+  chatAssistant,
+  chatMessages,
+  chatToolCalls,
+  chatToolChoice,
+  chatTools,
+  geminiMessages,
+  geminiToolConfig,
+  geminiTools,
+  newCallId,
+  type Msg,
+} from "./wire.js";
+import {
   FunnelError,
   type ApiProviderId,
-  type ContentPart,
   type FunnelEvent,
   type Message,
   type ModelInfo,
   type Provider,
   type RunInput,
+  type ToolCall,
 } from "../types.js";
 
-export interface Msg {
-  role: "user" | "assistant";
-  /** A string, or vendor-shaped content parts when images are attached. */
-  content: string | unknown[];
-}
+export { chatMessages, type Msg } from "./wire.js";
 
 /** What a stream hands back besides events. */
-interface Turn {
+export interface Turn {
   /** Replaces the plain answer text as the assistant message in history, for vendors that need more than text back. */
-  assistantContent?: unknown[];
+  assistant?: Msg;
 }
+
+/** Tools are sent unless the choice is `none` on a vendor that has no `none`. */
+const toolsOf = (input: RunInput) => (input.tools?.length ? input.tools : undefined);
 
 /** Settings for one vendor, passed as `createFunnel({ api: { anthropic: {...} } })`. */
 export interface ApiVendorConfig {
@@ -72,8 +86,8 @@ interface ApiSpec {
   authHeaders(key: string): Record<string, string>;
   listModels(ctx: ApiContext): Promise<ModelInfo[]>;
   stream(ctx: ApiContext, input: RunInput, messages: Msg[], turn: Turn): AsyncGenerator<FunnelEvent>;
-  /** Typed messages in this vendor's message format. */
-  toMessages(messages: Message[]): Msg[];
+  /** Typed messages in this vendor's message format. `earlier` is the stored history, for tool call lookups. */
+  toMessages(messages: Message[], input: RunInput, earlier: Msg[]): Msg[];
 }
 
 /** A failed response as events: a `limit` first when the API answered 429, then the error. */
@@ -84,10 +98,6 @@ async function* httpError(label: string, res: Response): AsyncGenerator<FunnelEv
   yield { type: "error", message: `${label} ${res.status}: ${body}`, code: "cli-failed" };
 }
 
-/** Maps each message, keeping a string as a string and each part through `part`. */
-const mapMessages = (messages: Message[], part: (p: ContentPart) => unknown): Msg[] =>
-  messages.map((m) => ({ role: m.role, content: typeof m.content === "string" ? m.content : m.content.map(part) }));
-
 const MODEL_BASE = { contextWindows: [], fast: false, source: "cli" as const };
 
 const EPHEMERAL = { type: "ephemeral" };
@@ -96,7 +106,7 @@ const EPHEMERAL = { type: "ephemeral" };
 function cacheLast(messages: Msg[]): Msg[] {
   const last = messages.at(-1);
   if (!last) return messages;
-  const blocks = typeof last.content === "string" ? [{ type: "text", text: last.content }] : [...last.content];
+  const blocks = typeof last.content === "string" ? [{ type: "text", text: last.content }] : [...(last.content ?? [])];
   blocks[blocks.length - 1] = { ...(blocks.at(-1) as object), cache_control: EPHEMERAL };
   return [...messages.slice(0, -1), { ...last, content: blocks }];
 }
@@ -120,6 +130,8 @@ export function anthropicBody(input: RunInput, messages: Msg[]): Record<string, 
     ...(sampling?.temperature !== undefined ? { temperature: sampling.temperature } : {}),
     ...(sampling?.topP !== undefined ? { top_p: sampling.topP } : {}),
     ...(sampling?.stop?.length ? { stop_sequences: sampling.stop } : {}),
+    ...(toolsOf(input) ? { tools: anthropicTools(input.tools!) } : {}),
+    ...(input.toolChoice ? { tool_choice: anthropicToolChoice(input.toolChoice) } : {}),
     messages: input.cache ? cacheLast(messages) : messages,
   };
 }
@@ -146,7 +158,7 @@ const anthropic: ApiSpec = {
     }
     return out;
   },
-  async *stream(ctx, input, messages) {
+  async *stream(ctx, input, messages, turn) {
     const res = yield* fetchRetrying(
       `${ctx.baseUrl}/v1/messages`,
       { method: "POST", signal: input.signal, headers: { ...ctx.headers, "content-type": "application/json" }, body: JSON.stringify(anthropicBody(input, messages)) },
@@ -159,22 +171,47 @@ const anthropic: ApiSpec = {
     let created = 0;
     let stop = "end_turn";
     let stopped = false;
+    // The content blocks of the answer by index. A turn with tool calls goes back whole, thinking signatures included,
+    // because the API wants the thinking that led to a tool call next to its result.
+    const blocks: Record<string, any>[] = [];
+    const calls: ToolCall[] = [];
     for await (const { data } of readSSE(res)) {
       const e = JSON.parse(data);
+      const block = typeof e.index === "number" ? blocks[e.index] : undefined;
       if (e.type === "message_start") {
         inTok = e.message.usage?.input_tokens ?? 0;
         cached = e.message.usage?.cache_read_input_tokens ?? 0;
         created = e.message.usage?.cache_creation_input_tokens ?? 0;
-      } else if (e.type === "content_block_delta" && e.delta?.type === "text_delta") yield { type: "text.delta", text: e.delta.text };
+      } else if (e.type === "content_block_start" && typeof e.index === "number") {
+        blocks[e.index] = { ...e.content_block, ...(e.content_block?.type === "tool_use" ? { json: "" } : {}) };
+      } else if (e.type === "content_block_delta" && e.delta?.type === "text_delta") {
+        if (block) block.text = (block.text ?? "") + e.delta.text;
+        yield { type: "text.delta", text: e.delta.text };
+      }
       // With display "omitted" the deltas carry an empty string.
-      else if (e.type === "content_block_delta" && e.delta?.type === "thinking_delta" && e.delta.thinking) yield { type: "reasoning.delta", text: e.delta.thinking };
-      else if (e.type === "message_delta") {
+      else if (e.type === "content_block_delta" && e.delta?.type === "thinking_delta") {
+        if (block) block.thinking = (block.thinking ?? "") + e.delta.thinking;
+        if (e.delta.thinking) yield { type: "reasoning.delta", text: e.delta.thinking };
+      } else if (e.type === "content_block_delta" && e.delta?.type === "signature_delta") {
+        if (block) block.signature = (block.signature ?? "") + e.delta.signature;
+      } else if (e.type === "content_block_delta" && e.delta?.type === "input_json_delta" && block?.type === "tool_use") {
+        block.json += e.delta.partial_json ?? "";
+        if (e.delta.partial_json) yield { type: "tool_call.delta", id: block.id, name: block.name, arguments: e.delta.partial_json };
+      } else if (e.type === "content_block_stop" && block?.type === "tool_use") {
+        const call = { id: String(block.id), name: String(block.name), input: parseArguments(block.json) };
+        block.input = call.input && typeof call.input === "object" ? call.input : {};
+        delete block.json;
+        calls.push(call);
+        yield { type: "tool_call", ...call };
+      } else if (e.type === "message_delta") {
         outTok = e.usage?.output_tokens ?? outTok;
         stop = e.delta?.stop_reason ?? stop;
       } else if (e.type === "message_stop") stopped = true;
       else if (e.type === "error") return yield { type: "error", message: e.error?.message ?? "API error" };
     }
     if (!stopped) return yield truncated("Anthropic API");
+    // Empty text blocks are refused when sent back.
+    if (calls.length) turn.assistant = { role: "assistant", content: blocks.filter((b) => b && !(b.type === "text" && !b.text)) };
     // Cache reads and writes are input tokens the model processed, as in the Claude Code parser.
     const inputTokens = inTok + cached + created;
     yield {
@@ -184,11 +221,11 @@ const anthropic: ApiSpec = {
     yield {
       type: "done",
       text: "",
-      finishReason: stop === "refusal" ? "denied" : stop === "max_tokens" || stop === "model_context_window_exceeded" ? "length" : "stop",
+      finishReason:
+        stop === "refusal" ? "denied" : stop === "max_tokens" || stop === "model_context_window_exceeded" ? "length" : calls.length ? "tool_calls" : "stop",
     };
   },
-  toMessages: (messages) =>
-    mapMessages(messages, (p) => (p.type === "text" ? { type: "text", text: p.text } : { type: "image", source: { type: "base64", media_type: p.mediaType, data: p.data } })),
+  toMessages: (messages) => anthropicMessages(messages),
 };
 
 export interface ChatCompletionsOptions {
@@ -209,8 +246,11 @@ export interface ChatCompletionsOptions {
 /** The stream ended without the vendor's own end marker, so the answer may be cut off. */
 const truncated = (label: string): FunnelEvent => ({ type: "error", message: `${label} closed the stream before the answer finished.`, code: "stream-truncated" });
 
-/** Streams one Chat Completions turn. Shared by `openai-api` and the OpenAI-compatible endpoints. */
-export async function* streamChatCompletions(opts: ChatCompletionsOptions, input: RunInput, messages: Msg[]): AsyncGenerator<FunnelEvent> {
+/**
+ * Streams one Chat Completions turn. Shared by `openai-api` and the OpenAI-compatible endpoints. `turn.assistant` gets
+ * the answer with its tool calls, for the session history.
+ */
+export async function* streamChatCompletions(opts: ChatCompletionsOptions, input: RunInput, messages: Msg[], turn: Turn = {}): AsyncGenerator<FunnelEvent> {
   let res: Response;
   try {
     res = yield* fetchRetrying(
@@ -239,6 +279,8 @@ export async function* streamChatCompletions(opts: ChatCompletionsOptions, input
                 },
               }
             : {}),
+          ...(toolsOf(input) ? { tools: chatTools(input.tools!) } : {}),
+          ...(input.toolChoice ? { tool_choice: chatToolChoice(input.toolChoice) } : {}),
         }),
       },
       opts.retry,
@@ -258,6 +300,8 @@ export async function* streamChatCompletions(opts: ChatCompletionsOptions, input
     | undefined;
   let stop = "stop";
   let finished = false;
+  let text = "";
+  const tools = chatToolCalls();
   try {
     // The error body is read inside the try, so an abort while reading it ends the run as cancelled.
     if (!res.ok) return yield* httpError(opts.label, res);
@@ -272,7 +316,11 @@ export async function* streamChatCompletions(opts: ChatCompletionsOptions, input
       // Servers name the reasoning field differently: vLLM, llama.cpp and LM Studio use reasoning_content, Ollama uses reasoning.
       const reasoning = choice?.delta?.reasoning_content ?? choice?.delta?.reasoning;
       if (typeof reasoning === "string" && reasoning) yield { type: "reasoning.delta", text: reasoning };
-      if (choice?.delta?.content) yield { type: "text.delta", text: choice.delta.content };
+      if (choice?.delta?.content) {
+        text += choice.delta.content;
+        yield { type: "text.delta", text: choice.delta.content };
+      }
+      yield* tools.add(choice?.delta?.tool_calls);
       // A refusal streams in its own field instead of `content`.
       if (choice?.delta?.refusal) {
         yield { type: "text.delta", text: choice.delta.refusal };
@@ -289,6 +337,9 @@ export async function* streamChatCompletions(opts: ChatCompletionsOptions, input
     throw err;
   }
   if (!finished) return yield truncated(opts.label);
+  const calls = tools.finish();
+  for (const call of calls) yield { type: "tool_call", ...call };
+  turn.assistant = chatAssistant(text, calls);
   if (usage) {
     const cached = usage.prompt_tokens_details?.cached_tokens;
     const reasoning = usage.completion_tokens_details?.reasoning_tokens;
@@ -303,16 +354,11 @@ export async function* streamChatCompletions(opts: ChatCompletionsOptions, input
       },
     };
   }
-  yield { type: "done", text: "", finishReason: stop === "content_filter" || stop === "refusal" ? "denied" : stop === "length" ? "length" : "stop" };
-}
-
-/** Typed messages in Chat Completions format. Assistant turns are plain text, which every server takes. */
-export function chatMessages(messages: Message[]): Msg[] {
-  return messages.map((m) =>
-    m.role === "assistant"
-      ? { role: m.role, content: textOf(m) }
-      : mapMessages([m], (p) => (p.type === "text" ? { type: "text", text: p.text } : { type: "image_url", image_url: { url: `data:${p.mediaType};base64,${p.data}` } }))[0]!,
-  );
+  yield {
+    type: "done",
+    text: "",
+    finishReason: stop === "content_filter" || stop === "refusal" ? "denied" : stop === "length" ? "length" : calls.length ? "tool_calls" : "stop",
+  };
 }
 
 /**
@@ -344,8 +390,8 @@ const openai: ApiSpec = {
       .sort((a, b) => a.id.localeCompare(b.id));
   },
   // The key is already in ctx.headers, so it is passed as a header and not as `key`.
-  stream: (ctx, input, messages) =>
-    streamChatCompletions({ baseUrl: ctx.baseUrl, headers: ctx.headers, retry: ctx.retry, maxTokensField: "max_completion_tokens", label: "OpenAI API", strictSchema: true }, input, messages),
+  stream: (ctx, input, messages, turn) =>
+    streamChatCompletions({ baseUrl: ctx.baseUrl, headers: ctx.headers, retry: ctx.retry, maxTokensField: "max_completion_tokens", label: "OpenAI API", strictSchema: true }, input, messages, turn),
   toMessages: chatMessages,
 };
 
@@ -410,6 +456,8 @@ const gemini: ApiSpec = {
             ...(input.sampling?.seed !== undefined ? { seed: input.sampling.seed } : {}),
             ...(input.responseSchema ? { responseMimeType: "application/json", responseJsonSchema: input.responseSchema.schema } : {}),
           },
+          ...(toolsOf(input) ? { tools: geminiTools(input.tools!) } : {}),
+          ...(input.toolChoice ? { toolConfig: geminiToolConfig(input.toolChoice) } : {}),
         }),
       },
       ctx.retry,
@@ -420,6 +468,7 @@ const gemini: ApiSpec = {
     let finished = false;
     // The whole answer, so `thoughtSignature` goes back with the next turn. Adjacent plain text parts are joined.
     const parts: Record<string, unknown>[] = [];
+    let called = false;
     for await (const { data } of readSSE(res)) {
       const e = JSON.parse(data);
       if (e.error) return yield { type: "error", message: e.error.message ?? "Gemini API error" };
@@ -428,7 +477,16 @@ const gemini: ApiSpec = {
         finished = true;
       }
       const candidate = e.candidates?.[0];
-      for (const part of candidate?.content?.parts ?? []) {
+      for (const raw of candidate?.content?.parts ?? []) {
+        let part = raw;
+        // Gemini sends each call whole. It may leave out the id, so one is made up and kept in history, where a
+        // later tool result finds the call's name by it.
+        if (raw.functionCall) {
+          const id = raw.functionCall.id || newCallId();
+          part = { ...raw, functionCall: { ...raw.functionCall, id } };
+          called = true;
+          yield { type: "tool_call", id, name: String(raw.functionCall.name), input: raw.functionCall.args ?? {} };
+        }
         // Thought summaries are not sent back, but a signature on one must be.
         if (!part.thought || part.thoughtSignature) {
           const last = parts[parts.length - 1];
@@ -446,7 +504,7 @@ const gemini: ApiSpec = {
       if (e.usageMetadata) usage = e.usageMetadata;
     }
     if (!finished) return yield truncated("Gemini API");
-    if (parts.length) turn.assistantContent = parts;
+    if (parts.length) turn.assistant = { role: "assistant", content: parts };
     if (usage) {
       const inputTokens = usage.promptTokenCount ?? 0;
       // Thinking tokens are billed as output.
@@ -463,9 +521,9 @@ const gemini: ApiSpec = {
       };
     }
     if (GEMINI_FAILED.has(stop)) return yield { type: "error", message: `Gemini API stopped with ${stop}.`, code: "cli-failed" };
-    yield { type: "done", text: "", finishReason: GEMINI_BLOCKED.has(stop) ? "denied" : stop === "MAX_TOKENS" ? "length" : "stop" };
+    yield { type: "done", text: "", finishReason: GEMINI_BLOCKED.has(stop) ? "denied" : stop === "MAX_TOKENS" ? "length" : called ? "tool_calls" : "stop" };
   },
-  toMessages: (messages) => mapMessages(messages, (p) => (p.type === "text" ? { text: p.text } : { inlineData: { mimeType: p.mediaType, data: p.data } })),
+  toMessages: (messages, input, earlier) => geminiMessages(messages, input.selection.model, earlier),
 };
 
 /** Turns an aborted fetch into a cancelled run and a network failure into an error event, as the other providers do. */
@@ -506,6 +564,7 @@ function makeApiProvider(spec: ApiSpec, getKey: () => string | undefined, config
       approvals: false,
       images: true,
       messages: true,
+      tools: true,
       system: "native",
       schema: "native",
       sampling: true,
@@ -533,7 +592,7 @@ function makeApiProvider(spec: ApiSpec, getKey: () => string | undefined, config
     run(input) {
       const turn: Turn = {};
       return redactErrors(
-        runWithHistory(input, spec.toMessages, (text): Msg => ({ role: "assistant", content: turn.assistantContent ?? text }), (messages) =>
+        runWithHistory<Msg>(input, (messages, earlier) => spec.toMessages(messages, input, earlier), (text): Msg => turn.assistant ?? { role: "assistant", content: text }, (messages) =>
           settle(spec, input, () => spec.stream(context(), input, messages, turn)),
         ),
         [getKey() ?? process.env[spec.envVar], ...Object.values(config.headers ?? {})],
