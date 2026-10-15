@@ -72,6 +72,41 @@ export interface RunStream extends AsyncIterable<FunnelEvent> {
 /** How long a provider's installation and model list are reused. `refresh()` drops them sooner. */
 const CACHE_TTL_MS = 60_000;
 
+/**
+ * Runs the provider until `ms` pass. Then it aborts the provider and ends the run itself, so a provider that hangs
+ * after the abort cannot keep the run open.
+ */
+async function* withDeadline(run: (input: RunInput) => AsyncIterable<FunnelEvent>, input: RunInput, ms: number): AsyncGenerator<FunnelEvent> {
+  const deadline = new AbortController();
+  const signal = input.signal ? AbortSignal.any([input.signal, deadline.signal]) : deadline.signal;
+  const it = run({ ...input, signal })[Symbol.asyncIterator]();
+  let timer: NodeJS.Timeout | undefined;
+  const expired = new Promise<"expired">((resolve) => {
+    timer = setTimeout(() => {
+      deadline.abort();
+      resolve("expired");
+    }, ms);
+  });
+  try {
+    for (;;) {
+      const pending = it.next();
+      const next = await Promise.race([pending, expired]);
+      if (next === "expired") {
+        // The provider may still answer or fail after the abort. Nobody reads it any more.
+        pending.catch(() => undefined);
+        yield { type: "done", text: "", finishReason: "cancelled", timeout: true };
+        return;
+      }
+      if (next.done) return;
+      yield next.value;
+    }
+  } finally {
+    clearTimeout(timer);
+    // Closes the provider's generator when the deadline passed or the consumer stopped early.
+    void it.return?.()?.catch(() => undefined);
+  }
+}
+
 export function createFunnel(options: FunnelOptions = {}) {
   const registry: Record<ProviderId, Provider> = {
     ...PROVIDERS,
@@ -146,7 +181,8 @@ export function createFunnel(options: FunnelOptions = {}) {
     const source = (async function* () {
       const p = await prepare(input);
       const runInput = input.history ? input : { ...input, history };
-      yield* pool ? pool.run(p, runInput) : p.run(runInput);
+      const run = (i: RunInput) => (pool ? pool.run(p, i) : p.run(i));
+      yield* input.timeoutMs ? withDeadline(run, runInput, input.timeoutMs) : run(runInput);
     })();
     const events = options.onEvent ? observeRun(options.onEvent, input, source) : source;
     // Fold events as they pass, so `.result` works next to `for await` without keeping them.

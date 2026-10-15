@@ -47,6 +47,8 @@ export interface HandlerOptions {
    * check above stays on. A wildcard is not accepted.
    */
   cors?: string;
+  /** Deadline in milliseconds for every run on `/run` and `/v1/chat/completions`. Default: none. */
+  maxRunMs?: number;
 }
 
 /** The origin ("scheme://host[:port]") of a CORS setting. Throws on anything else, including "*". */
@@ -113,7 +115,7 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
     const id = `run_${++seq}_${Date.now().toString(36)}`;
     const controller = new AbortController();
     runs.set(id, controller);
-    return { id, signal: AbortSignal.any([requestSignal, controller.signal]), end: () => runs.delete(id) };
+    return { id, signal: AbortSignal.any([requestSignal, controller.signal]), timeoutMs: options.maxRunMs, end: () => runs.delete(id) };
   };
 
   const cors = options.cors === undefined ? undefined : corsOrigin(options.cors);
@@ -191,6 +193,7 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
       maxOutputTokens: body.maxOutputTokens,
       sessionId: body.sessionId,
       signal: tracked.signal,
+      timeoutMs: tracked.timeoutMs,
       onApproval: (request) =>
         new Promise<ApprovalDecision>((resolveDecision) => {
           if (over || tracked.signal.aborted) return resolveDecision("deny");

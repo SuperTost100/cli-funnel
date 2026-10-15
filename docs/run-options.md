@@ -106,3 +106,24 @@ From the browser client, call `client.cancelRun(runId)`. `useRun().cancel()` cal
 Chat completions report the id in `x_funnel.runId`. A streaming response carries it in the first chunk, so an SDK client can cancel while the answer is still coming. The same route works for both.
 
 Closing the connection still cancels the run, as before.
+
+## Deadline
+
+`timeoutMs` stops a run that takes too long, whatever the provider:
+
+```ts
+const result = await funnel.run({ selection, prompt, timeoutMs: 120_000 });
+
+if (result.timeout) console.log("Gave up after 2 minutes. Partial answer:", result.text);
+```
+
+When the deadline passes, cli-funnel aborts the provider and ends the run without waiting for it. The stream ends with `{ type: "done", finishReason: "cancelled", timeout: true }`, and the result has `finishReason: "cancelled"` and `timeout: true`. It is not an error, and `text` keeps what arrived before the deadline. The CLI gets SIGTERM, and SIGKILL 3 seconds later if it is still running, so a hung CLI does not outlive its run.
+
+| Where | Option | Default |
+|---|---|---|
+| Library | `RunInput.timeoutMs` | none |
+| HTTP handler | `createHandler(funnel, { maxRunMs })`, applied to `/run` and `/v1/chat/completions` | none |
+| `cli-funnel run` | `--timeout <seconds>` | none |
+| `cli-funnel serve` | `--timeout <seconds>`, sets `maxRunMs` | 1800 (30 minutes). `0` turns it off. |
+
+`cli-funnel run` exits with code 1 when it hits the deadline.

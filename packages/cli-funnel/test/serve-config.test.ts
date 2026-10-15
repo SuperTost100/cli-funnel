@@ -93,6 +93,15 @@ describe("resolveServe", () => {
     expect(resolveServe({ "fs-root": ["/srv/a"], cwd: "/srv/a/x" }, {}, {}, where).handler.openai?.cwd).toBe("/srv/a/x");
   });
 
+  it("stops runs after 30 minutes unless --timeout or maxRunMs says otherwise", () => {
+    expect(resolveServe({}, {}, {}, where).handler.maxRunMs).toBe(1_800_000);
+    expect(resolveServe({}, { maxRunMs: 60_000 }, {}, where).handler.maxRunMs).toBe(60_000);
+    expect(resolveServe({ timeout: "90" }, { maxRunMs: 60_000 }, {}, where).handler.maxRunMs).toBe(90_000);
+    expect(resolveServe({ timeout: "0" }, {}, {}, where).handler.maxRunMs).toBe(0);
+    expect(() => resolveServe({ timeout: "soon" }, {}, {}, where)).toThrow(/--timeout/);
+    expect(() => parseServeConfig({ maxRunMs: -1 }, "c.json")).toThrow(/"maxRunMs"/);
+  });
+
   it("takes the access level from the flag, then openai.access, then access", () => {
     expect(resolveServe({}, { access: "none" }, {}, where).handler.openai?.access).toBe("none");
     expect(resolveServe({}, { access: "none", openai: { access: "full" } }, {}, where).handler.openai?.access).toBe("full");
