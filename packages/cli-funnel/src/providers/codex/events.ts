@@ -13,6 +13,8 @@ export class Translator {
   /** File changes by item id, kept so approval requests can show them. */
   readonly items = new Map<string, unknown>();
   private messages: string[] = [];
+  /** Message phase by item id, from `item/started`. Deltas carry only the item id. */
+  private phases = new Map<string, string | null>();
   private usage: Usage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, totalTokens: 0 };
 
   constructor(private threadId: string) {}
@@ -21,7 +23,9 @@ export class Translator {
     if (p.threadId && p.threadId !== this.threadId) return { events: [] };
     switch (method) {
       case "item/agentMessage/delta":
-        return { events: [{ type: "text.delta", text: p.delta }] };
+        // Commentary is progress narration, not the answer. It goes to the reasoning stream so it never reaches
+        // `text` or the structured-output parse. A delta for an item we never saw start counts as answer text.
+        return { events: [{ type: this.phases.get(p.itemId) === "commentary" ? "reasoning.delta" : "text.delta", text: p.delta }] };
       case "item/reasoning/summaryTextDelta":
       case "item/reasoning/textDelta":
         return { events: [{ type: "reasoning.delta", text: p.delta }] };
@@ -52,6 +56,9 @@ export class Translator {
 
   private itemStarted(item: Params): FunnelEvent[] {
     switch (item?.type) {
+      case "agentMessage":
+        this.phases.set(item.id, item.phase ?? null);
+        return [];
       case "commandExecution":
         return [{ type: "tool.start", id: item.id, name: "command", input: { command: item.command, cwd: item.cwd } }];
       case "fileChange":
@@ -61,6 +68,12 @@ export class Translator {
         return [{ type: "tool.start", id: item.id, name: `mcp:${item.server}/${item.tool}`, input: item.arguments }];
       case "dynamicToolCall":
         return [{ type: "tool.start", id: item.id, name: item.tool, input: item.arguments }];
+      case "webSearch":
+        return [{ type: "tool.start", id: item.id, name: "web_search", input: { query: item.query, action: item.action ?? undefined } }];
+      case "imageView":
+        return [{ type: "tool.start", id: item.id, name: "image_view", input: { path: item.path } }];
+      case "collabAgentToolCall":
+        return [{ type: "tool.start", id: item.id, name: `agent:${item.tool}`, input: { prompt: item.prompt ?? undefined, model: item.model ?? undefined, receiverThreadIds: item.receiverThreadIds } }];
       default:
         return [];
     }
@@ -69,7 +82,8 @@ export class Translator {
   private itemCompleted(item: Params): FunnelEvent[] {
     switch (item?.type) {
       case "agentMessage":
-        if (item.text) this.messages.push(item.text);
+        // Only the final answer, or a message from an older Codex that sets no phase, is answer text.
+        if (item.text && item.phase !== "commentary") this.messages.push(item.text);
         return [];
       case "commandExecution": {
         const bad = item.status === "failed" || item.status === "declined" || (item.exitCode ?? 0) !== 0;
@@ -89,6 +103,14 @@ export class Translator {
       }
       case "dynamicToolCall":
         return [{ type: "tool.end", id: item.id, error: item.success === false ? "Tool call failed" : undefined }];
+      case "webSearch":
+        return [{ type: "tool.end", id: item.id, output: item.results ? JSON.stringify(item.results) : undefined }];
+      case "imageView":
+        return [{ type: "tool.end", id: item.id }];
+      case "collabAgentToolCall": {
+        const bad = item.status === "failed" || item.status === "interrupted";
+        return [{ type: "tool.end", id: item.id, error: bad ? `Agent call ${item.status}` : undefined }];
+      }
       default:
         return [];
     }
