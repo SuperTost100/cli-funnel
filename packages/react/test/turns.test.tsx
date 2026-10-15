@@ -37,7 +37,7 @@ describe("useRun turns", () => {
   it("keeps one turn per send, each with the selection it was sent with", async () => {
     const a = stream<RunEvent>();
     const b = stream<RunEvent>();
-    const { result } = renderHook(() => useRun(clientFor(a, b), { keepTranscript: true }));
+    const { result } = (() => { const client = clientFor(a, b); return renderHook(() => useRun(client, { keepTranscript: true })); })();
 
     const selection = { ...SEL };
     act(() => void result.current.send("one", selection));
@@ -66,7 +66,7 @@ describe("useRun turns", () => {
   it("closes a turn that a second send superseded", async () => {
     const a = stream<RunEvent>();
     const b = stream<RunEvent>();
-    const { result } = renderHook(() => useRun(clientFor(a, b), { keepTranscript: true }));
+    const { result } = (() => { const client = clientFor(a, b); return renderHook(() => useRun(client, { keepTranscript: true })); })();
 
     act(() => void result.current.send("one", SEL));
     act(() => a.push({ type: "text.delta", text: "half" }));
@@ -85,7 +85,7 @@ describe("useRun turns", () => {
   it("holds only the latest run without keepTranscript", async () => {
     const a = stream<RunEvent>();
     const b = stream<RunEvent>();
-    const { result } = renderHook(() => useRun(clientFor(a, b)));
+    const { result } = (() => { const client = clientFor(a, b); return renderHook(() => useRun(client)); })();
 
     act(() => void result.current.send("one", SEL));
     act(() => void result.current.send("two", SEL));
@@ -94,7 +94,7 @@ describe("useRun turns", () => {
 
   it("clears the transcript on newConversation()", () => {
     const a = stream<RunEvent>();
-    const { result } = renderHook(() => useRun(clientFor(a), { keepTranscript: true }));
+    const { result } = (() => { const client = clientFor(a); return renderHook(() => useRun(client, { keepTranscript: true })); })();
 
     act(() => void result.current.send("one", SEL));
     expect(result.current.turns).toHaveLength(1);
@@ -112,7 +112,7 @@ describe("useRun turns", () => {
 
   it("parses the answer as JSON into result.structured when a schema was set and the provider sent none", async () => {
     const a = stream<RunEvent>();
-    const { result } = renderHook(() => useRun(clientFor(a), { keepTranscript: true }));
+    const { result } = (() => { const client = clientFor(a); return renderHook(() => useRun(client, { keepTranscript: true })); })();
 
     act(() => void result.current.send("one", SEL, { responseSchema: { schema: { type: "object" } } }));
     act(() => {

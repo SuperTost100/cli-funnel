@@ -11,6 +11,7 @@ import type {
   ProviderOverview,
   RunInput,
   Selection,
+  Usage,
 } from "cli-funnel/client";
 import { applyEvent, endTurn, startTurn, type Turn } from "./transcript.js";
 
@@ -300,7 +301,7 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
       setStarted({ provider: chosen.provider, model: chosen.model });
       setStatus("running");
       const turnId = ++turnCount.current;
-      const start = startTurn(turnId, prompt, selection);
+      const start = startTurn(turnId, prompt, chosen);
       setTurns((ts) => (keepTranscript ? [...ts, start] : [start]));
       const patch = (fn: (t: Turn) => Turn) => setTurns((ts) => ts.map((t) => (t.id === turnId ? fn(t) : t)));
       // A run that was superseded, reset or stopped still closes its own turn.
