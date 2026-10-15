@@ -161,7 +161,11 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
     const timeoutMs = (options.approvalTimeoutSec ?? 300) * 1000;
     // Approvals this run is waiting on. An aborted or finished run answers them with deny, so nothing outlives it.
     const pending = new Set<string>();
+    // Set once the run is over. An approval the provider asks for after that, which can happen when the body is
+    // cancelled between the approval event and the provider's call to onApproval, is denied at once.
+    let over = false;
     const settleAll = () => {
+      over = true;
       for (const key of [...pending]) approvals.get(key)?.resolve("deny");
     };
     req.signal.addEventListener("abort", settleAll, { once: true });
@@ -177,7 +181,7 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
       signal: req.signal,
       onApproval: (request) =>
         new Promise<ApprovalDecision>((resolveDecision) => {
-          if (req.signal.aborted) return resolveDecision("deny");
+          if (over || req.signal.aborted) return resolveDecision("deny");
           const key = `${runId}:${request.id}`;
           const early = earlyDecisions.get(key);
           if (early) {
