@@ -36,7 +36,7 @@ Providers that call an HTTP API spawn nothing. `detect()` reports whether the se
 export const PROVIDERS = { ..., myprovider: myProvider };
 ```
 
-Add the id to `CliProviderId` in `src/types.ts` and a `data/models/myprovider.json` file. To try a provider without editing the package, pass it in:
+Add the id to `CliProviderId` in `src/types.ts`, add a `data/models/myprovider.json` file, and add the id to `PROVIDER_IDS` in `src/catalog/manifest.ts`. The manifest loader reads only the files that list names, so a new JSON file without that entry is ignored without an error. To try a provider without editing the package, pass it in:
 
 ```ts
 createFunnel({ providers: { claude: myReplacement } });

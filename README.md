@@ -103,6 +103,12 @@ client.chat.completions.create(
 
 ## Put it in a UI
 
+The React components are a separate package:
+
+```bash
+npm install cli-funnel-react
+```
+
 ```tsx
 import { createClient } from "cli-funnel/client";
 import { FunnelPicker, FunnelLogin, useProviders } from "cli-funnel-react";

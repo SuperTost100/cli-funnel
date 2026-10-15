@@ -61,7 +61,16 @@ It shows provider, model, reasoning, context window, fast mode, project folder a
 
 `locked` fields are hidden and always applied. That is how you hardcode part of a selection.
 
-Styles use CSS variables prefixed `--cf-` and follow `prefers-color-scheme`. Override them on any parent element.
+Styles use CSS variables prefixed `--cf-` and follow `prefers-color-scheme`. Every component's root element has the class `cf`, and `.cf` declares the variables itself, so a value set on a parent element is ignored. Override them on `.cf`:
+
+```css
+.cf {
+  --cf-accent: #0a7d4f;
+  --cf-radius: 4px;
+}
+```
+
+Add a `@media (prefers-color-scheme: dark)` block with the same selector for dark colors.
 
 ## Login and update panel
 

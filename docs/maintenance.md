@@ -25,7 +25,19 @@ CLI_FUNNEL_LIVE=1 npm test
 
 ## Checking for drift
 
-`.github/workflows/nightly-drift.yml` installs the newest release of each CLI and checks that every flag cli-funnel uses still appears in that CLI's `--help`. It opens an issue when one disappears. It cannot sign in, so it cannot run the live tests. Run those locally before a release.
+`.github/workflows/nightly-drift.yml` installs the newest Claude Code, Codex and Cursor Agent and runs `scripts/check-drift.mjs`. The script looks for a fixed list of flags and subcommands in each CLI's help output and skips a CLI that is not installed. It opens an issue when one disappears.
+
+The job does not cover everything:
+
+- Antigravity is not installed in the job, so its flags are checked only when you run the script on a machine that has `agy`.
+- Only the flags listed in `scripts/check-drift.mjs` are checked. When a provider starts passing a new flag, add it to that list.
+- It cannot sign in, so it cannot run the live tests. Run those locally before a release.
+
+Run the same check locally against the CLIs you have installed:
+
+```bash
+node scripts/check-drift.mjs
+```
 
 ## Version warnings
 
