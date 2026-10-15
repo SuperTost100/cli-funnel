@@ -19,6 +19,46 @@ await funnel.run({
 
 Without `apiKeys`, the providers read the environment variables.
 
+## Gateways, headers and retries
+
+`api` sets one vendor's key, base URL, extra headers and retry behavior. It works next to `apiKeys`, and a `key` in `api` wins.
+
+```ts
+const funnel = createFunnel({
+  api: {
+    anthropic: {
+      baseUrl: "https://llm.example.com/anthropic",
+      headers: { "x-team": "docs" },
+    },
+    openai: { key: process.env.MY_KEY, retries: 3 },
+  },
+});
+```
+
+| Field | Meaning |
+|---|---|
+| `key` | The API key. Falls back to `apiKeys`, then the environment variable. |
+| `baseUrl` | Where requests go. Written the way the vendor SDK takes it, and cli-funnel adds the path after it. |
+| `headers` | Sent with every request, including model lists, after the default headers. A name that matches a default in any letter case replaces it. |
+| `retries` | Extra attempts after a 429 or 5xx. Default 2. `0` turns retries off. |
+| `retryDelayMs` | First wait before a retry. Default 500, doubled each time. |
+
+The default base URLs are `https://api.anthropic.com`, `https://api.openai.com/v1` and `https://generativelanguage.googleapis.com/v1beta`. With `headers` set and no key, no key header is sent, for gateways that authenticate by their own headers. `authStatus()` then reports the method as `Headers`.
+
+### Retries
+
+A request that gets a 429 or a 5xx answer (Anthropic's 529 included) is sent again, so a call goes out at most three times with the defaults. cli-funnel waits the time in the `Retry-After` header when there is one, and the backoff otherwise. If `Retry-After` asks for more than 30 seconds, there is no retry and the error comes back at once.
+
+Retries happen only before any output. Once the response has started streaming, an error ends the run, because sending the request again would repeat text the caller already has. Network errors are not retried.
+
+Each retry emits a `retry` event with `attempt`, `status` and `delayMs`, and `result.retries` holds the count. It is absent when nothing was retried. `retries` and `headers` also work on OpenAI-compatible endpoints, see [OpenAI-compatible servers](providers/openai-compatible.md).
+
+## Prompt caching
+
+Set `cache: true` on a run to use the Anthropic API's prompt cache. cli-funnel puts a `cache_control` breakpoint on the system prompt and on the newest turn, so the next turn in the session reads that prefix from the cache. The saving shows in `usage.cachedInputTokens`. Stored history is not changed. Models have a minimum prompt length for caching, and shorter prompts are simply not cached.
+
+For Gemini, create cached content with Google's API and pass its name as `cachedContent: "cachedContents/abc123"` on a run. Gemini does not take a system prompt next to cached content, so put it in the cache. OpenAI caches long prompts on its own and has no setting, so `cache` and `cachedContent` are refused there. `capabilities.cache` says which providers take them.
+
 ## What they do and do not do
 
 They stream text and report usage. They have no tools, no file access and no approvals, so `capabilities.access` is empty and `cwd` and `access` are ignored. The picker hides those controls.

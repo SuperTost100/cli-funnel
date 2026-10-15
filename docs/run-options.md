@@ -24,6 +24,8 @@ result.structured; // { color: "rosso" }
 | `attachments` | image blocks in the stream-json message | `image` input items | refused | refused | image blocks | `image_url` parts | `inlineData` parts | `images` on the message |
 | `responseSchema` | `--json-schema` | `outputSchema` | asked for in the prompt | `--json-schema` | `output_config.format` | `response_format` | `responseJsonSchema` | `format` |
 | `maxOutputTokens` | ignored | ignored | ignored | ignored | `max_tokens` | `max_completion_tokens` | `maxOutputTokens` | `options.num_predict` |
+| `cache` | refused | refused | refused | refused | `cache_control` on the system prompt and newest turn | refused | no effect | refused |
+| `cachedContent` | refused | refused | refused | refused | refused | refused | `cachedContent` | refused |
 | `sampling.temperature` | refused | refused | refused | refused | `temperature` | `temperature` | `generationConfig.temperature` | not yet |
 | `sampling.topP` | refused | refused | refused | refused | `top_p` | `top_p` | `generationConfig.topP` | not yet |
 | `sampling.stop` | refused | refused | refused | refused | `stop_sequences` | `stop` | `generationConfig.stopSequences` | not yet |

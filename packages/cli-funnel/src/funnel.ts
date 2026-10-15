@@ -4,7 +4,7 @@ import { validateSelection } from "./selection.js";
 import { createRunFolder } from "./providers/base.js";
 import { PROVIDERS } from "./providers/index.js";
 import { memoryHistory } from "./providers/history.js";
-import { createApiProviders, type ApiKeys } from "./providers/api.js";
+import { createApiProviders, type ApiConfig, type ApiKeys } from "./providers/api.js";
 import { createOllamaProvider, type OllamaOptions } from "./providers/ollama/index.js";
 import { createOpenAICompatibleProviders, type OpenAICompatibleEndpoint } from "./providers/openai-compatible.js";
 import {
@@ -31,8 +31,10 @@ export interface FunnelOptions {
   allowUnlistedModels?: boolean;
   /** Replace or add providers. Used by tests and by custom providers. */
   providers?: Partial<Record<ProviderId, Provider>>;
-  /** API keys for the API providers. Falls back to ANTHROPIC_API_KEY, OPENAI_API_KEY and GEMINI_API_KEY. */
+  /** API keys for the API providers. Falls back to ANTHROPIC_API_KEY, OPENAI_API_KEY and GEMINI_API_KEY. `api` can set them too. */
   apiKeys?: ApiKeys;
+  /** Per-vendor settings for the API providers: key, base URL, extra headers and retries. A key here wins over `apiKeys`. */
+  api?: ApiConfig;
   /** Ollama server settings. Without them the provider uses OLLAMA_HOST or 127.0.0.1:11434, and reports itself not installed when no server answers. */
   ollama?: OllamaOptions;
   /** OpenAI-compatible servers. Each becomes a provider with id `openai-compatible:<id>`. */
@@ -70,7 +72,7 @@ const CACHE_TTL_MS = 60_000;
 export function createFunnel(options: FunnelOptions = {}) {
   const registry: Record<ProviderId, Provider> = {
     ...PROVIDERS,
-    ...(options.apiKeys ? createApiProviders(options.apiKeys) : {}),
+    ...(options.apiKeys || options.api ? createApiProviders(options.apiKeys, options.api) : {}),
     ...(options.ollama ? { ollama: createOllamaProvider(options.ollama) } : {}),
     ...createOpenAICompatibleProviders(options.openaiCompatible),
     ...options.providers,
@@ -126,6 +128,9 @@ export function createFunnel(options: FunnelOptions = {}) {
     }
     if (input.sampling && !p.capabilities.sampling) {
       throw new FunnelError(`${p.displayName} does not take sampling options.`, "unsupported");
+    }
+    if ((input.cache || input.cachedContent) && !p.capabilities.cache) {
+      throw new FunnelError(`${p.displayName} does not take prompt cache options.`, "unsupported");
     }
     if (input.attachments?.length && !p.capabilities.images) {
       throw new FunnelError(`${p.displayName} cannot take image attachments.`, "unsupported");
