@@ -205,6 +205,18 @@ describe("claude live sessions", () => {
     expect(f.sessions()).toMatchObject([{ provider: "claude", sessionId: a.sessionId, busy: false, steer: false }]);
   });
 
+  it("passes a long system prompt through a file and removes it after the first turn", async () => {
+    const f = make({ keepAlive: true });
+    const system = "x".repeat(10_000);
+    const a = await f.run(claude("one", { system }));
+    await f.run(claude("two", { sessionId: a.sessionId, system }));
+    expect(spawns()).toHaveLength(1);
+    const args = spawns()[0]!.args!;
+    const file = args[args.indexOf("--append-system-prompt-file") + 1]!;
+    expect(file).toMatch(/system-prompt\.txt$/);
+    expect(existsSync(file)).toBe(false);
+  });
+
   it("keeps the process when the consumer stops at done", async () => {
     const f = make({ keepAlive: true });
     let sessionId: string | undefined;
