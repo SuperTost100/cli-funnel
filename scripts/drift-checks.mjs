@@ -4,7 +4,7 @@ export const CHECKS = {
   claude: {
     bin: "claude",
     help: [
-      [["--help"], ["--output-format", "--input-format", "--include-partial-messages", "--permission-mode", "--permission-prompt-tool", "--model", "--effort", "--resume", "--verbose", "--tools", "--strict-mcp-config", "--setting-sources", "--json-schema", "--system-prompt", "--append-system-prompt"]],
+      [["--help"], ["--output-format", "--input-format", "--include-partial-messages", "--permission-mode", "--permission-prompt-tool", "--model", "--effort", "--resume", "--verbose", "--tools", "--strict-mcp-config", "--setting-sources", "--json-schema", "--system-prompt", "--append-system-prompt", "--system-prompt[-file]", "--append-system-prompt[-file]"]],
       [["auth", "--help"], ["login", "logout", "status"]],
     ],
   },
@@ -27,6 +27,6 @@ export const CHECKS = {
   },
   antigravity: {
     bin: "agy",
-    help: [[["--help"], ["--output-format", "--model", "--effort", "--mode", "--conversation", "--dangerously-skip-permissions", "--print", "--input-format", "--json-schema", "models"]]],
+    help: [[["--help"], ["--output-format", "--model", "--effort", "--mode", "--conversation", "--dangerously-skip-permissions", "--print", "--input-format", "--json-schema", "path to a schema file", "models"]]],
   },
 };

@@ -106,6 +106,58 @@ describe("claude process lifetime", () => {
     expect(await waitFor(() => existsSync(mark))).toBe(true);
   });
 
+  describe("long system prompts", () => {
+    const BIG = "x".repeat(200_000);
+    // Records every argument and, for the system prompt file flag, the file's size, its mode and its folder's mode.
+    const recorder = (log: string) =>
+      script(
+        `read line
+prev=""
+for a in "$@"; do
+  echo "\${#a}:$(printf %s "$a" | cut -c1-30)" >> "${log}.args"
+  if [ "$prev" = "--append-system-prompt-file" ] || [ "$prev" = "--system-prompt-file" ]; then
+    echo "$prev" >> "${log}.file"; echo "$a" >> "${log}.file"
+    wc -c < "$a" >> "${log}.file"; stat -c %a "$a" >> "${log}.file"; stat -c %a "$(dirname "$a")" >> "${log}.file"
+  fi
+  prev="$a"
+done
+echo '{"type":"result","subtype":"success","is_error":false,"result":"hi"}'
+cat >/dev/null`,
+      );
+
+    it("passes a 200 KB system prompt as a private file and removes it after the run", async () => {
+      const log = join(mkdtempSync(join(tmpdir(), "cf-claude-")), "log");
+      process.env.CLI_FUNNEL_CLAUDE_BIN = recorder(log);
+      for await (const _ of claudeProvider.run(input({ system: BIG }))) {
+        /* drain */
+      }
+      const [flag, path, size, fileMode, dirMode] = readFileSync(`${log}.file`, "utf8").trim().split("\n");
+      expect(flag).toBe("--append-system-prompt-file");
+      expect(Number(size)).toBe(BIG.length);
+      expect(fileMode).toBe("600");
+      expect(dirMode).toBe("700");
+      expect(existsSync(path!)).toBe(false);
+      const lengths = readFileSync(`${log}.args`, "utf8").trim().split("\n").map((l) => Number(l.split(":")[0]));
+      expect(Math.max(...lengths)).toBeLessThan(1000);
+    });
+
+    it("uses --system-prompt-file for none and keeps a short prompt inline", async () => {
+      const log = join(mkdtempSync(join(tmpdir(), "cf-claude-")), "log");
+      process.env.CLI_FUNNEL_CLAUDE_BIN = recorder(log);
+      for await (const _ of claudeProvider.run(input({ system: BIG, selection: { provider: "claude", model: "m", cwd: tmpdir(), access: "none" } }))) {
+        /* drain */
+      }
+      expect(readFileSync(`${log}.file`, "utf8").split("\n")[0]).toBe("--system-prompt-file");
+      const short = join(mkdtempSync(join(tmpdir(), "cf-claude-")), "log");
+      process.env.CLI_FUNNEL_CLAUDE_BIN = recorder(short);
+      for await (const _ of claudeProvider.run(input({ system: "Be terse." }))) {
+        /* drain */
+      }
+      expect(existsSync(`${short}.file`)).toBe(false);
+      expect(readFileSync(`${short}.args`, "utf8")).toContain("9:Be terse.");
+    });
+  });
+
   it("ends as cancelled when aborted while an approval is pending", async () => {
     process.env.CLI_FUNNEL_CLAUDE_BIN = script(
       `read line\necho '{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"},"tool_use_id":"t1"}}'\ncat >/dev/null`,

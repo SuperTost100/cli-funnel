@@ -1,5 +1,6 @@
 import { fromManifest, loadManifest, mergeModels } from "../../catalog/manifest.js";
 import { Channel } from "../../util/channel.js";
+import { needsArgFile, writeArgFile } from "../../util/argfile.js";
 import { exec, spawnStream } from "../../util/process.js";
 import {
   FunnelError,
@@ -30,20 +31,28 @@ export function toCliModel(selection: Selection, models: ModelInfo[] = []): { mo
 /** Linux refuses a single argument over 128 KiB. Longer prompts go on stdin. */
 export const MAX_ARG_PROMPT = 100_000;
 
+/** Windows limits the whole command line to 32,767 characters, so the prompt moves to stdin much sooner there. */
+export const MAX_ARG_PROMPT_WIN32 = 30_000;
+
+export function maxArgPrompt(platform: NodeJS.Platform = process.platform): number {
+  return platform === "win32" ? MAX_ARG_PROMPT_WIN32 : MAX_ARG_PROMPT;
+}
+
 /** The stdin line for a long prompt, or undefined when it fits in argv. The message shape is what agy 1.x decodes. */
-export function stdinPrompt(input: RunInput): string | undefined {
+export function stdinPrompt(input: RunInput, platform: NodeJS.Platform = process.platform): string | undefined {
   const prompt = composePrompt(input, { system: true, schema: false });
-  if (Buffer.byteLength(prompt) <= MAX_ARG_PROMPT) return undefined;
+  if (Buffer.byteLength(prompt) <= maxArgPrompt(platform)) return undefined;
   return `${JSON.stringify({ event: "user", message: { content: prompt } })}\n`;
 }
 
-export function buildArgs(input: RunInput, models: ModelInfo[] = []): string[] {
+/** `schemaFile` carries a long response schema (`--json-schema` takes a path). Without it the schema goes inline. */
+export function buildArgs(input: RunInput, models: ModelInfo[] = [], platform: NodeJS.Platform = process.platform, schemaFile?: string): string[] {
   const { selection } = input;
   const { model, effort } = toCliModel(selection, models);
   // An empty --print with stream-json input reads one turn per stdin line.
-  const print = stdinPrompt(input) ? ["--print=", "--input-format", "stream-json"] : ["--print=" + composePrompt(input, { system: true, schema: false })];
+  const print = stdinPrompt(input, platform) ? ["--print=", "--input-format", "stream-json"] : ["--print=" + composePrompt(input, { system: true, schema: false })];
   const args = [...print, "--output-format", "stream-json", "--model", model];
-  if (input.responseSchema) args.push("--json-schema", JSON.stringify(input.responseSchema.schema));
+  if (input.responseSchema) args.push("--json-schema", schemaFile ?? JSON.stringify(input.responseSchema.schema));
   if (effort) args.push("--effort", effort);
   if (selection.access === "accept-edits") args.push("--mode", "accept-edits");
   if (selection.access === "full") args.push("--dangerously-skip-permissions");
@@ -143,12 +152,21 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   if (!path) throw new FunnelError("agy is not installed.", "not-installed");
   const models = await loadManifestModels();
   const cwd = input.selection.access === "none" ? await noneWorkspace() : input.selection.cwd;
-  const stream = spawnStream(path, buildArgs(input, models), {
-    cwd,
-    env: input.env,
-    signal: input.signal,
-    input: stdinPrompt(input) ?? "",
-  });
+  // A long schema would count against the command-line limit, so it goes through a private temp file removed after the run.
+  const schema = input.responseSchema ? JSON.stringify(input.responseSchema.schema) : undefined;
+  const schemaFile = schema && needsArgFile(schema) ? await writeArgFile("schema.json", schema) : undefined;
+  let stream: ReturnType<typeof spawnStream>;
+  try {
+    stream = spawnStream(path, buildArgs(input, models, process.platform, schemaFile?.path), {
+      cwd,
+      env: input.env,
+      signal: input.signal,
+      input: stdinPrompt(input) ?? "",
+    });
+  } catch (err) {
+    await schemaFile?.remove();
+    throw err;
+  }
   const mapper = createMapper();
   try {
     for await (const line of stream.lines) {
@@ -157,6 +175,7 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   } finally {
     // Runs too when the caller stops reading early. The CLI must not keep working unattended.
     stream.kill();
+    await schemaFile?.remove();
   }
   const code = await stream.exited;
   if (mapper.finished) return;
