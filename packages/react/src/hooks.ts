@@ -282,6 +282,7 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
   const [error, setError] = useState<string>();
   const [session, setSession] = useState<{ id: string; provider: string; cwd?: string }>();
   // What the run was started with. Later changes to the picker must not relabel its answer.
+  const [queued, setQueued] = useState<number>();
   const [started, setStarted] = useState<{ provider: Selection["provider"]; model: string }>();
   const runId = useRef<string | undefined>(undefined);
   // The controller of the run that owns the state. A run that is no longer this one is stale and writes nothing.
@@ -298,6 +299,7 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
       setEvents([]);
       setApprovals([]);
       setError(undefined);
+      setQueued(undefined);
       setStarted({ provider: chosen.provider, model: chosen.model });
       setStatus("running");
       const turnId = ++turnCount.current;
@@ -319,6 +321,11 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
             runId.current = e.runId;
             continue;
           }
+          if (e.type === "queue.position") {
+            setQueued(e.ahead);
+            continue;
+          }
+          setQueued(undefined);
           setEvents((prev) => [...prev, e]);
           patch((t) => applyEvent(t, e));
           if (e.type === "text.delta") setText((t) => t + e.text);
@@ -334,6 +341,7 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
           end({ aborted: true });
           return;
         }
+        setQueued(undefined);
         setStatus((s) => (s === "error" ? s : "done"));
         end({ aborted: ctl.signal.aborted });
       } catch (e) {
@@ -342,6 +350,7 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
           return;
         }
         const aborted = ctl.signal.aborted;
+        setQueued(undefined);
         if (aborted) setStatus("done");
         else {
           setError(messageOf(e));
@@ -418,6 +427,7 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
     abort.current?.abort();
     abort.current = undefined;
     setApprovals([]);
+    setQueued(undefined);
     setStatus((s) => (s === "running" ? "done" : s));
     setSession(undefined);
     if (keepTranscript) setTurns([]);
@@ -441,6 +451,8 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
     approvals,
     status,
     error,
+    /** While the run waits for a server slot: how many runs wait ahead of it. Undefined once it starts. */
+    queued,
     /** The conversation `send` will continue, or undefined when the next run starts fresh. */
     session,
     /** Same as `session?.id`. */

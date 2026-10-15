@@ -8,6 +8,7 @@ import { memoryHistory } from "./providers/history.js";
 import { createApiProviders, type ApiConfig, type ApiKeys } from "./providers/api.js";
 import { createOllamaProvider, type OllamaOptions } from "./providers/ollama/index.js";
 import { createOpenAICompatibleProviders, type OpenAICompatibleEndpoint } from "./providers/openai-compatible.js";
+import { RunQueue, waitForSlot, type RunLimits } from "./queue.js";
 import {
   FunnelError,
   type AuthStatus,
@@ -25,7 +26,8 @@ import {
   type UpdateResult,
 } from "./types.js";
 
-export interface FunnelOptions {
+/** `maxConcurrentRuns`, `maxQueuedRuns` and `queueTimeoutMs` limit the runs `stream()` and `run()` start at once. */
+export interface FunnelOptions extends RunLimits {
   /** URL of a models.json to refresh the bundled model list from. Optional. */
   manifestUrl?: string;
   /** Skip checking the selected model against the catalog. Use for models released after your manifest. */
@@ -118,6 +120,7 @@ export function createFunnel(options: FunnelOptions = {}) {
   // One store per funnel, so two funnels in a process never read each other's sessions.
   const history = options.history ?? memoryHistory();
   const pool = options.sessions?.keepAlive ? new SessionPool(options.sessions) : undefined;
+  const queue = RunQueue.from(options);
   const provider = (id: ProviderId): Provider => {
     const p = registry[id];
     if (!p) throw new FunnelError(`Unknown provider "${id}".`, "invalid-selection");
@@ -178,11 +181,17 @@ export function createFunnel(options: FunnelOptions = {}) {
   }
 
   function stream(input: RunInput): RunStream {
-    const source = (async function* () {
+    const source = (async function* (): AsyncGenerator<FunnelEvent> {
       const p = await prepare(input);
       const runInput = input.history ? input : { ...input, history };
       const run = (i: RunInput) => (pool ? pool.run(p, i) : p.run(i));
-      yield* input.timeoutMs ? withDeadline(run, runInput, input.timeoutMs) : run(runInput);
+      const release = queue ? yield* waitForSlot(queue, p.id, input.signal) : () => undefined;
+      if (!release) return yield { type: "done", text: "", finishReason: "cancelled" };
+      try {
+        yield* input.timeoutMs ? withDeadline(run, runInput, input.timeoutMs) : run(runInput);
+      } finally {
+        release();
+      }
     })();
     const events = options.onEvent ? observeRun(options.onEvent, input, source) : source;
     // Fold events as they pass, so `.result` works next to `for await` without keeping them.

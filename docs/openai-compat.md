@@ -52,6 +52,8 @@ The folder is checked against the server's `fsRoots` on every request, the defau
 
 `x_funnel.runId` names the run. A streaming response has it in the first chunk. `POST /runs/<runId>/cancel` stops the run, as described in [Run options](run-options.md#cancel-a-run).
 
+When the server limits concurrent runs, a request waits for a free slot before the answer starts. If it had to wait, the response carries `x_funnel.queued: { waitedMs }`. A full queue gets 429 with `retry-after`. See [Concurrency limits and the queue](run-options.md#concurrency-limits-and-the-queue).
+
 ## Limits
 
 The OpenAI wire format has no approve button. Requests to this endpoint therefore deny anything that needs approval, and `supervised` behaves as deny-by-default. Use `accept-edits`, `auto` or `full` here, or use the `/run` route and `useRun` when a human should approve actions.

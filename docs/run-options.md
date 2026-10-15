@@ -127,3 +127,35 @@ When the deadline passes, cli-funnel aborts the provider and ends the run withou
 | `cli-funnel serve` | `--timeout <seconds>`, sets `maxRunMs` | 1800 (30 minutes). `0` turns it off. |
 
 `cli-funnel run` exits with code 1 when it hits the deadline.
+
+## Concurrency limits and the queue
+
+Every run starts a CLI process or a vendor request. Ten browser tabs mean ten CLIs on one subscription's rate limits. `maxConcurrentRuns` caps that, on `createFunnel` and on `createHandler`:
+
+```ts
+const funnel = createFunnel({ maxConcurrentRuns: 2 });
+
+const handler = createHandler(funnel, {
+  maxConcurrentRuns: { total: 4, perProvider: { claude: 2, codex: 1 } },
+  maxQueuedRuns: 20,
+  queueTimeoutMs: 120_000,
+});
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `maxConcurrentRuns` | A number caps all runs together. `{ total, perProvider }` adds a cap per provider, as one number for every provider or one per provider id. | no limit |
+| `maxQueuedRuns` | Runs that may wait. One more is refused with code `busy`. | no limit |
+| `queueTimeoutMs` | How long a run may wait before it fails with code `busy`. | no limit |
+
+Runs over the limit wait in a first-in, first-out queue. A waiting run that cannot start because its own provider is full does not hold up runs for other providers. `queueTimeoutMs` and `timeoutMs` are separate: the deadline starts when the run leaves the queue.
+
+While a run waits, its stream carries `{ type: "queue.position", ahead }`, where `ahead` is the number of runs waiting before it. A new event comes each time that number changes. A run cancelled while it waits ends with `done` and `finishReason: "cancelled"`, and it never starts the provider.
+
+Over HTTP:
+
+- `/run` answers 429 with `retry-after` when the queue is full. A run that waits past `queueTimeoutMs` gets an `error` event with code `busy`. `POST /runs/<runId>/cancel` works on a waiting run too.
+- `/v1/chat/completions` holds the request until a slot is free, then answers as usual. A request that had to wait carries `x_funnel.queued: { waitedMs }`. A full queue, or a wait past `queueTimeoutMs`, gets 429 with `retry-after`.
+- `useRun().queued` is the number of runs ahead while the run waits, and undefined once it starts.
+
+`createFunnel` and `createHandler` keep separate queues. Set the limit on one of them, usually the handler.

@@ -166,6 +166,21 @@ describe("useRun", () => {
     expect(signal.aborted).toBe(true);
   });
 
+  it("shows the queue position until the run starts", async () => {
+    const a = stream<RunEvent>();
+    const client = fakeClient({ run: vi.fn(() => a.gen) });
+    const { result } = renderHook(() => useRun(client));
+    act(() => void result.current.send("one", SEL));
+    act(() => {
+      a.push({ type: "run", runId: "A" });
+      a.push({ type: "queue.position", ahead: 1 });
+    });
+    await waitFor(() => expect(result.current.queued).toBe(1));
+    act(() => a.push({ type: "session", sessionId: "s" }));
+    await waitFor(() => expect(result.current.queued).toBeUndefined());
+    expect(result.current.events.map((e) => e.type)).toEqual(["session"]);
+  });
+
   it("labels the result with the selection from send time and keeps done.text, structured and denied actions", async () => {
     const a = stream<RunEvent>();
     const client = fakeClient({ run: vi.fn(() => a.gen) });
