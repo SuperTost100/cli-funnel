@@ -59,7 +59,15 @@ import "cli-funnel-react/styles.css";
 
 It shows provider, model, reasoning, context window, fast mode, project folder and access level. Only controls the chosen provider supports appear. Switching provider or model resets dependent fields to valid values. `onChange` receives a complete `Selection`, or `undefined` while something is missing.
 
-`locked` fields are hidden and always applied. That is how you hardcode part of a selection.
+Providers without access levels (Ollama, API providers, OpenAI-compatible servers) have no folder and no machine access. The picker hides those two controls and a selection is complete once provider and model are set. Its `access` is `"none"` and its `cwd` is empty.
+
+`locked` fields are hidden and always applied. That is how you hardcode part of a selection. If the provider cannot honor a locked field, for example `access: "supervised"` on a provider that lacks it, the picker shows why and `onChange` stays `undefined`. `useSelection` returns the same text as `problem`.
+
+If the model list fails to load, the picker shows the error with a Retry button. `useSelection` returns it as `modelsError`, and `refresh()` loads the models again.
+
+## Next.js
+
+The package starts with a `"use client"` directive, so a Server Component can import it without a hooks error. Props must still be serializable, and `client` holds functions. Create the client and render the components inside a file that starts with `"use client"`, as `examples/next-app` does.
 
 Styles use CSS variables prefixed `--cf-` and follow `prefers-color-scheme`. Override them on any parent element.
 
@@ -84,7 +92,9 @@ const run = useRun(client);
 {run.approvals.map((r) => <ApprovalPrompt key={r.id} request={r} onDecide={run.approve} />)}
 ```
 
-`useRun` keeps the session id between calls, so the next `send` continues the conversation. `newConversation()` clears it.
+`useRun` keeps the session id between calls, so the next `send` continues the conversation. `newConversation()` ends the run in flight and clears the session. Calling `send` during a run cancels that run first. Leaving the page cancels it too.
+
+`run.result` has `text`, `provider`, `model`, `sessionId`, `usage`, `finishReason`, `toolCalls`, `deniedActions` and `structured`. `provider` and `model` are the ones you passed to `send`, even if the picker has changed since. If `approve` fails, the prompt stays and `run.error` has the message, so the user can press the button again.
 
 ## Hooks only
 

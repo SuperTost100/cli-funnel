@@ -15,7 +15,10 @@ export default function Page() {
   return (
     <main style={{ maxWidth: 760, margin: "40px auto", display: "grid", gap: 20 }}>
       <FunnelPicker client={client} defaults={{ access: "supervised" }} onChange={setSelection} />
-      <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={4} />
+      <label style={{ display: "grid", gap: 6 }}>
+        Prompt
+        <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={4} />
+      </label>
       <button disabled={!selection || run.status === "running"} onClick={() => selection && run.send(prompt, selection)}>
         Run
       </button>

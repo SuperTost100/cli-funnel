@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { AccessLevel, DirListing, FunnelClient, Selection } from "cli-funnel/client";
 import { useSelection } from "./hooks.js";
 
@@ -18,7 +18,7 @@ export interface FunnelPickerProps {
   defaults?: Partial<Selection>;
   /** Fixed values. These fields are hidden and always applied. Use it to hardcode a choice. */
   locked?: Partial<Selection>;
-  /** Called whenever the selection changes. `undefined` until provider, model, folder and access are all set. */
+  /** Called whenever the selection changes. `undefined` until provider and model are set, plus folder and access for providers that have them. */
   onChange?: (selection: Selection | undefined) => void;
   className?: string;
 }
@@ -74,6 +74,15 @@ export function FunnelPickerView({ client, state: s, locked, className }: { clie
         </label>
       )}
 
+      {s.modelsError && (
+        <div className="cf-row cf-error" role="alert">
+          <small>{s.modelsError}</small>
+          <button type="button" onClick={() => void s.refresh()}>
+            Retry
+          </button>
+        </div>
+      )}
+
       {cap?.effort && model && model.efforts.length > 0 && show("effort") && (
         <label className="cf-field">
           <span>Reasoning</span>
@@ -108,9 +117,9 @@ export function FunnelPickerView({ client, state: s, locked, className }: { clie
         </label>
       )}
 
-      {show("cwd") && <FolderField client={client} value={selection.cwd} onChange={(cwd) => s.set({ cwd })} labelId={id} />}
+      {cap && cap.access.length > 0 && show("cwd") && <FolderField client={client} value={selection.cwd} onChange={(cwd) => s.set({ cwd })} labelId={id} />}
 
-      {cap && show("access") && (
+      {cap && cap.access.length > 0 && show("access") && (
         <fieldset className="cf-field cf-access">
           <legend>Machine access</legend>
           {cap.access.map((a) => (
@@ -122,6 +131,12 @@ export function FunnelPickerView({ client, state: s, locked, className }: { clie
           ))}
         </fieldset>
       )}
+
+      {s.problem && (
+        <small className="cf-error" role="alert">
+          {s.problem}
+        </small>
+      )}
     </div>
   );
 }
@@ -130,15 +145,25 @@ function FolderField({ client, value, onChange, labelId }: { client: FunnelClien
   const [open, setOpen] = useState(false);
   const [listing, setListing] = useState<DirListing>();
   const [err, setErr] = useState<string>();
+  const latest = useRef<AbortController | undefined>(undefined);
+  useEffect(() => () => latest.current?.abort(), []);
 
-  const load = (path?: string) =>
-    client.listDirs(path).then(
+  // Two quick clicks can resolve out of order. Only the newest request may change the list.
+  const load = (path?: string) => {
+    latest.current?.abort();
+    const ctl = new AbortController();
+    latest.current = ctl;
+    return client.listDirs(path, ctl.signal).then(
       (l) => {
+        if (ctl.signal.aborted) return;
         setListing(l);
         setErr(undefined);
       },
-      (e) => setErr(e instanceof Error ? e.message : String(e)),
+      (e) => {
+        if (!ctl.signal.aborted) setErr(e instanceof Error ? e.message : String(e));
+      },
     );
+  };
 
   return (
     <div className="cf-field cf-folder">
@@ -156,7 +181,7 @@ function FolderField({ client, value, onChange, labelId }: { client: FunnelClien
         </button>
       </div>
       {open && (
-        <div className="cf-browser" role="listbox" aria-label="Folders">
+        <div className="cf-browser" role="group" aria-label="Folders">
           {err && <small className="cf-error">{err}</small>}
           {listing && (
             <>
