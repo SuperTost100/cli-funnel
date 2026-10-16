@@ -158,6 +158,26 @@ cat >/dev/null`,
     });
   });
 
+  it("sends a 200 KB response schema in the initialize request instead of argv", async () => {
+    const log = join(mkdtempSync(join(tmpdir(), "cf-claude-")), "log");
+    process.env.CLI_FUNNEL_CLAUDE_BIN = script(
+      `for a in "$@"; do echo "\${#a}" >> "${log}.args"; done
+read first; printf '%s\\n' "$first" > "${log}.stdin"
+read second; printf '%s\\n' "$second" >> "${log}.stdin"
+echo '{"type":"result","subtype":"success","is_error":false,"result":"{}"}'
+cat >/dev/null`,
+    );
+    const schema = { type: "object", description: "x".repeat(200_000), properties: { city: { type: "string" } } };
+    for await (const _ of claudeProvider.run(input({ responseSchema: { schema } }))) {
+      /* drain */
+    }
+    const lengths = readFileSync(`${log}.args`, "utf8").trim().split("\n").map(Number);
+    expect(Math.max(...lengths)).toBeLessThan(1000);
+    const [init, user] = readFileSync(`${log}.stdin`, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(init).toMatchObject({ type: "control_request", request: { subtype: "initialize", jsonSchema: schema } });
+    expect(user).toMatchObject({ type: "user" });
+  });
+
   it("ends as cancelled when aborted while an approval is pending", async () => {
     process.env.CLI_FUNNEL_CLAUDE_BIN = script(
       `read line\necho '{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"},"tool_use_id":"t1"}}'\ncat >/dev/null`,

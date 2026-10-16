@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFunnel } from "../src/funnel.js";
+import { createHandler } from "../src/server/handler.js";
 import { collect, createRunFolder } from "../src/providers/base.js";
 import { validateSelection } from "../src/selection.js";
 import { FunnelError, type FunnelEvent, type Installation, type ModelInfo, type Provider, type RunInput } from "../src/types.js";
@@ -270,5 +271,24 @@ describe("selection without a machine (#45)", () => {
   it("still asks for onApproval when supervised on a provider with access levels", async () => {
     const funnel = createFunnel({ providers: { claude: fakeProvider({ capabilities: { ...fakeProvider().capabilities, access: ["supervised"] } }) } });
     await expect(funnel.run(input({ selection: { ...selection, access: "supervised" } }))).rejects.toMatchObject({ code: "invalid-selection" });
+  });
+});
+
+describe("logout that keeps the account", () => {
+  const keeps = () => createFunnel({ providers: { claude: fakeProvider({ authStatus: async () => ({ loggedIn: true }) }) } });
+
+  it("rejects with cli-failed when the CLI still reports a signed-in account", async () => {
+    await expect(keeps().logout("claude")).rejects.toMatchObject({ code: "cli-failed", message: expect.stringContaining("still reports a signed-in account") });
+  });
+
+  it("answers the HTTP route with an error instead of ok", async () => {
+    const res = await createHandler(keeps())(new Request("http://x/providers/claude/logout", { method: "POST" }));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: "cli-failed" });
+  });
+
+  it("resolves when the account is gone", async () => {
+    const funnel = createFunnel({ providers: { claude: fakeProvider({ authStatus: async () => ({ loggedIn: false }) }) } });
+    await expect(funnel.logout("claude")).resolves.toBeUndefined();
   });
 });

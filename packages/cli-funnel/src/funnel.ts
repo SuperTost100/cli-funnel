@@ -274,7 +274,12 @@ export function createFunnel(options: FunnelOptions = {}) {
     refresh,
     authStatus: async (id: ProviderId): Promise<AuthStatus> => provider(id).authStatus(),
     login: (id: ProviderId, opts?: { signal?: AbortSignal; device?: boolean }): LoginSession => provider(id).login(opts),
-    logout: async (id: ProviderId): Promise<void> => provider(id).logout(),
+    async logout(id: ProviderId): Promise<void> {
+      const p = provider(id);
+      await p.logout();
+      // A CLI can exit 0 and still keep the account, so ask it again before reporting success.
+      if ((await p.authStatus()).loggedIn) throw new FunnelError(`${p.displayName} still reports a signed-in account after logout.`, "cli-failed");
+    },
     async update(id: ProviderId): Promise<UpdateResult> {
       try {
         return await provider(id).update();
