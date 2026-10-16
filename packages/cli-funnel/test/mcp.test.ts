@@ -5,7 +5,7 @@ import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { createFunnel } from "../src/funnel.js";
 import { createMcpServer, serveStdio } from "../src/mcp/server.js";
-import type { AccessLevel, FunnelEvent, Provider } from "../src/types.js";
+import type { AccessLevel, FunnelEvent, Provider, ProviderId } from "../src/types.js";
 
 const seen: { access?: AccessLevel; cwd?: string; system?: string; schema?: boolean }[] = [];
 
@@ -43,7 +43,21 @@ const fake: Provider = {
   },
 };
 
-const funnel = createFunnel({ providers: { claude: fake } });
+// Every built-in provider is replaced. Otherwise list_providers probes the real CLIs and Ollama: `agent status` and the
+// `agy` auth check take 1 to 2 s each, which crosses vitest's 5 s limit when the suite runs in parallel.
+const empty = (id: ProviderId): Provider => ({ ...fake, id, models: async () => [] });
+const funnel = createFunnel({
+  providers: {
+    claude: fake,
+    codex: empty("codex"),
+    agent: empty("agent"),
+    antigravity: empty("antigravity"),
+    "anthropic-api": empty("anthropic-api"),
+    "openai-api": empty("openai-api"),
+    "gemini-api": empty("gemini-api"),
+    ollama: empty("ollama"),
+  },
+});
 const root = mkdtempSync(join(tmpdir(), "cf-mcp-"));
 const project = join(root, "project");
 mkdirSync(project);
