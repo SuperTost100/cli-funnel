@@ -1,0 +1,6 @@
+# The deploy image builds from the repo root. Keep local installs, builds and secrets out of the context.
+**/node_modules
+**/dist
+.git
+.env*
+.claude

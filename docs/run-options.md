@@ -285,6 +285,8 @@ Over HTTP:
 
 `createFunnel` and `createHandler` keep separate queues. Set the limit on one of them, usually the handler.
 
+`cli-funnel serve` sets the handler's limits with `--max-concurrent`, `--max-queued` and `--queue-timeout` (seconds). The per-provider form goes in the config file. See [Run the server](serve.md#limit-concurrent-runs).
+
 ## Rate limits and quotas
 
 When a provider hits a limit or reports one, the stream carries a `limit` event:

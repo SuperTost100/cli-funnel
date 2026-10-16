@@ -1,11 +1,22 @@
+# Build from the repo root, as compose.yaml does:
+#   docker build -f deploy/Dockerfile -t cli-funnel .
+
+FROM node:22-slim AS build
+WORKDIR /src
+COPY . .
+# Only the cli-funnel package and the root's build tools. The other workspaces are not needed.
+RUN npm ci -w cli-funnel --include-workspace-root \
+ && npm run build -w cli-funnel \
+ && mkdir /out \
+ && npm pack -w cli-funnel --pack-destination /out
+
 FROM node:22-slim
 
-# Pin the versions you have tested, for example --build-arg CLI_FUNNEL_VERSION=0.5.0.
-ARG CLI_FUNNEL_VERSION=latest
 # The CLIs cli-funnel drives. Drop the ones you do not use.
 ARG CLIS="@anthropic-ai/claude-code @openai/codex"
 
-RUN npm install -g "cli-funnel@${CLI_FUNNEL_VERSION}" ${CLIS}
+# Installs the package built above, so the image matches this checkout, not the version on npm.
+RUN --mount=type=bind,from=build,source=/out,target=/out npm install -g /out/cli-funnel-*.tgz ${CLIS}
 
 USER node
 WORKDIR /workspace

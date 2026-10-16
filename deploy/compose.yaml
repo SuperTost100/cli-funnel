@@ -5,7 +5,10 @@ name: cli-funnel
 
 services:
   funnel:
-    build: .
+    # The repo root is the build context, so the image holds this checkout's cli-funnel.
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
     restart: unless-stopped
     environment:
       # serve refuses a non-loopback address without a token. Compose stops here when it is missing.
