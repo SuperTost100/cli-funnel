@@ -193,6 +193,24 @@ describe("useRun", () => {
     expect(result.current.turns[0]?.limit).toEqual(result.current.result.limit);
   });
 
+  it("parses a JSON answer into result.structured and explains a text answer in result.structuredError", async () => {
+    const answer = async (text: string) => {
+      const a = stream<RunEvent>();
+      const { result } = renderHook(() => useRun(fakeClient({ run: vi.fn(() => a.gen) })));
+      act(() => void result.current.send("one", SEL, { responseSchema: { schema: { type: "object" } } }));
+      act(() => {
+        a.push({ type: "done", text, finishReason: "stop" });
+        a.end();
+      });
+      await waitFor(() => expect(result.current.status).toBe("done"));
+      return result.current.result;
+    };
+    expect(await answer('{"a":1}')).toMatchObject({ structured: { a: 1 }, structuredError: undefined });
+    const bad = await answer("not json");
+    expect(bad.structured).toBeUndefined();
+    expect(bad.structuredError).toMatch(/not JSON/);
+  });
+
   it("labels the result with the selection from send time and keeps done.text, structured and denied actions", async () => {
     const a = stream<RunEvent>();
     const client = fakeClient({ run: vi.fn(() => a.gen) });

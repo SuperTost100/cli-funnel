@@ -226,3 +226,27 @@ describe.skipIf(process.env.CLI_FUNNEL_LIVE !== "1")("antigravity live", () => {
     expect(r.text.length).toBeGreaterThan(0);
   }, 120_000);
 });
+
+describe.skipIf(process.platform === "win32")("antigravity default effort", () => {
+  afterEach(() => {
+    delete process.env.CLI_FUNNEL_AGY_BIN;
+  });
+
+  it("takes the default effort from the listed models, not only the bundled manifest", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cf-agy-"));
+    const bin = join(dir, "agy");
+    const log = join(dir, "args");
+    writeFileSync(
+      bin,
+      `#!/bin/sh\nif [ "$1" = "models" ]; then printf 'new-model-low\\tNew (Low)\\nnew-model-high\\tNew (High)\\n'; exit 0; fi\necho "$@" > ${log}\necho '{"event":"result","result":{"status":"SUCCESS","response":"ok"}}'\n`,
+    );
+    chmodSync(bin, 0o755);
+    process.env.CLI_FUNNEL_AGY_BIN = bin;
+    expect((await antigravityProvider.models()).find((m) => m.id === "new-model")?.defaultEffort).toBe("high");
+    const run: RunInput = { selection: { provider: "antigravity", model: "new-model", cwd: dir, access: "full" }, prompt: "hi" };
+    for await (const _ of antigravityProvider.run(run)) {
+      /* drain */
+    }
+    expect(readFileSync(log, "utf8")).toContain("--effort high");
+  });
+});

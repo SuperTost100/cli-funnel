@@ -5,6 +5,7 @@ import { FunnelError, type AuthStatus, type FunnelEvent, type Installation, type
 import { runWithHistory } from "../history.js";
 import { newCallId, ollamaCalls, ollamaMessages, ollamaTools, type Msg } from "../wire.js";
 import { mapChatLine, mapPullLine, normalizeBaseUrl, parseTags, thinkValue } from "./parser.js";
+import { joinUrl } from "../../util/url.js";
 
 export interface OllamaOptions {
   /** Server URL. Defaults to `OLLAMA_HOST`, then `http://127.0.0.1:11434`. */
@@ -68,7 +69,7 @@ export function createOllamaProvider(options: OllamaOptions = {}): Provider {
     ...(options.apiKey ? { authorization: `Bearer ${options.apiKey}` } : {}),
     ...(json ? { "content-type": "application/json" } : {}),
   });
-  const get = (path: string, timeoutMs = PROBE_MS * 5) => fetch(`${base()}${path}`, { headers: headers(), signal: AbortSignal.timeout(timeoutMs) });
+  const get = (path: string, timeoutMs = PROBE_MS * 5) => fetch(joinUrl(base(), path), { headers: headers(), signal: AbortSignal.timeout(timeoutMs) });
   const notRunning = () => `Ollama is not running at ${base()}. Start it with \`ollama serve\`, or set OLLAMA_HOST.`;
 
   async function detect(): Promise<Installation> {
@@ -104,7 +105,7 @@ export function createOllamaProvider(options: OllamaOptions = {}): Provider {
     // The first line that was not JSON. A proxy error page looks like this, and it is what the user needs to see.
     let raw: string | undefined;
     try {
-      const res = await fetch(`${base()}/api/chat`, { method: "POST", signal: input.signal, headers: headers(true), body: JSON.stringify(chatBody(input, messages, options.keepAlive)) });
+      const res = await fetch(joinUrl(base(), "/api/chat"), { method: "POST", signal: input.signal, headers: headers(true), body: JSON.stringify(chatBody(input, messages, options.keepAlive)) });
       if (!res.ok) return yield { type: "error", message: `Ollama ${res.status}: ${await errorText(res)}`, code: "cli-failed" };
       for await (const line of readNDJSON(res)) {
         if (line && typeof line === "object" && "__raw" in line) {
@@ -131,7 +132,7 @@ export function createOllamaProvider(options: OllamaOptions = {}): Provider {
 
   async function* pullModel(name: string, opts: { signal?: AbortSignal } = {}): AsyncGenerator<PullEvent> {
     try {
-      const res = await fetch(`${base()}/api/pull`, { method: "POST", signal: opts.signal, headers: headers(true), body: JSON.stringify({ model: name, stream: true }) });
+      const res = await fetch(joinUrl(base(), "/api/pull"), { method: "POST", signal: opts.signal, headers: headers(true), body: JSON.stringify({ model: name, stream: true }) });
       if (!res.ok) return yield { type: "error", message: `Ollama ${res.status}: ${await errorText(res)}` };
       for await (const line of readNDJSON(res)) {
         const e = mapPullLine(line);
@@ -147,7 +148,7 @@ export function createOllamaProvider(options: OllamaOptions = {}): Provider {
   }
 
   async function deleteModel(name: string): Promise<void> {
-    const res = await fetch(`${base()}/api/delete`, { method: "DELETE", headers: headers(true), body: JSON.stringify({ model: name }) }).catch(() => undefined);
+    const res = await fetch(joinUrl(base(), "/api/delete"), { method: "DELETE", headers: headers(true), body: JSON.stringify({ model: name }) }).catch(() => undefined);
     if (!res) throw new FunnelError(notRunning(), "not-installed");
     if (res.status === 404) throw new FunnelError(`${name} is not on the Ollama server.`, "invalid-selection");
     if (!res.ok) throw new FunnelError(`Ollama ${res.status}: ${await errorText(res)}`, "cli-failed");

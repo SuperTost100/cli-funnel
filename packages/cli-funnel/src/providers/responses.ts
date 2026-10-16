@@ -3,6 +3,7 @@ import { readSSE } from "../util/sse.js";
 import { fetchRetrying, mergeHeaders, type RetryOptions } from "./http.js";
 import { parseHttpLimit } from "./limits.js";
 import type { ContentPart, FinishReason, FunnelEvent, Message, RunInput, ToolChoice, ToolDefinition, Usage } from "../types.js";
+import { joinUrl } from "../util/url.js";
 
 /**
  * The OpenAI Responses API: `POST /responses` with streaming events. Used by `openai-api` for models that only it
@@ -157,7 +158,7 @@ export async function* streamResponses(opts: ResponsesOptions, input: RunInput):
   let res: Response;
   try {
     res = yield* fetchRetrying(
-      `${opts.baseUrl}/responses`,
+      joinUrl(opts.baseUrl, "/responses"),
       {
         method: "POST",
         signal: input.signal,

@@ -38,7 +38,7 @@ const funnel = createFunnel({
 | Field | Meaning |
 |---|---|
 | `key` | The API key. Falls back to `apiKeys`, then the environment variable. |
-| `baseUrl` | Where requests go. Written the way the vendor SDK takes it, and cli-funnel adds the path after it. |
+| `baseUrl` | Where requests go. Written the way the vendor SDK takes it, and cli-funnel adds the path after it. A query string, such as an Azure `api-version`, stays at the end. |
 | `headers` | Sent with every request, including model lists, after the default headers. A name that matches a default in any letter case replaces it. |
 | `retries` | Extra attempts after a 429 or 5xx. Default 2. `0` turns retries off. |
 | `retryDelayMs` | First wait before a retry. Default 500, doubled each time. |
