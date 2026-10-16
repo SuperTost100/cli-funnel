@@ -54,6 +54,14 @@ The folder is checked against the server's `fsRoots` on every request, the defau
 
 When the server limits concurrent runs, a request waits for a free slot before the answer starts. If it had to wait, the response carries `x_funnel.queued: { waitedMs }`. A full queue gets 429 with `retry-after`. See [Concurrency limits and the queue](run-options.md#concurrency-limits-and-the-queue).
 
+`x_funnel.providerOptions` takes the same object as `providerOptions` on a run. See [Run options](run-options.md#provider-options) for what each CLI accepts at each access level:
+
+```json
+{ "x_funnel": { "access": "accept-edits", "providerOptions": { "claude": { "addDirs": ["/path/shared"], "maxBudgetUsd": 1 } } } }
+```
+
+Every `addDirs` path must sit inside the server's allowed roots, like `x_funnel.cwd`, or the request gets 403. An option the access level does not allow fails with code `invalid-selection`: a 400 without `stream`, an error event in the stream with it.
+
 ## Limits
 
 The OpenAI wire format has no approve button. Requests to this endpoint therefore deny anything that needs approval, and `supervised` behaves as deny-by-default. Use `accept-edits`, `auto` or `full` here, or use the `/run` route and `useRun` when a human should approve actions.

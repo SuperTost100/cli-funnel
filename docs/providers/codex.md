@@ -56,6 +56,20 @@ Plugin and feature MCP servers are not overridden by name. Codex rejects the who
 
 `system` goes to `developerInstructions` on `thread/start`. Images go as `image` input items with a `data:` URL. `responseSchema` goes to `outputSchema` on `turn/start`, and the final message is the JSON. All three were verified live.
 
+## Provider options
+
+`providerOptions.codex` sets app-server params, not flags. `scripts/check-drift.mjs` reads them from `codex app-server generate-json-schema`.
+
+| Option | App-server param | Access levels |
+| --- | --- | --- |
+| `ephemeral: boolean` | `ephemeral` on `thread/start`. Refused with `sessionId`, since `thread/resume` has no such param | all |
+| `webSearch: "disabled" \| "cached" \| "indexed" \| "live"` | config `web_search` | `"disabled"` at all levels, `"cached"` and `"indexed"` from `supervised` up, `"live"` at `auto` and `full` only |
+| `approvalPolicy: "untrusted" \| "on-request" \| "never"` | `approvalPolicy`, in place of the level's own | see below |
+
+`approvalPolicy` may ask more often than the access level, never less. From most to fewest questions the order is `untrusted`, `on-request`, `never`. `none`, `supervised` and `accept-edits` use `untrusted`, so they accept only `untrusted`. `auto` uses `on-request` and also accepts `untrusted`. `full` accepts all three. The granular policy object is refused. At `none` every approval is still answered `deny`, whatever the policy.
+
+All three options were run live on 0.160 at `auto`.
+
 ## Models, effort and fast
 
 `models()` runs `codex debug models` and keeps entries whose `visibility` is `list`. `id` is the slug, `name` is `display_name`, efforts come from `supported_reasoning_levels`, and `defaultEffort` from `default_reasoning_level`. If the command fails, the bundled `data/models/codex.json` is used. Effort values include `low`, `medium`, `high`, `xhigh`, and on newer models `max` and `ultra`.

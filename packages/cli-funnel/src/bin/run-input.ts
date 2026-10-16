@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import type { Attachment, FunnelEvent, ResponseSchema, RunResult } from "../types.js";
+import type { Attachment, FunnelEvent, ProviderId, ProviderOptions, ResponseSchema, RunResult } from "../types.js";
 
 /** A problem with what the user typed. The CLI prints it and exits with 2. */
 export class UsageError extends Error {}
@@ -65,6 +65,28 @@ export async function loadSchema(path?: string): Promise<ResponseSchema | undefi
   }
   if (!schema || typeof schema !== "object" || Array.isArray(schema)) throw new UsageError(`--schema ${path} must hold a JSON Schema object.`);
   return { schema: schema as Record<string, unknown> };
+}
+
+const jsonOrText = (raw: string): unknown => {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+};
+
+/** `--opt key=value`, repeatable, as the `providerOptions` entry for `id`. JSON values are parsed. A repeated key collects a list. */
+export function parseOpts(id: ProviderId, pairs: string[] = []): ProviderOptions | undefined {
+  if (!pairs.length) return undefined;
+  const opts = new Map<string, unknown>();
+  for (const pair of pairs) {
+    const eq = pair.indexOf("=");
+    if (eq < 1) throw new UsageError(`--opt takes key=value, got "${pair}".`);
+    const key = pair.slice(0, eq);
+    const value = jsonOrText(pair.slice(eq + 1));
+    opts.set(key, opts.has(key) ? [opts.get(key), value].flat() : value);
+  }
+  return { [id]: Object.fromEntries(opts) };
 }
 
 export interface RenderOptions {

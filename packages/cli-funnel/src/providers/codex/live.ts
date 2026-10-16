@@ -4,7 +4,7 @@ import { spawnStream } from "../../util/process.js";
 import { findBinary } from "../base.js";
 import { toApprovalRequest, toReply, type ServerRequest } from "./approvals.js";
 import { Translator } from "./events.js";
-import { BINARY, INITIALIZE_PARAMS, decideApproval, threadSettings, turnParams } from "./index.js";
+import { BINARY, INITIALIZE_PARAMS, decideApproval, threadSettings, threadStartParams, turnParams } from "./index.js";
 import { RpcClient } from "./rpc.js";
 
 interface Turn {
@@ -28,6 +28,8 @@ interface Turn {
 export async function openCodexSession(first: RunInput): Promise<LiveSession> {
   const path = findBinary(BINARY);
   if (!path) throw new FunnelError("codex is not installed.", "not-installed");
+  // Refuses options that would widen access before a process starts.
+  const start = threadStartParams(first);
   // No abort signal here: the process outlives the turn. Each turn handles its own signal.
   const proc = spawnStream(path, ["app-server"], { cwd: first.selection.cwd, env: first.env });
   proc.hold(false);
@@ -85,7 +87,7 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
     const settings = await threadSettings(path, first);
     const started = first.sessionId
       ? await rpc.request("thread/resume", { threadId: first.sessionId, ...settings })
-      : await rpc.request("thread/start", settings);
+      : await rpc.request("thread/start", { ...settings, ...start });
     threadId = started.thread.id as string;
     model = started.model;
     return threadId;

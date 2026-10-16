@@ -1,4 +1,6 @@
 import type { Funnel } from "../funnel.js";
+import { realpathSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import {
   ACCESS_LEVELS,
   FunnelError,
@@ -7,6 +9,7 @@ import {
   type FinishReason,
   type FunnelEvent,
   type ProviderId,
+  type ProviderOptions,
   type RunInput,
   type Usage,
 } from "../types.js";
@@ -51,7 +54,46 @@ interface ChatBody {
   max_completion_tokens?: number;
   response_format?: { type: string; json_schema?: { name?: string; schema?: Record<string, unknown> } };
   /** cli-funnel extension. */
-  x_funnel?: { cwd?: string; access?: AccessLevel; sessionId?: string; fast?: boolean; contextWindow?: number };
+  x_funnel?: { cwd?: string; access?: AccessLevel; sessionId?: string; fast?: boolean; contextWindow?: number; providerOptions?: ProviderOptions };
+}
+
+const realPath = (p: string): string | undefined => {
+  try {
+    return realpathSync(p);
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * `providerOptions` with every `addDirs` entry replaced by its real path, or `null` when an entry does not exist or
+ * resolves outside `allowed`, the check `cwd` gets. The run gets the resolved path, so a symlink swapped in after the
+ * check cannot point it elsewhere. Providers accept a single string or a list, so both are handled. Other value types
+ * pass through for the provider to refuse.
+ */
+export function resolveOptionDirs<T>(options: T, allowed: (dir: string) => boolean): T | null {
+  if (typeof options !== "object" || options === null || Array.isArray(options)) return options;
+  const entries: [string, unknown][] = [];
+  for (const [id, entry] of Object.entries(options)) {
+    const dirs: unknown = typeof entry === "object" && entry !== null ? (entry as { addDirs?: unknown }).addDirs : undefined;
+    if (typeof dirs !== "string" && !Array.isArray(dirs)) {
+      entries.push([id, entry]);
+      continue;
+    }
+    const resolved: unknown[] = [];
+    for (const d of typeof dirs === "string" ? [dirs] : dirs) {
+      if (typeof d !== "string") {
+        resolved.push(d);
+        continue;
+      }
+      const real = isAbsolute(d) ? realPath(d) : undefined;
+      if (!real || !allowed(real)) return null;
+      resolved.push(real);
+    }
+    entries.push([id, { ...(entry as object), addDirs: resolved }]);
+  }
+  // fromEntries keeps a "__proto__" key as a plain key, so validation still sees and refuses it.
+  return Object.fromEntries(entries) as T;
 }
 
 const text = (c: ChatMessage["content"]) =>
@@ -210,6 +252,10 @@ export async function handleOpenAI(
       : "The server's default folder does not exist or is outside the allowed roots. Start the server with a folder inside fsRoots.";
     return json({ error: { message } }, 403);
   }
+  const providerOptions = resolveOptionDirs(body.x_funnel?.providerOptions, cwdAllowed);
+  if (providerOptions === null) {
+    return json({ error: { message: "An addDirs entry in x_funnel.providerOptions does not exist or is outside the allowed roots." } }, 403);
+  }
 
   const system = body.messages.filter((m) => m.role === "system").map((m) => text(m.content)).join("\n\n");
   const run = startRun(req.signal);
@@ -236,6 +282,7 @@ export async function handleOpenAI(
     sessionId: body.x_funnel?.sessionId,
     signal: run.signal,
     timeoutMs: run.timeoutMs,
+    providerOptions,
     onApproval: () => "deny",
   };
 

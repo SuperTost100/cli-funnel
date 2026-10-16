@@ -13,7 +13,7 @@ import { serveNode } from "../server/node.js";
 import { fileHistory } from "../providers/history.js";
 import type { OpenAICompatibleEndpoint } from "../providers/openai-compatible.js";
 import { SERVE_TIMEOUT_SEC, readServeConfig, resolveServe, seconds } from "./serve-config.js";
-import { UsageError, loadImages, loadSchema, renderRun, resolvePrompt } from "./run-input.js";
+import { UsageError, loadImages, loadSchema, parseOpts, renderRun, resolvePrompt } from "./run-input.js";
 import { ACCESS_LEVELS, type AccessLevel, type ProviderId } from "../types.js";
 
 const HELP = `cli-funnel <command>
@@ -28,7 +28,7 @@ const HELP = `cli-funnel <command>
   run <provider> <model> [prompt | -]
        [--effort x] [--fast] [--context tokens] [--cwd dir] [--access ${ACCESS_LEVELS.join("|")}]
        [--system text] [--session id] [--max-tokens n] [--timeout seconds]
-       [--image file]... [--schema file.json] [--json] [--quiet]
+       [--image file]... [--schema file.json] [--json] [--quiet] [--opt key=value]...
                                Prints a session id on stderr. Pass it to --session to continue.
                                The prompt is read from stdin when it is - or missing and stdin is piped.
                                --image attaches a PNG, JPEG, WebP or GIF (repeatable).
@@ -37,6 +37,8 @@ const HELP = `cli-funnel <command>
                                --quiet drops the stream and prints the final text once.
                                --timeout stops the run after that many seconds and exits 1.
                                Exits 1 when the run gives no text and does not finish with "stop".
+                               --opt sets one providerOptions entry, for example --opt addDirs=/tmp/x.
+                               JSON values are parsed. Repeat a key to build a list.
   serve [--port 4747] [--host 127.0.0.1] [--cwd dir] [--access level] [--token secret]
         [--config file.json] [--fs-root dir]... [--approval-timeout seconds] [--cors origin]
         [--log-jsonl file] [--log-content] [--timeout seconds]
@@ -84,6 +86,7 @@ const { values, positionals } = parseArgs({
     session: { type: "string" },
     "max-tokens": { type: "string" },
     timeout: { type: "string" },
+    opt: { type: "string", multiple: true },
     help: { type: "boolean", short: "h" },
   },
 });
@@ -270,8 +273,9 @@ async function main() {
     const promptFromStdin = words.length === 0 || (words.length === 1 && words[0] === "-");
     // Approvals are asked on the terminal, and stdin is the prompt here.
     if (access === "supervised" && promptFromStdin) return usage("--access supervised asks for approvals on the terminal. Pass the prompt as an argument instead of stdin.");
-    let prompt: string, attachments, responseSchema;
+    let prompt: string, attachments, responseSchema, providerOptions;
     try {
+      providerOptions = parseOpts(provider(), values.opt);
       prompt = await resolvePrompt(words, process.stdin);
       attachments = await loadImages(values.image);
       responseSchema = await loadSchema(values.schema);
@@ -298,6 +302,7 @@ async function main() {
       sessionId: values.session,
       maxOutputTokens,
       timeoutMs: runTimeoutMs(),
+      providerOptions,
       // Without a terminal prompt the CLI denies tools that need approval on its own.
       onApproval: rl
         ? async (r) => {

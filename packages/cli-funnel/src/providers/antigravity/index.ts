@@ -17,6 +17,8 @@ import {
 import { detectInstallation, findBinary, runUpdate } from "../base.js";
 import { createMapper, parseModels } from "./parser.js";
 import { composePrompt } from "../prompt.js";
+import { dirList, flag, optionsFor, positive, requireAccess } from "../options.js";
+import { requireMachine } from "../../selection.js";
 import { ownedWorkspace } from "../../util/workspace.js";
 
 const TESTED = { min: "1.2.0" };
@@ -57,6 +59,22 @@ export function buildArgs(input: RunInput, models: ModelInfo[] = [], platform: N
   if (selection.access === "accept-edits") args.push("--mode", "accept-edits");
   if (selection.access === "full") args.push("--dangerously-skip-permissions");
   if (input.sessionId) args.push("--conversation", input.sessionId);
+  args.push(...optionArgs(input));
+  return args;
+}
+
+/** Flags for `providerOptions.antigravity`. Throws `invalid-selection` when an option would widen `selection.access`. */
+export function optionArgs(input: RunInput): string[] {
+  const o = optionsFor(input, "antigravity", ["addDirs", "printTimeoutSec"]);
+  const args: string[] = [];
+  const dirs = dirList(o.addDirs, "addDirs");
+  if (dirs) {
+    // At `none` the run happens in a folder that holds only the deny hook. Another directory would undo that.
+    requireAccess(requireMachine(input.selection).access, ["accept-edits", "full"], "addDirs");
+    for (const d of dirs) args.push(flag("--add-dir", d));
+  }
+  const timeout = positive(o.printTimeoutSec, "printTimeoutSec");
+  if (timeout !== undefined) args.push(flag("--print-timeout", `${timeout}s`));
   return args;
 }
 

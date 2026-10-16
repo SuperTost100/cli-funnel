@@ -10,6 +10,7 @@ import { parseLoginStatus } from "./auth.js";
 import { Translator } from "./events.js";
 import { parseCatalog } from "./models.js";
 import { RpcClient } from "./rpc.js";
+import { threadOptions } from "./options.js";
 import { noToolsConfig } from "./tools.js";
 import { openCodexSession } from "./live.js";
 
@@ -42,22 +43,27 @@ export const INITIALIZE_PARAMS = {
   capabilities: { experimentalApi: false, requestAttestation: false },
 };
 
-/** Settings for `thread/start` and `thread/resume`. */
+/** Settings for `thread/start` and `thread/resume`, with `providerOptions.codex` applied. */
 export async function threadSettings(path: string, input: RunInput) {
   const sel = input.selection;
   const machine = requireMachine(sel);
   const plan = planAccess(machine.access);
+  const extra = threadOptions(input);
   return {
     model: sel.model,
     cwd: sel.cwd,
-    approvalPolicy: plan.approvalPolicy,
+    approvalPolicy: extra.approvalPolicy ?? plan.approvalPolicy,
     approvalsReviewer: plan.approvalsReviewer,
     sandbox: plan.sandbox,
     ...(sel.fast ? { serviceTier: "priority" } : {}),
     ...(input.system ? { developerInstructions: input.system } : {}),
     ...(sel.access === "none" ? { config: await noToolsConfig(path, machine.cwd, input.env) } : {}),
+    ...(sel.access !== "none" && Object.keys(extra.config).length ? { config: extra.config } : {}),
   };
 }
+
+/** Params only `thread/start` takes. `thread/resume` refuses them, so `threadOptions` rejects them with a session id. */
+export const threadStartParams = (input: RunInput) => threadOptions(input).start;
 
 /** Params for `turn/start`: the prompt, its images, and the per-turn settings. */
 export function turnParams(input: RunInput, threadId: string) {
@@ -105,6 +111,8 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   }
   const sel = input.selection;
   requireMachine(sel);
+  // Refuses options that would widen access before a process starts.
+  const start = threadStartParams(input);
   const out = new Channel<FunnelEvent>();
   const proc = spawnStream(path, ["app-server"], { cwd: sel.cwd, env: input.env });
   let translator: Translator | undefined;
@@ -163,7 +171,7 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
       const settings = await threadSettings(path, input);
       const started = input.sessionId
         ? await rpc.request("thread/resume", { threadId: input.sessionId, ...settings })
-        : await rpc.request("thread/start", settings);
+        : await rpc.request("thread/start", { ...settings, ...start });
       threadId = started.thread.id as string;
       translator = new Translator(threadId);
       out.push({ type: "session", sessionId: threadId, model: started.model });

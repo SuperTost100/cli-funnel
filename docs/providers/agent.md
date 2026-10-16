@@ -75,6 +75,18 @@ Verified on 2026.10.01, with and without `--force` and `--mode ask`:
 
 The CLI has no system prompt or schema flag. `system` goes in front of the prompt inside `<instructions>`, and `responseSchema` is asked for at the end of the prompt. The result is parsed into `structured` like any other. Images are refused.
 
+### Provider options
+
+`providerOptions.agent` maps to these flags, checked against 2026.10.01:
+
+| Option | Flag | Access levels |
+| --- | --- | --- |
+| `addDirs: string[]` | `--add-dir=<dir>`, absolute paths | `auto`, `full` |
+| `sandbox: "enabled" \| "disabled"` | `--sandbox=<value>` | `enabled` at all levels, `disabled` at `full` only |
+| `mode: "plan"` | `--mode plan` | `auto`, `full` |
+
+`none` refuses `mode: "plan"` and keeps `--mode ask`. Nobody has tested whether plan mode can write its plan file outside the empty `none` folder. On this machine `--sandbox enabled` failed to start because of the AppArmor setup, so check that the sandbox works where you run it.
+
 ## Models
 
 `agent --list-models` prints flat ids such as `gpt-5.3-codex-high-fast` and `claude-opus-5-thinking-high`. `models()` groups them:

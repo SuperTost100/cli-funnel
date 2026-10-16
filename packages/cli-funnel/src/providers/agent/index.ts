@@ -4,6 +4,7 @@ import { detectInstallation, findBinary, runLogout, runUpdate, spawnLogin } from
 import { FunnelError, type AuthStatus, type FunnelEvent, type ModelInfo, type Provider, type ProviderContext, type RunInput } from "../../types.js";
 import { requireMachine } from "../../selection.js";
 import { composePrompt } from "../prompt.js";
+import { dirList, flag, oneOf, optionsFor, requireAccess } from "../options.js";
 import { ownedWorkspace } from "../../util/workspace.js";
 import { groupModels, parseModelList, parseStatus, StreamMapper, toCliModel } from "./parser.js";
 
@@ -49,9 +50,31 @@ export function accessFlags(access: RunInput["selection"]["access"]): string[] {
 /** The prompt agent reads from stdin, with the system prompt and schema request folded in. */
 export const buildPrompt = (input: RunInput) => composePrompt(input, { system: true, schema: true });
 
+/** Flags for `providerOptions.agent`. Throws `invalid-selection` when an option would widen `selection.access`. */
+export function optionArgs(input: RunInput): string[] {
+  const o = optionsFor(input, "agent", ["addDirs", "sandbox", "mode"]);
+  const { access } = requireMachine(input.selection);
+  const args: string[] = [];
+  const dirs = dirList(o.addDirs, "addDirs");
+  if (dirs) {
+    // At `none` the run happens in an empty folder on purpose. Another root would undo that.
+    requireAccess(access, ["auto", "full"], "addDirs");
+    for (const d of dirs) args.push(flag("--add-dir", d));
+  }
+  const sandbox = oneOf(o.sandbox, "sandbox", ["enabled", "disabled"] as const);
+  if (sandbox === "disabled") requireAccess(access, ["full"], 'sandbox "disabled"');
+  if (sandbox) args.push(flag("--sandbox", sandbox));
+  if (oneOf(o.mode, "mode", ["plan"] as const)) {
+    // Not tested: whether plan mode can write its plan outside the empty `none` folder. `none` keeps ask mode.
+    requireAccess(access, ["auto", "full"], 'mode "plan"');
+    args.push("--mode", "plan");
+  }
+  return args;
+}
+
 /** `workspace` is the selection's folder, or the `none` workspace. The prompt goes on stdin, so its size has no argv limit. */
 export function buildArgs(input: RunInput, model: string, workspace = requireMachine(input.selection).cwd): string[] {
-  const { selection } = input;
+  const extra = optionArgs(input);
   return [
     "-p",
     "--output-format",
@@ -62,8 +85,9 @@ export function buildArgs(input: RunInput, model: string, workspace = requireMac
     "--workspace",
     workspace,
     "--trust",
-    ...accessFlags(requireMachine(selection).access),
+    ...accessFlags(requireMachine(input.selection).access),
     ...(input.sessionId ? ["--resume", input.sessionId] : []),
+    ...extra,
   ];
 }
 
