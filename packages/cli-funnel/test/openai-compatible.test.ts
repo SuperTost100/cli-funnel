@@ -87,7 +87,7 @@ describe("openai-compatible provider", () => {
     expect(call!.body.max_tokens).toBe(12);
     expect(call!.body.max_completion_tokens).toBeUndefined();
     expect(call!.body.messages[0]).toEqual({ role: "system", content: "S" });
-    expect(call!.body.messages[1].content[1]).toEqual({ type: "image_url", image_url: { url: `data:image/png;base64,${IMAGE.data}` } });
+    expect(call!.body.messages[1].content[0]).toEqual({ type: "image_url", image_url: { url: `data:image/png;base64,${IMAGE.data}` } });
     expect(call!.body.response_format.json_schema).toMatchObject({ name: "response", schema: SCHEMA.schema });
   });
 

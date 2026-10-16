@@ -61,6 +61,33 @@ Thinking text arrives as `reasoning.delta` events. The Anthropic API returns it 
 
 `sessionId` continues an earlier conversation. Each turn starts a new CLI process unless the funnel keeps processes alive. See [Live sessions](sessions.md).
 
+## Messages instead of a prompt
+
+Pass `messages` instead of `prompt` and `attachments` when you already hold the conversation as turns, for example a chat UI or a request to the OpenAI endpoint.
+
+```ts
+await funnel.run({
+  selection,
+  system: "Answer in one line.",
+  messages: [
+    { role: "user", content: "What is 2+2?" },
+    { role: "assistant", content: "4" },
+    { role: "user", content: [{ type: "text", text: "And this one?" }, { type: "image", mediaType: "image/png", data: base64Png }] },
+  ],
+});
+```
+
+`content` is a string or an array of parts. A part is `{ type: "text", text }` or an image in the same shape as an attachment. Only user messages carry images. The last message must come from the user. System instructions go in `system`. A run that sets both `prompt` and `messages`, or `messages` with `attachments`, fails with `invalid-selection`.
+
+How each provider gets them:
+
+| | API providers, Ollama, OpenAI-compatible servers | CLIs |
+|---|---|---|
+| Without `sessionId` | One native message per turn, images in place | A transcript in the prompt (`USER: ...` and `ASSISTANT: ...`). Images of the last user message become attachments; earlier images are dropped. |
+| With `sessionId` | The stored history, then the messages after the last assistant message. A session with nothing stored yet gets the whole array. | Only the messages after the last assistant message, since the CLI already holds the rest |
+
+So with a session you can send either the whole chat or only the new messages. When the session has stored turns, they win over earlier turns in `messages`. `capabilities.messages` is true for the providers that send separate turns.
+
 ## Structured answers
 
 When `responseSchema` is set, `result.structured` holds the parsed answer. Claude Code and Antigravity report it themselves. For the others cli-funnel parses the answer text, and a surrounding code fence is allowed. If the text is not JSON, `structured` is empty and `result.structuredError` says why.

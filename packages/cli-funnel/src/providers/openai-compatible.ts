@@ -1,5 +1,5 @@
 import { FunnelError, type AuthStatus, type EffortOption, type Installation, type ModelInfo, type Provider, type ProviderId } from "../types.js";
-import { chatUserContent, streamChatCompletions, type Msg } from "./api.js";
+import { chatMessages, streamChatCompletions, type Msg } from "./api.js";
 import { redact, redactErrors } from "../util/redact.js";
 import { runWithHistory } from "./history.js";
 import { mergeHeaders } from "./http.js";
@@ -92,6 +92,7 @@ export function createOpenAICompatibleProvider(endpoint: OpenAICompatibleEndpoin
       resume: true,
       approvals: false,
       images: true,
+      messages: true,
       system: "native",
       schema: "native",
       sampling: true,
@@ -113,9 +114,8 @@ export function createOpenAICompatibleProvider(endpoint: OpenAICompatibleEndpoin
     update: async () => ({ changed: false, output: `Update ${endpoint.name} with its own installer.` }),
     models,
     run(input) {
-      const user: Msg = { role: "user", content: chatUserContent(input) };
       return redactErrors(
-        runWithHistory(input, user, (text): Msg => ({ role: "assistant", content: text }), (messages) =>
+        runWithHistory(input, chatMessages, (text): Msg => ({ role: "assistant", content: text }), (messages) =>
           streamChatCompletions({ baseUrl: base, key: endpoint.apiKey, headers: endpoint.headers, retry: { retries: endpoint.retries }, maxTokensField: "max_tokens", label: endpoint.name }, input, messages),
         ),
         [endpoint.apiKey, ...Object.values(endpoint.headers ?? {})],

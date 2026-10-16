@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
-import type { FunnelEvent, HistoryStore, RunInput } from "../types.js";
+import { pendingMessages, runMessages } from "../messages.js";
+import type { FunnelEvent, HistoryStore, Message, RunInput } from "../types.js";
 
 /** Sessions kept before the least recently used one is dropped. Keeps a long-running server from growing without bound. */
 export const MAX_SESSIONS = 500;
@@ -88,9 +89,12 @@ function enqueue(store: HistoryStore, key: string): { ready: Promise<void>; rele
 }
 
 /**
- * Runs one turn for a provider that keeps no server-side session. Prepends the stored history, emits `session`,
- * and stores the user message plus the streamed answer under the session id. A turn that fails, is cancelled or
- * produces no text is not stored: an empty assistant message makes some APIs reject every later turn.
+ * Runs one turn for a provider that keeps no server-side session. `convert` turns typed messages into the provider's
+ * own format. On a resumed session the stored history comes first, followed by the messages the session has not seen:
+ * the prompt, or the `RunInput.messages` after the last assistant message. Without stored history the whole
+ * conversation is sent. Emits `session` and stores the conversation plus the streamed answer under the session id. A
+ * turn that fails, is cancelled or produces no text is not stored: an empty assistant message makes some APIs reject
+ * every later turn.
  *
  * Entries are keyed by provider and session id, so a session cannot be resumed on a provider whose message format
  * differs. Turns on one session run one after another. The turn is stored before `done` is yielded, so a consumer
@@ -98,7 +102,7 @@ function enqueue(store: HistoryStore, key: string): { ready: Promise<void>; rele
  */
 export async function* runWithHistory<M>(
   input: RunInput,
-  user: M,
+  convert: (messages: Message[]) => M[],
   assistant: (text: string) => M,
   stream: (messages: M[]) => AsyncIterable<FunnelEvent>,
 ): AsyncGenerator<FunnelEvent> {
@@ -116,7 +120,8 @@ export async function* runWithHistory<M>(
       if ((await Promise.race([turn.ready, cancelled])) === "cancelled") return yield { type: "done", text: "", finishReason: "cancelled" };
     }
     const earlier = input.sessionId ? ((await store.get(key)) as M[] | undefined) : undefined;
-    const messages = [...(earlier ?? []), user];
+    const conversation = runMessages(input);
+    const messages = earlier?.length ? [...earlier, ...convert(pendingMessages(conversation))] : convert(conversation);
     yield { type: "session", sessionId, model: input.selection.model };
     let text = "";
     let failed = false;

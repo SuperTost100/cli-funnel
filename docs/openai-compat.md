@@ -27,9 +27,9 @@ Ids are `<provider>/<model>`, for example `claude/claude-sonnet-5`, `codex/gpt-5
 
 | OpenAI field | cli-funnel |
 |---|---|
-| `messages` | Flattened into one prompt. With a session id, only the last user message is sent. |
-| `system` messages | `system`, joined in order |
-| `image_url` parts with a `data:` URL, last user message | `attachments`. Remote URLs are ignored, so the server never fetches for a client |
+| `messages` | `messages` on the run. API providers and model servers get one message per turn. CLIs get a transcript, or with a session id only the messages after the last assistant message. See [Messages instead of a prompt](run-options.md#messages-instead-of-a-prompt). |
+| `system` and `developer` messages | `system`, joined in order |
+| `image_url` parts with a `data:` URL, in user messages | Image parts. Remote URLs get a 400, so the server never fetches for a client. |
 | `response_format` of type `json_schema` | `responseSchema`. `message.content` is the JSON of the structured answer. With `stream: true` it arrives as one content chunk at the end. |
 | `max_completion_tokens`, `max_tokens` | `maxOutputTokens` |
 | `stream: true` | Server-sent events, ending with `[DONE]`. Errors that happen before the first event are a normal error response with a 4xx status. Later errors arrive as a `data:` line with an `error` object. |
@@ -68,4 +68,4 @@ The OpenAI wire format has no approve button. Requests to this endpoint therefor
 
 Tool calls happen inside the CLI. They do not appear as OpenAI `tool_calls`.
 
-Fields the server cannot honour get a 400 with `error.param` set, instead of being ignored: `tools` (when not empty), `tool_choice` (other than `none` or `auto`), `n` other than 1, `stop`, `temperature` or `top_p` other than 1, `seed`, and `response_format` of type `json_object`. A body that is not valid JSON, or has no `model` string or no non-empty `messages` array of objects with a `role`, gets a 400 too. Bodies over 10 MB get a 413. `maxBodyBytes` on the handler changes the limit.
+Fields the server cannot honour get a 400 with `error.param` set, instead of being ignored: `tools` (when not empty), `tool_choice` (other than `none` or `auto`), `n` other than 1, `stop`, `temperature` or `top_p` other than 1, `seed`, and `response_format` of type `json_object`. A body that is not valid JSON, or has no `model` string or no non-empty `messages` array of objects with a `role`, gets a 400 too, and so does a chat with a role other than `system`, `developer`, `user` or `assistant`, a content part other than text or an image, or a last message that is not from the user. Bodies over 10 MB get a 413. `maxBodyBytes` on the handler changes the limit.

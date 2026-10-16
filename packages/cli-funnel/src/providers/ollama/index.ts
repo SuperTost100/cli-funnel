@@ -1,7 +1,8 @@
 import { readNDJSON } from "../../util/ndjson.js";
 import { redactErrors } from "../../util/redact.js";
 import { compareVersions } from "../../util/process.js";
-import { FunnelError, type AuthStatus, type FunnelEvent, type Installation, type ModelInfo, type Provider, type PullEvent, type RunInput } from "../../types.js";
+import { FunnelError, type AuthStatus, type FunnelEvent, type Installation, type ModelInfo, type Message, type Provider, type PullEvent, type RunInput } from "../../types.js";
+import { partsOf, textOf } from "../../messages.js";
 import { runWithHistory } from "../history.js";
 import { mapChatLine, mapPullLine, normalizeBaseUrl, parseTags, thinkValue } from "./parser.js";
 
@@ -24,9 +25,12 @@ interface ChatMessage {
   images?: string[];
 }
 
-export function userMessage(input: RunInput): ChatMessage {
-  const images = input.attachments?.map((a) => a.data);
-  return { role: "user", content: input.prompt, ...(images?.length ? { images } : {}) };
+/** Typed messages in Ollama's format: text in `content`, images as base64 in `images`. */
+export function chatMessages(messages: Message[]): ChatMessage[] {
+  return messages.map((m) => {
+    const images = partsOf(m).flatMap((p) => (p.type === "image" ? [p.data] : []));
+    return { role: m.role, content: textOf(m), ...(images.length ? { images } : {}) };
+  });
 }
 
 /** The `options` object of a chat request. Entries the caller passes in `ollama.options` come last and win. */
@@ -164,6 +168,7 @@ export function createOllamaProvider(options: OllamaOptions = {}): Provider {
       resume: true,
       approvals: false,
       images: true,
+      messages: true,
       system: "native",
       schema: "native",
       sampling: true,
@@ -189,7 +194,7 @@ export function createOllamaProvider(options: OllamaOptions = {}): Provider {
     deleteModel,
     run: (input) =>
       redactErrors(
-        runWithHistory(input, userMessage(input), (text): ChatMessage => ({ role: "assistant", content: text }), (messages) => chat(input, messages)),
+        runWithHistory(input, chatMessages, (text): ChatMessage => ({ role: "assistant", content: text }), (messages) => chat(input, messages)),
         [options.apiKey],
       ),
   };

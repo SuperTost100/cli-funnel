@@ -44,6 +44,8 @@ export interface Capabilities {
   approvals: boolean;
   /** Accepts image attachments. */
   images: boolean;
+  /** True when the provider sends `RunInput.messages` as separate turns. Other providers get them rendered into `prompt`. */
+  messages?: boolean;
   /** `native` when the CLI or API takes a system prompt. `prompt` means cli-funnel puts it in front of the prompt. */
   system: "native" | "prompt";
   /** `native` when the CLI or API enforces `responseSchema`. `prompt` means the schema is only asked for in the prompt. */
@@ -98,6 +100,23 @@ export interface ImageAttachment {
 }
 
 export type Attachment = ImageAttachment;
+
+export interface TextPart {
+  type: "text";
+  text: string;
+}
+
+/** One piece of a message. Images use the same shape as attachments. */
+export type ContentPart = TextPart | ImageAttachment;
+
+/**
+ * One turn of a conversation, for `RunInput.messages`. A string `content` is the same as one text part.
+ * System instructions go in `RunInput.system`, not here.
+ */
+export interface Message {
+  role: "user" | "assistant";
+  content: string | ContentPart[];
+}
 
 /** A JSON Schema for the final answer. Anthropic and Codex need `additionalProperties: false` on every object. */
 export interface ResponseSchema {
@@ -217,7 +236,14 @@ export interface OllamaRunOptions {
 
 export interface RunInput {
   selection: Selection;
+  /** The user's message. When the run was asked with `messages`, the funnel fills this with a text rendering of them. */
   prompt: string;
+  /**
+   * The conversation as typed turns, instead of `prompt` and `attachments`. It must end with a user message. With
+   * `sessionId` the session already holds the earlier turns, so only the messages after the last assistant message are
+   * sent; without one the whole array is the conversation. See docs/run-options.md.
+   */
+  messages?: Message[];
   /** Instructions for the whole run. See `capabilities.system` for how each provider applies them. */
   system?: string;
   /** Images sent with the prompt. Providers without `capabilities.images` refuse the run. */
@@ -325,6 +351,12 @@ export interface ProviderOptions {
 
 /** Provider ids that take `providerOptions`. */
 export const PROVIDER_OPTION_IDS: readonly (keyof ProviderOptions)[] = ["claude", "codex", "agent", "antigravity"];
+
+/**
+ * What `funnel.run()` and `funnel.stream()` take: a `RunInput` with either `prompt` or `messages`. The funnel turns
+ * `messages` into a `prompt` for providers that do not take them, so providers always see a `RunInput`.
+ */
+export type RunRequest = Omit<RunInput, "prompt"> & { prompt?: string };
 
 /**
  * Conversation storage for providers that keep no session on their side: the API providers, Ollama and
