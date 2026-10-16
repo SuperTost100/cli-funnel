@@ -14,6 +14,10 @@ const openaiCompatible = process.env.CLI_FUNNEL_OPENAI_COMPATIBLE ? JSON.parse(p
 // Host names to accept besides localhost, comma-separated, for example a tailnet name. Anyone who can reach them can run agents.
 const allowedHosts = process.env.CLI_FUNNEL_ALLOWED_HOSTS?.split(",").map((h) => h.trim()).filter(Boolean);
 
-const handler = createHandler(createFunnel({ openaiCompatible }), { basePath: "/api/funnel", fsRoots: [homedir()], allowedHosts });
+// Runs allowed at once. Set it to 1 and start two runs to watch the second one queue. Unset means no limit.
+const maxConcurrent = Number.parseInt(process.env.CLI_FUNNEL_MAX_CONCURRENT ?? "", 10);
+const maxConcurrentRuns = maxConcurrent > 0 ? maxConcurrent : undefined;
+
+const handler = createHandler(createFunnel({ openaiCompatible }), { basePath: "/api/funnel", fsRoots: [homedir()], allowedHosts, maxConcurrentRuns });
 const { url } = await serveNode(handler, { port: 4747 });
-console.log(`funnel server on ${url}  (default project folder: ${sandbox})`);
+console.log(`funnel server on ${url}  (default project folder: ${sandbox}${maxConcurrentRuns ? `, ${maxConcurrentRuns} run${maxConcurrentRuns === 1 ? "" : "s"} at a time` : ""})`);

@@ -1,4 +1,5 @@
-import type { Turn, TurnToolCall } from "./transcript.js";
+import { useEffect, useState } from "react";
+import { describeLimit, queueNote, type Turn, type TurnToolCall } from "./transcript.js";
 
 export interface FunnelTranscriptProps {
   /** `useRun(client, { keepTranscript: true }).turns`. */
@@ -59,6 +60,25 @@ function ToolCall({ call }: { call: TurnToolCall }) {
   );
 }
 
+/** The provider's limit notice. The span to the reset ticks over while the notice is on screen. */
+function LimitView({ turn }: { turn: Turn }) {
+  const limit = turn.limit!;
+  const at = turn.limitAt ?? 0;
+  const [now, setNow] = useState<number>();
+  useEffect(() => {
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, []);
+  const note = describeLimit(limit, at, now ?? at);
+  return (
+    <p className="cf-note cf-limit" role="status" aria-live="polite">
+      <strong>{note.title}.</strong> {note.detail}
+      {note.when && <span className="cf-limit-when">{note.when}</span>}
+    </p>
+  );
+}
+
 function TurnView({ turn }: { turn: Turn }) {
   const running = turn.status === "running";
   const meta = [turn.selection.provider, turn.model];
@@ -80,7 +100,13 @@ function TurnView({ turn }: { turn: Turn }) {
         {turn.text && <p className="cf-text">{turn.text}</p>}
         {running && (
           <p className="cf-quiet" role="status">
-            {turn.text ? "Writing…" : turn.toolCalls.some((c) => c.running) ? "Using tools…" : "Waiting for the first token…"}
+            {turn.queued !== undefined
+              ? queueNote(turn.queued)
+              : turn.text
+                ? "Writing…"
+                : turn.toolCalls.some((c) => c.running)
+                  ? "Using tools…"
+                  : "Waiting for the first token…"}
           </p>
         )}
         {turn.structured !== undefined && (
@@ -94,6 +120,7 @@ function TurnView({ turn }: { turn: Turn }) {
           </details>
         )}
         {turn.structuredError && <p className="cf-note">{turn.structuredError}</p>}
+        {turn.limit && <LimitView turn={turn} />}
         {turn.deniedActions.length > 0 && <p className="cf-note">{`Not allowed: ${[...new Set(turn.deniedActions)].join(", ")}.`}</p>}
         {note && <p className="cf-note">{note}</p>}
         {turn.error && (

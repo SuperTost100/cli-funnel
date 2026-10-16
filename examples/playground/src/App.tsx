@@ -61,7 +61,7 @@ export function App() {
           </label>
           <div className="actions">
             <button className="primary" disabled={!state.value || running || !prompt.trim()} onClick={() => state.value && run.send(prompt, state.value)}>
-              {running ? "Running…" : "Run prompt"}
+              {run.queued !== undefined ? "Queued…" : running ? "Running…" : "Run prompt"}
             </button>
             {running && <button onClick={run.cancel}>Stop</button>}
             {continuing && !running && <button onClick={run.newConversation}>New conversation</button>}

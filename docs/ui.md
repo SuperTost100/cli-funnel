@@ -136,9 +136,13 @@ With `keepTranscript`, `run.turns` holds one entry per `send` since the last `ne
 | `toolCalls` | Each call with `name`, `input`, `output`, `error` and `running`. |
 | `deniedActions` | Names of the tool calls the CLI refused because nobody could approve them. |
 | `usage`, `finishReason` | As in `run.result`. |
+| `queued` | Runs ahead of this one while the server holds it for a slot. Undefined once it starts. |
+| `limit`, `limitAt` | The first rate limit or quota the provider reported, as in `run.result.limit`, and when it arrived in ms since the epoch. |
 | `status` | `running`, `done` or `error`. `error` holds the message. |
 
-`FunnelTranscript` shows each prompt, its tool calls as closed `<details>` rows (open one for the input, output and error), the answer, and a line with provider, model and token counts. It renders nothing while `turns` is empty, so show your own empty state. It uses the same `--cf-` variables as the picker.
+`FunnelTranscript` shows each prompt, its tool calls as closed `<details>` rows (open one for the input, output and error), the answer, and a line with provider, model and token counts. While the server holds a run for a slot it says how many runs are ahead. When the provider reports a limit, it adds a notice with the kind, the provider's own words and, if known, when the limit resets or when to retry, in local time. Both lines are `aria-live="polite"`. It renders nothing while `turns` is empty, so show your own empty state. It uses the same `--cf-` variables as the picker.
+
+To see the queue in the playground, start it with `CLI_FUNNEL_MAX_CONCURRENT=1 npm run playground`, open two browser tabs and send a prompt in each. The second tab shows "You are next" until the first run finishes, and a third shows "1 run ahead". One tab cannot queue itself, because a new `send` cancels the run in flight. Without the variable the playground sets no limit. The limit notice appears only when a provider reports a rate limit or quota.
 
 ## Hooks only
 
