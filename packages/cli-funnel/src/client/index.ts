@@ -11,6 +11,7 @@ import type {
   UpdateResult,
 } from "../types.js";
 import type { ProviderOverview } from "../funnel.js";
+import type { LiveSessionInfo } from "../sessions.js";
 import { readSSE } from "../util/sse.js";
 
 export interface ClientOptions {
@@ -104,9 +105,18 @@ export function createClient(options: ClientOptions) {
       post(`/approvals/${runId}/${approvalId}`, { decision }),
     /** Stops a run on the server. The run's stream ends with `done` and `finishReason: "cancelled"`. */
     cancelRun: (runId: string) => post(`/runs/${encodeURIComponent(runId)}/cancel`),
+
+    /** Live sessions of a server made with `sessions.keepAlive`. Every call fails with a 409 when the server has no live sessions. */
+    sessions: (signal?: AbortSignal) => request<LiveSessionInfo[]>("/sessions", { signal }),
+    /** Adds a message to the turn running in a live session. Codex only. Pass `provider` when two providers could share an id. */
+    steer: (sessionId: string, text: string, provider?: ProviderId) => post(`/sessions/${encodeURIComponent(sessionId)}/steer`, { text, provider }),
+    /** Stops the live process of a session. The next turn resumes it in a new process. */
+    closeSession: (sessionId: string, provider?: ProviderId) =>
+      request<{ ok: boolean }>(`/sessions/${encodeURIComponent(sessionId)}${provider ? `?provider=${encodeURIComponent(provider)}` : ""}`, { method: "DELETE" }),
   };
 }
 
 export type FunnelClient = ReturnType<typeof createClient>;
 export type { ProviderOverview } from "../funnel.js";
+export type { LiveSessionInfo } from "../sessions.js";
 export * from "../types.js";

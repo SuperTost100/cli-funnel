@@ -11,8 +11,26 @@ function toolOutput(content: unknown): string | undefined {
   return text.length ? text.join("\n") : undefined;
 }
 
-/** Maps one stream-json object from `claude -p` to zero or more FunnelEvents. Stateless. */
-export function parseClaudeMessage(raw: unknown): FunnelEvent[] {
+/**
+ * Text blocks of a subagent's `assistant` message, which Claude Code sends with `--forward-subagent-text`. Thinking
+ * blocks are left out: the CLI sends them empty. The subagent's prompt (a `user` message) and its tool calls are left
+ * out too. The parent's `Agent` tool call already carries the prompt.
+ */
+function subagentText(raw: Obj): FunnelEvent[] {
+  if (raw.type !== "assistant" || typeof raw.parent_tool_use_id !== "string" || !isObj(raw.message) || !Array.isArray(raw.message.content)) return [];
+  const agent = typeof raw.subagent_type === "string" ? raw.subagent_type : undefined;
+  return raw.message.content.flatMap((b): FunnelEvent[] =>
+    isObj(b) && b.type === "text" && typeof b.text === "string" && b.text
+      ? [{ type: "subagent.text", parentId: raw.parent_tool_use_id as string, text: b.text, ...(agent ? { agent } : {}) }]
+      : [],
+  );
+}
+
+/**
+ * Maps one stream-json object from `claude -p` to zero or more FunnelEvents. Stateless. Messages from subagents are
+ * dropped unless `forwardSubagents` is set, which goes with the `--forward-subagent-text` flag.
+ */
+export function parseClaudeMessage(raw: unknown, forwardSubagents = false): FunnelEvent[] {
   if (!isObj(raw)) return [];
   const type = raw.type;
 
@@ -22,8 +40,8 @@ export function parseClaudeMessage(raw: unknown): FunnelEvent[] {
 
   if (type === "rate_limit_event" && isObj(raw.rate_limit_info)) return parseRateLimit(raw.rate_limit_info);
 
-  // Subagent traffic carries a parent id. Only the main thread is surfaced.
-  if (raw.parent_tool_use_id) return [];
+  // Subagent traffic carries a parent id. The main thread is surfaced as it is, the subagents' text only on request.
+  if (raw.parent_tool_use_id) return forwardSubagents ? subagentText(raw) : [];
 
   if (type === "stream_event" && isObj(raw.event) && raw.event.type === "content_block_delta" && isObj(raw.event.delta)) {
     const d = raw.event.delta;

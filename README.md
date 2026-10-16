@@ -127,7 +127,7 @@ const client = createClient({ baseUrl: "/api/funnel" });
 - [Concepts](docs/concepts.md)
 - [Selection](docs/selection.md) and [Access levels](docs/access-levels.md)
 - [Run options](docs/run-options.md): system prompt, images, JSON answers, output limit
-- [Live sessions](docs/sessions.md): keep Claude Code and Codex running between turns, steer a running Codex turn
+- [Live sessions](docs/sessions.md): keep Claude Code and Codex running between turns, steer a running Codex turn, fork a session, list Codex threads
 - [Sign-in and updates](docs/auth-and-updates.md)
 - [UI components](docs/ui.md)
 - [Run the server](docs/serve.md): config file, folders, CORS, run log, Docker Compose and systemd for a tailnet

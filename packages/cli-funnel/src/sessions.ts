@@ -55,9 +55,19 @@ export function fingerprint(input: RunInput): string {
     Object.entries(input.env ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
     Boolean(input.onApproval),
     // Flags such as --add-dir are fixed when the process starts, so other options need another process.
-    (input.providerOptions as Record<string, unknown> | undefined)?.[s.provider] ?? null,
+    // `forkSession` is left out: it only decides how the first turn starts, and a fork is never reused (see `forks`).
+    withoutFork((input.providerOptions as Record<string, unknown> | undefined)?.[s.provider]),
   ]);
 }
+
+function withoutFork(options: unknown): unknown {
+  if (typeof options !== "object" || options === null) return options ?? null;
+  const { forkSession: _, ...rest } = options as Record<string, unknown>;
+  return Object.keys(rest).length ? rest : null;
+}
+
+/** True when the turn asks to continue its session in a new one. The live process of the old session has to stay as it is. */
+const forks = (input: RunInput): boolean => (input.providerOptions as Record<string, { forkSession?: unknown } | undefined> | undefined)?.[input.selection.provider]?.forkSession === true;
 
 const keyOf = (provider: ProviderId, sessionId: string) => `${provider}\u0000${sessionId}`;
 
@@ -83,7 +93,8 @@ export class SessionPool {
       return;
     }
     const fp = fingerprint(input);
-    let entry = input.sessionId ? this.byKey.get(keyOf(p.id, input.sessionId)) : undefined;
+    // A fork starts a process of its own and leaves the live process of the session it forks from alone.
+    let entry = input.sessionId && !forks(input) ? this.byKey.get(keyOf(p.id, input.sessionId)) : undefined;
     // A second turn on a session that is still answering gets its own process, as it would without the pool.
     if (entry?.busy) {
       yield* p.run(input);
@@ -111,7 +122,9 @@ export class SessionPool {
     } finally {
       entry.busy = false;
       entry.lastUsed = Date.now();
-      if (!terminal || input.signal?.aborted || !entry.live.alive) this.drop(entry);
+      // An aborted turn is not dropped here. The live session decides: Claude Code stops its process, Codex keeps its
+      // app-server when `turn/interrupt` ended the turn cleanly.
+      if (!terminal || !entry.live.alive) this.drop(entry);
       else this.idle(entry);
     }
   }

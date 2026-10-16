@@ -86,6 +86,18 @@ The option takes one origin, written as the browser sends it: scheme, host and a
 
 The origin check stays on. A page on any other origin is still refused when there is no token, and the `Host` check still applies to requests from the configured one. Set a token whenever you set `cors`, since the origin only says which page called, not who is using it.
 
+## Live sessions
+
+When the handler's funnel has `sessions.keepAlive`, three routes manage the live processes. Without it they answer 409 with code `unsupported`. Token, host and origin checks apply as for every route. `cli-funnel serve` does not turn `keepAlive` on. Use `createHandler(createFunnel({ sessions: { keepAlive: true } }))` to get it.
+
+| Route | Effect |
+| --- | --- |
+| `GET /sessions` | Live sessions: provider, session id, model, `cwd`, access, `busy`, `steer`, `lastUsed` |
+| `POST /sessions/<id>/steer` | Body `{ "text": "...", "provider": "codex" }`. Adds a message to the running turn. Codex only |
+| `DELETE /sessions/<id>?provider=codex` | Stops the session's process. 404 when it has none |
+
+`provider` is optional in both. Pass it when two providers could share a session id. The browser client has `sessions()`, `steer()` and `closeSession()`. See [Live sessions](sessions.md#over-http).
+
 ## Log runs
 
 `--log-jsonl` appends one JSON line to a file when a run ends, whether it came through the API or the `/v1` endpoints:

@@ -4,7 +4,7 @@ export const CHECKS = {
   claude: {
     bin: "claude",
     help: [
-      [["--help"], ["--output-format", "--input-format", "--include-partial-messages", "--permission-mode", "--permission-prompt-tool", "--model", "--effort", "--resume", "--verbose", "--tools", "--strict-mcp-config", "--setting-sources", "--json-schema", "--system-prompt", "--append-system-prompt", "--system-prompt[-file]", "--append-system-prompt[-file]", "--allowed-tools", "--disallowed-tools", "--add-dir", "--mcp-config", "--agents", "--fallback-model", "--max-budget-usd", "--fork-session", "--betas"]],
+      [["--help"], ["--output-format", "--input-format", "--include-partial-messages", "--permission-mode", "--permission-prompt-tool", "--model", "--effort", "--resume", "--verbose", "--tools", "--strict-mcp-config", "--setting-sources", "--json-schema", "--system-prompt", "--append-system-prompt", "--system-prompt[-file]", "--append-system-prompt[-file]", "--allowed-tools", "--disallowed-tools", "--add-dir", "--mcp-config", "--agents", "--fallback-model", "--max-budget-usd", "--fork-session", "--forward-subagent-text", "--betas"]],
       [["auth", "--help"], ["login", "logout", "status"]],
     ],
   },

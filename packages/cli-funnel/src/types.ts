@@ -213,6 +213,12 @@ export type FunnelEvent =
   /** A provider yields this, then awaits `onApproval` for the answer. */
   | { type: "approval.request"; request: ApprovalRequest }
   | { type: "usage"; usage: Usage }
+  /**
+   * Text a subagent wrote, when `providerOptions.claude.forwardSubagentText` is on. `parentId` is the id of the tool
+   * call that started the subagent, so it matches the `tool.start` of that call. It is never part of the run's answer
+   * text, and it arrives as whole messages, not as deltas.
+   */
+  | { type: "subagent.text"; parentId: string; text: string; agent?: string }
   /** The provider hit or reported a limit. An `error` event usually follows when the run could not finish. */
   | ({ type: "limit" } & Limit)
   /** An API provider got a 429 or 5xx before any output and will send the request again after `delayMs`. `attempt` counts retries from 1. */
@@ -222,6 +228,68 @@ export type FunnelEvent =
   /** `timeout` is set when the run hit `RunInput.timeoutMs`. `finishReason` is then "cancelled". */
   | { type: "done"; text: string; finishReason: FinishReason; timeout?: true }
   | { type: "error"; message: string; code?: string };
+
+/** A saved conversation a provider can list. */
+export interface ThreadInfo {
+  provider: ProviderId;
+  /** Pass it as `RunInput.sessionId` to continue the conversation. */
+  sessionId: string;
+  /** The user's title when there is one, else the start of the first message. */
+  title: string;
+  cwd?: string;
+  /** Epoch milliseconds. */
+  createdAt: number;
+  /** Epoch milliseconds. */
+  updatedAt: number;
+  /** The session this one was forked from. */
+  forkedFrom?: string;
+}
+
+export interface ListThreadsOptions extends ProcessOptions {
+  /** Only conversations that ran in this folder. */
+  cwd?: string;
+  /** Substring of the title. */
+  search?: string;
+  /** Page size. The provider picks one when unset. */
+  limit?: number;
+  /** `nextCursor` of the previous page. */
+  cursor?: string;
+}
+
+export interface ThreadPage {
+  threads: ThreadInfo[];
+  /** Pass it as `cursor` for the next page. Absent on the last page. */
+  nextCursor?: string;
+}
+
+/** How much of one usage window is used. */
+export interface UsageWindow {
+  usedPercent: number;
+  /** Length of the window, for example 300 for five hours. */
+  windowMinutes?: number;
+  /** When the window resets, as an ISO 8601 timestamp. */
+  resetsAt?: string;
+}
+
+/** A provider's account usage right now. See `funnel.rateLimits`. */
+export interface RateLimits {
+  provider: ProviderId;
+  /** The account's plan, for example "plus". */
+  plan?: string;
+  /** The short window, five hours on Codex. */
+  primary?: UsageWindow;
+  /** The long window, a week on Codex. */
+  secondary?: UsageWindow;
+  /** Set when a limit is reached. The same value a `limit` event carries. */
+  limit?: Limit;
+}
+
+/** Environment and abort signal for the calls that start a short-lived CLI process. */
+export interface ProcessOptions {
+  /** Extra environment for the CLI process, for example `CODEX_HOME`. */
+  env?: Record<string, string>;
+  signal?: AbortSignal;
+}
 
 /** What `createFunnel({ onEvent })` receives for every event of a run. */
 export interface RunEventRecord {
@@ -367,8 +435,10 @@ export interface ClaudeOptions {
   fallbackModel?: string;
   /** Stop once the run's list-price estimate passes this many dollars. */
   maxBudgetUsd?: number;
-  /** With `sessionId`, continue in a new session and leave the old one as it was. */
+  /** With `sessionId`, continue in a new session and leave the old one as it was. With `sessions.keepAlive` the old session's live process stays up. */
   forkSession?: boolean;
+  /** Emit `subagent.text` events with the text subagents write, tagged with the id of the tool call that started them. */
+  forwardSubagentText?: boolean;
   /** Beta headers. Only API key logins use them. */
   betas?: string[];
 }
@@ -505,6 +575,12 @@ export interface Provider {
    * resume. Run the turns with `turn()`, the first one included.
    */
   openSession?(input: RunInput): Promise<LiveSession>;
+  /** Lists the conversations the CLI saved. Codex only. */
+  listThreads?(options?: ListThreadsOptions): Promise<ThreadPage>;
+  /** Copies a saved conversation into a new one and returns its session id. The original stays as it was. Codex only. */
+  forkThread?(sessionId: string, options?: ProcessOptions): Promise<string>;
+  /** Reads the account's usage windows. Codex only. */
+  rateLimits?(options?: ProcessOptions): Promise<RateLimits>;
 }
 
 /** A CLI process that keeps one conversation across turns. Made by `Provider.openSession`. */
