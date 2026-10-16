@@ -32,6 +32,7 @@ import {
   type ToolCall,
 } from "../types.js";
 import { streamResponses } from "./responses.js";
+import { joinUrl } from "../util/url.js";
 
 export { chatMessages, type Msg } from "./wire.js";
 
@@ -158,7 +159,7 @@ const anthropic: ApiSpec = {
     let after = "";
     // The list is short today, but it is paged, so follow `has_more`. The cap stops a server that never ends.
     for (let page = 0; page < 20; page++) {
-      const res = await fetch(`${ctx.baseUrl}/v1/models?limit=1000${after ? `&after_id=${encodeURIComponent(after)}` : ""}`, { headers: ctx.headers });
+      const res = await fetch(joinUrl(ctx.baseUrl, `/v1/models?limit=1000${after ? `&after_id=${encodeURIComponent(after)}` : ""}`), { headers: ctx.headers });
       if (!res.ok) throw new FunnelError(`Anthropic API returned ${res.status}.`, "cli-failed");
       const body = (await res.json()) as { data: { id: string; display_name?: string }[]; has_more?: boolean; last_id?: string };
       for (const m of body.data) out.push({ id: m.id, name: m.display_name ?? m.id, provider: "anthropic-api", efforts: anthropicEfforts(m.id), ...MODEL_BASE });
@@ -169,7 +170,7 @@ const anthropic: ApiSpec = {
   },
   async *stream(ctx, input, messages, turn) {
     const res = yield* fetchRetrying(
-      `${ctx.baseUrl}/v1/messages`,
+      joinUrl(ctx.baseUrl, "/v1/messages"),
       { method: "POST", signal: input.signal, headers: { ...ctx.headers, "content-type": "application/json" }, body: JSON.stringify(anthropicBody(input, messages)) },
       ctx.retry,
     );
@@ -263,7 +264,7 @@ export async function* streamChatCompletions(opts: ChatCompletionsOptions, input
   let res: Response;
   try {
     res = yield* fetchRetrying(
-      `${opts.baseUrl}/chat/completions`,
+      joinUrl(opts.baseUrl, "/chat/completions"),
       {
         method: "POST",
         signal: input.signal,
@@ -404,7 +405,7 @@ const openai: ApiSpec = {
   cache: false,
   authHeaders: (key) => ({ authorization: `Bearer ${key}` }),
   async listModels(ctx) {
-    const res = await fetch(`${ctx.baseUrl}/models`, { headers: ctx.headers });
+    const res = await fetch(joinUrl(ctx.baseUrl, "/models"), { headers: ctx.headers });
     if (!res.ok) throw new FunnelError(`OpenAI API returned ${res.status}.`, "cli-failed");
     const body = (await res.json()) as { data: { id: string }[] };
     const models = body.data.flatMap((m) => {
@@ -444,7 +445,7 @@ const gemini: ApiSpec = {
     const out: ModelInfo[] = [];
     let page = "";
     do {
-      const res = await fetch(`${ctx.baseUrl}/models?pageSize=1000${page ? `&pageToken=${encodeURIComponent(page)}` : ""}`, {
+      const res = await fetch(joinUrl(ctx.baseUrl, `/models?pageSize=1000${page ? `&pageToken=${encodeURIComponent(page)}` : ""}`), {
         headers: ctx.headers,
       });
       if (!res.ok) throw new FunnelError(`Gemini API returned ${res.status}.`, "cli-failed");
@@ -463,7 +464,7 @@ const gemini: ApiSpec = {
   },
   async *stream(ctx, input, messages, turn) {
     const res = yield* fetchRetrying(
-      `${ctx.baseUrl}/models/${encodeURIComponent(input.selection.model)}:streamGenerateContent?alt=sse`,
+      joinUrl(ctx.baseUrl, `/models/${encodeURIComponent(input.selection.model)}:streamGenerateContent?alt=sse`),
       {
         method: "POST",
         signal: input.signal,

@@ -106,6 +106,12 @@ async function loadManifestModels(manifestUrl?: string): Promise<ModelInfo[]> {
   return fromManifest(await loadManifest(manifestUrl), "antigravity");
 }
 
+/**
+ * The last list `models()` returned: `agy models` merged with the manifest, from `manifestUrl` when one is set. The
+ * funnel lists models before every run, so a run picks its default effort from the same list the user picked from.
+ */
+let listed: ModelInfo[] | undefined;
+
 /** How often `login()` asks `agy models` whether the user has signed in. */
 const LOGIN_POLL_MS = 3000;
 
@@ -168,7 +174,7 @@ function login(options: { signal?: AbortSignal } = {}): LoginSession {
 async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   const path = findBinary("agy");
   if (!path) throw new FunnelError("agy is not installed.", "not-installed");
-  const models = await loadManifestModels();
+  const models = listed?.some((m) => m.id === input.selection.model) ? listed : await loadManifestModels();
   const cwd = input.selection.access === "none" ? await noneWorkspace() : input.selection.cwd;
   // A long schema would count against the command-line limit, so it goes through a private temp file removed after the run.
   const schema = input.responseSchema ? JSON.stringify(input.responseSchema.schema) : undefined;
@@ -233,7 +239,8 @@ export const antigravityProvider: Provider = {
     if (!path) return fallback;
     const res = await exec(path, ["models"], { timeoutMs: 20_000 }).catch(() => undefined);
     const live = res && res.code === 0 ? parseModels(res.stdout) : [];
-    return live.length ? mergeModels(live, fallback) : fallback;
+    listed = live.length ? mergeModels(live, fallback) : fallback;
+    return listed;
   },
   run,
 };

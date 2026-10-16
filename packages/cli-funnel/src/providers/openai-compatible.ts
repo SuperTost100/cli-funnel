@@ -4,6 +4,7 @@ import { redact, redactErrors } from "../util/redact.js";
 import { runWithHistory } from "./history.js";
 import { mergeHeaders } from "./http.js";
 import { streamResponses } from "./responses.js";
+import { joinUrl } from "../util/url.js";
 
 /** One OpenAI-compatible server: LM Studio, llama.cpp server, vLLM, a hosted gateway. */
 export interface OpenAICompatibleEndpoint {
@@ -59,7 +60,7 @@ export function createOpenAICompatibleProvider(endpoint: OpenAICompatibleEndpoin
   const shown = redact(base, [endpoint.apiKey]);
   const efforts: EffortOption[] = (endpoint.efforts ?? []).map((e) => ({ id: e, label: e.charAt(0).toUpperCase() + e.slice(1) }));
   const headers = (): Record<string, string> => mergeHeaders(endpoint.apiKey ? { authorization: `Bearer ${endpoint.apiKey}` } : {}, endpoint.headers);
-  const listing = (timeoutMs = PROBE_MS) => fetch(`${base}/models`, { headers: headers(), signal: AbortSignal.timeout(timeoutMs) }).catch(() => undefined);
+  const listing = (timeoutMs = PROBE_MS) => fetch(joinUrl(base, "/models"), { headers: headers(), signal: AbortSignal.timeout(timeoutMs) }).catch(() => undefined);
   const notReachable = () => `${endpoint.name} is not reachable at ${shown}.`;
   const configured = (): ModelInfo[] =>
     (endpoint.models ?? []).map((m) => ({ id: m, name: m, provider: id, efforts, contextWindows: [], fast: false, source: "manifest" as const }));

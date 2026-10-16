@@ -13,6 +13,7 @@ import type {
 import type { ProviderOverview } from "../funnel.js";
 import type { LiveSessionInfo } from "../sessions.js";
 import { readSSE } from "../util/sse.js";
+import { joinUrl } from "../util/url.js";
 
 export interface ClientOptions {
   /** Where the handler is mounted, for example "/api/funnel" or "http://localhost:4747". */
@@ -49,21 +50,21 @@ export function createClient(options: ClientOptions) {
   }
 
   async function request<T>(path: string, init?: RequestInit): Promise<T> {
-    const res = await doFetch(base + path, { ...init, headers: headers({ "content-type": "application/json" }) });
+    const res = await doFetch(joinUrl(base, path), { ...init, headers: headers({ "content-type": "application/json" }) });
     const text = await res.text();
     let body: unknown;
     try {
       body = JSON.parse(text);
     } catch {
       // A captive portal or a wrong baseUrl answers with HTML. An error status keeps its own message below.
-      if (res.ok) throw new Error(`Expected JSON from ${base + path} but got something else (HTTP ${res.status}). Check baseUrl.`);
+      if (res.ok) throw new Error(`Expected JSON from ${joinUrl(base, path)} but got something else (HTTP ${res.status}). Check baseUrl.`);
     }
     if (!res.ok) throw new Error(errorMessage(body, res.status));
     return body as T;
   }
 
   async function* events<T>(path: string, body: unknown, signal?: AbortSignal): AsyncGenerator<T> {
-    const res = await doFetch(base + path, {
+    const res = await doFetch(joinUrl(base, path), {
       method: "POST",
       body: JSON.stringify(body),
       signal,
