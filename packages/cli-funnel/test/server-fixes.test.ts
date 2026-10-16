@@ -333,6 +333,74 @@ describe("chat completions: fields that are not supported (#50)", () => {
   });
 });
 
+describe("chat completions: sampling fields", () => {
+  const sampler = () => {
+    const seen: RunInput[] = [];
+    const provider = scripted("openai-api", (input) => (seen.push(input), [delta("x"), done()]), {
+      capabilities: { ...scripted("openai-api", () => []).capabilities, sampling: true },
+    });
+    return { seen, chat: setup(provider).chat };
+  };
+  const model = "openai-api/m1";
+
+  it("passes temperature, top_p, stop and seed to a provider with sampling", async () => {
+    const { seen, chat } = sampler();
+    const res = await chat({ temperature: 0, top_p: 0.5, stop: ["END", "\n\n"], seed: 7 }, model);
+    expect(res.status).toBe(200);
+    expect(seen[0]!.sampling).toEqual({ temperature: 0, topP: 0.5, stop: ["END", "\n\n"], seed: 7 });
+  });
+
+  it("takes a single stop string", async () => {
+    const { seen, chat } = sampler();
+    await chat({ stop: "END" }, model);
+    expect(seen[0]!.sampling).toEqual({ stop: ["END"] });
+  });
+
+  it("sets no sampling when no field is given", async () => {
+    const { seen, chat } = sampler();
+    await chat({ stop: null, seed: null, temperature: null, top_p: null }, model);
+    await chat({ stop: [] }, model);
+    expect(seen.map((i) => i.sampling)).toEqual([undefined, undefined]);
+  });
+
+  it.each([
+    ["temperature", { temperature: 2.5 }],
+    ["temperature", { temperature: -0.1 }],
+    ["temperature", { temperature: "hot" }],
+    ["top_p", { top_p: 1.5 }],
+    ["top_p", { top_p: "x" }],
+    ["stop", { stop: 5 }],
+    ["stop", { stop: ["a", 1] }],
+    ["stop", { stop: ["a", "b", "c", "d", "e"] }],
+    ["seed", { seed: 1.5 }],
+    ["seed", { seed: "7" }],
+  ])("answers 400 for a bad %s", async (param, extra) => {
+    const { seen, chat } = sampler();
+    const res = await chat(extra, model);
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatchObject({ param, type: "invalid_request_error", code: "invalid_value" });
+    expect(seen).toHaveLength(0);
+  });
+
+  it("refuses bad values on a CLI provider as invalid, not as unsupported", async () => {
+    const { chat } = setup(scripted("claude", () => [done()]));
+    expect((await (await chat({ temperature: 3 })).json()).error).toMatchObject({ param: "temperature", code: "invalid_value" });
+  });
+
+  it("refuses valid values on a CLI provider and ignores the defaults", async () => {
+    const seen: RunInput[] = [];
+    const { chat } = setup(scripted("claude", (input) => (seen.push(input), [done()])));
+    for (const [param, extra] of [["temperature", { temperature: 0 }], ["top_p", { top_p: 0.9 }], ["stop", { stop: "END" }], ["seed", { seed: 0 }]] as const) {
+      const res = await chat(extra);
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatchObject({ param, code: "unsupported_value" });
+    }
+    expect((await chat({ temperature: 1, top_p: 1, stop: [] })).status).toBe(200);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.sampling).toBeUndefined();
+  });
+});
+
 describe("model routes (#50)", () => {
   const down = scripted("codex", () => [done()], { detect: async () => ({ installed: false, testedRange: { min: "1.0.0" } }) });
   const signedOut = scripted("agent", () => [done()], { authStatus: async () => ({ loggedIn: false }) });
