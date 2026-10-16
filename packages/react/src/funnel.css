@@ -67,6 +67,9 @@
 .cf-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .cf-quiet, .cf-meta { color: var(--cf-muted); font-size: 12.5px; }
 .cf-note { padding-left: 10px; border-left: 2px solid var(--cf-line); }
+.cf-limit { border-left-color: var(--cf-accent); }
+.cf-limit strong { font-weight: 600; }
+.cf-limit-when { display: block; color: var(--cf-muted); }
 .cf-tools { display: grid; gap: 6px; }
 .cf-tool { border: 1px solid var(--cf-line); border-radius: var(--cf-radius); min-width: 0; }
 .cf-tool > summary {

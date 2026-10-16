@@ -325,6 +325,7 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
           }
           if (e.type === "queue.position") {
             setQueued(e.ahead);
+            patch((t) => applyEvent(t, e));
             continue;
           }
           setQueued(undefined);

@@ -176,9 +176,21 @@ describe("useRun", () => {
       a.push({ type: "queue.position", ahead: 1 });
     });
     await waitFor(() => expect(result.current.queued).toBe(1));
+    expect(result.current.turns[0]?.queued).toBe(1);
     act(() => a.push({ type: "session", sessionId: "s" }));
     await waitFor(() => expect(result.current.queued).toBeUndefined());
+    expect(result.current.turns[0]?.queued).toBeUndefined();
     expect(result.current.events.map((e) => e.type)).toEqual(["session"]);
+  });
+
+  it("puts the first limit on the result and the turn", async () => {
+    const a = stream<RunEvent>();
+    const client = fakeClient({ run: vi.fn(() => a.gen) });
+    const { result } = renderHook(() => useRun(client));
+    act(() => void result.current.send("one", SEL));
+    act(() => a.push({ type: "limit", kind: "quota", resetAt: "2026-10-19T09:30:00Z", detail: "Weekly limit." }));
+    await waitFor(() => expect(result.current.result.limit).toEqual({ kind: "quota", resetAt: "2026-10-19T09:30:00Z", detail: "Weekly limit." }));
+    expect(result.current.turns[0]?.limit).toEqual(result.current.result.limit);
   });
 
   it("labels the result with the selection from send time and keeps done.text, structured and denied actions", async () => {
