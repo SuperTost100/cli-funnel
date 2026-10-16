@@ -3,7 +3,7 @@ import { Channel } from "../../util/channel.js";
 import { needsArgFile, writeArgFile } from "../../util/argfile.js";
 import { spawnStream, type Streamed } from "../../util/process.js";
 import { findBinary } from "../base.js";
-import { BIN, answerControlRequest, buildArgs, forwardsSubagents, userContent } from "./index.js";
+import { BIN, answerControlRequest, buildArgs, forwardsSubagents, schemaInit, userContent } from "./index.js";
 import { parseClaudeMessage } from "./parser.js";
 
 /**
@@ -31,6 +31,9 @@ export async function openClaudeSession(first: RunInput): Promise<LiveSession> {
     throw err;
   }
   void proc.exited.then(() => systemFile?.remove());
+  // Its reply arrives before any turn reads, so it is dropped with the other lines between turns.
+  const init = schemaInit(first);
+  if (init) proc.write(init);
   proc.hold(false);
   let sessionId: string | undefined;
   let exited = false;

@@ -63,12 +63,22 @@ export function buildArgs(input: RunInput, systemFile?: string): string[] {
     const flag = selection.access === "none" ? "--system-prompt" : "--append-system-prompt";
     args.push(systemFile ? `${flag}-file` : flag, systemFile ?? input.system);
   }
-  if (input.responseSchema) args.push("--json-schema", JSON.stringify(input.responseSchema.schema));
+  if (input.responseSchema && !schemaInit(input)) args.push("--json-schema", JSON.stringify(input.responseSchema.schema));
   // Without this flag the CLI denies anything that needs a prompt instead of asking.
   if (selection.access !== "full" && selection.access !== "none" && input.onApproval) args.push("--permission-prompt-tool", "stdio");
   if (input.sessionId) args.push("--resume", input.sessionId);
   args.push(...optionArgs(input));
   return args;
+}
+
+/**
+ * `--json-schema` takes only inline JSON, so a schema too long for argv goes in the stream-json `initialize` control
+ * request instead, the way the Agent SDK sends it. Returns that stdin line, or undefined when the flag is enough.
+ */
+export function schemaInit(input: RunInput): string | undefined {
+  if (!input.responseSchema || !needsArgFile(JSON.stringify(input.responseSchema.schema))) return undefined;
+  const request = { subtype: "initialize", jsonSchema: input.responseSchema.schema };
+  return JSON.stringify({ type: "control_request", request_id: "cli-funnel-init", request });
 }
 
 const OPTION_KEYS = ["allowedTools", "disallowedTools", "addDirs", "mcpConfig", "agents", "fallbackModel", "maxBudgetUsd", "forkSession", "forwardSubagentText", "betas"];
@@ -161,6 +171,8 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
     await systemFile?.remove();
     throw err;
   }
+  const init = schemaInit(input);
+  if (init) proc.write(init);
   proc.write(JSON.stringify({ type: "user", message: { role: "user", content: userContent(input) } }));
 
   let finished = false;

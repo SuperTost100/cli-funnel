@@ -39,7 +39,7 @@ Some CLIs have no headless login. Antigravity is one. Its login emits `needs-ter
 await funnel.logout("claude");
 ```
 
-A provider whose CLI has no sign-out command throws an `unsupported` error that says how to sign out by hand.
+A provider whose CLI has no sign-out command throws an `unsupported` error that says how to sign out by hand. After the CLI's sign-out command, `logout` checks the account again and throws `cli-failed` if the CLI still reports one signed in. Over HTTP that is a 409.
 
 ## Update the CLI
 
