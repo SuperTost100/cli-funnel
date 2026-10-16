@@ -284,6 +284,8 @@ describe("POST /v1/responses", () => {
       [{ tools: [{ type: "web_search" }] }, "tools[0]"],
       [{ model: "claude/m-1", tools: [{ type: "function", name: "f" }] }, "tools"],
       [{ model: "claude/m-1", temperature: 0.5 }, "temperature"],
+      [{ temperature: 3 }, "temperature"],
+      [{ top_p: -1 }, "top_p"],
       [{ input: [{ type: "item_reference", id: "x" }] }, "input[0]"],
       [{ input: [{ role: "user", content: [{ type: "input_image", image_url: "https://x/y.png" }] }] }, "input[0].content[0]"],
     ];

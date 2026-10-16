@@ -13,6 +13,7 @@ import {
   type ProviderId,
   type ProviderOptions,
   type RunRequest,
+  type Sampling,
   type ToolCall,
   type ToolCallPart,
   type ToolChoice,
@@ -243,16 +244,63 @@ function badShape(body: Record<string, unknown>): { message: string; param: stri
 export function unsupportedField(body: Record<string, unknown>): string | undefined {
   const set = (v: unknown) => v !== undefined && v !== null;
   const notOne = (v: unknown) => set(v) && v !== 1;
-  // `tools` and `tool_choice` depend on the provider, so `toolOptions` checks them.
+  // `tools` and `tool_choice` depend on the provider, so `toolOptions` checks them. So do the sampling fields, in `samplingOptions`.
   const checks: [string, boolean][] = [
     ["n", notOne(body.n)],
-    ["stop", set(body.stop) && !(Array.isArray(body.stop) && body.stop.length === 0)],
-    ["temperature", notOne(body.temperature)],
-    ["top_p", notOne(body.top_p)],
-    ["seed", set(body.seed)],
     ["response_format", isObject(body.response_format) && body.response_format.type === "json_object"],
   ];
   return checks.find(([, bad]) => bad)?.[0];
+}
+
+/**
+ * `RunInput.sampling` from the `temperature`, `top_p`, `stop` and `seed` of a request body, or the 400 problem. Shared by
+ * `/v1/chat/completions` and `/v1/responses`, which has no `stop` or `seed` and passes `stop: false`.
+ *
+ * A bad type or an out of range value is refused on every provider, with the limits of the OpenAI API: `temperature`
+ * 0 to 2, `top_p` 0 to 1, `stop` a string or up to 4 strings, `seed` an integer. A provider without
+ * `capabilities.sampling` (the CLIs) cannot apply any of them. It refuses a value other than the default, `1` for
+ * `temperature` and `top_p`, an empty `stop` or no `seed`, and ignores the defaults.
+ */
+export function samplingOptions(
+  body: Record<string, unknown>,
+  supported: boolean | undefined,
+  fields: { stop: boolean } = { stop: true },
+): { sampling?: Sampling } | { message: string; param: string; code: string } {
+  const bad = (param: string, message: string) => ({ message, param, code: "invalid_value" });
+  const set = (v: unknown) => v !== undefined && v !== null;
+  const { temperature, top_p: topP, seed } = body;
+  if (set(temperature) && (typeof temperature !== "number" || temperature < 0 || temperature > 2)) return bad("temperature", "temperature must be a number from 0 to 2.");
+  if (set(topP) && (typeof topP !== "number" || topP < 0 || topP > 1)) return bad("top_p", "top_p must be a number from 0 to 1.");
+  let stop: string[] | undefined;
+  if (fields.stop) {
+    if (set(seed) && !Number.isInteger(seed)) return bad("seed", "seed must be an integer.");
+    const list = typeof body.stop === "string" ? [body.stop] : body.stop;
+    if (set(list)) {
+      if (!Array.isArray(list) || !list.every((s) => typeof s === "string")) return bad("stop", "stop must be a string or an array of strings.");
+      if (list.length > 4) return bad("stop", "stop takes at most 4 sequences.");
+      if (list.length) stop = list;
+    }
+  }
+
+  const requested: [string, boolean][] = [
+    ["temperature", set(temperature) && temperature !== 1],
+    ["top_p", set(topP) && topP !== 1],
+    ["stop", !!stop],
+    ["seed", fields.stop && set(seed)],
+  ];
+  if (!supported) {
+    const found = requested.find(([, on]) => on);
+    if (!found) return {};
+    const only = found[0] === "temperature" || found[0] === "top_p" ? " or use 1" : "";
+    return { message: `${found[0]} is not supported by this provider. Leave it out${only}.`, param: found[0], code: "unsupported_value" };
+  }
+  const sampling: Sampling = {
+    ...(typeof temperature === "number" ? { temperature } : {}),
+    ...(typeof topP === "number" ? { topP } : {}),
+    ...(stop ? { stop } : {}),
+    ...(typeof seed === "number" && fields.stop ? { seed } : {}),
+  };
+  return Object.keys(sampling).length ? { sampling } : {};
 }
 
 /** Replays an event pulled off the iterator ahead of time, then the rest. Leaving early closes the iterator. */
@@ -361,6 +409,8 @@ export async function handleOpenAI(
   if (!("messages" in chat)) return fail(400, chat.message, { param: chat.param });
   const tools = toolOptions(raw, !!funnel.providers[provider]!.capabilities.tools);
   if ("message" in tools) return fail(400, tools.message, { param: tools.param, code: "unsupported_value" });
+  const sampled = samplingOptions(raw, funnel.providers[provider]!.capabilities.sampling);
+  if ("message" in sampled) return fail(400, sampled.message, { param: sampled.param, code: sampled.code });
   const system = body.messages.filter((m) => SYSTEM_ROLES.has(m.role)).map((m) => text(m.content)).join("\n\n");
   const run = startRun(req.signal);
   const input: RunRequest = {
@@ -383,6 +433,7 @@ export async function handleOpenAI(
         : undefined,
     maxOutputTokens: body.max_completion_tokens ?? body.max_tokens,
     ...tools,
+    ...sampled,
     sessionId: body.x_funnel?.sessionId,
     signal: run.signal,
     timeoutMs: run.timeoutMs,

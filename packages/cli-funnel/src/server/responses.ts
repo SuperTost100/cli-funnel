@@ -17,7 +17,7 @@ import {
   type Usage,
 } from "../types.js";
 import { BodyError, DEFAULT_MAX_BODY_BYTES, readJson } from "./body.js";
-import { IMAGE_DATA_URL, errorBody, fail, isObject, replay, resolveSelection, statusOf, type OpenAIDefaults, type TrackedRun } from "./openai.js";
+import { IMAGE_DATA_URL, errorBody, fail, isObject, replay, resolveSelection, samplingOptions, statusOf, type OpenAIDefaults, type TrackedRun } from "./openai.js";
 import { json, sse, sseHeaders } from "./sse.js";
 
 /**
@@ -169,17 +169,11 @@ export async function handleResponses(
   if ("param" in converted) return fail(400, converted.message, { param: converted.param });
   const tools = toolOptions(body, !!caps.tools);
   if ("param" in tools) return fail(400, tools.message, { param: tools.param, code: "unsupported_value" });
-  for (const field of ["temperature", "top_p"] as const) {
-    const v = body[field];
-    if (v != null && v !== 1 && !caps.sampling) return fail(400, `${field} is not supported by this provider. Leave it out or use 1.`, { param: field, code: "unsupported_value" });
-  }
+  const sampled = samplingOptions(body, caps.sampling, { stop: false });
+  if ("message" in sampled) return fail(400, sampled.message, { param: sampled.param, code: sampled.code });
   const format = isObject(body.text) && isObject(body.text.format) ? body.text.format : undefined;
   const reasoning = isObject(body.reasoning) ? body.reasoning : undefined;
   const system = [typeof body.instructions === "string" ? body.instructions : "", ...converted.system].filter(Boolean).join("\n\n");
-  const sampling = {
-    ...(typeof body.temperature === "number" && caps.sampling ? { temperature: body.temperature } : {}),
-    ...(typeof body.top_p === "number" && caps.sampling ? { topP: body.top_p } : {}),
-  };
 
   const run = startRun(req.signal);
   const input: RunRequest = {
@@ -197,7 +191,7 @@ export async function handleResponses(
     system: system || undefined,
     responseSchema: format?.type === "json_schema" && isObject(format.schema) ? { name: typeof format.name === "string" ? format.name : undefined, schema: format.schema } : undefined,
     maxOutputTokens: typeof body.max_output_tokens === "number" ? body.max_output_tokens : undefined,
-    ...(Object.keys(sampling).length ? { sampling } : {}),
+    ...sampled,
     ...tools,
     providerOptions: resolved.providerOptions,
     sessionId: typeof body.previous_response_id === "string" ? body.previous_response_id : x.sessionId,

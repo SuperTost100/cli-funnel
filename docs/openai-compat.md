@@ -32,6 +32,7 @@ Ids are `<provider>/<model>`, for example `claude/claude-sonnet-5`, `codex/gpt-5
 | `image_url` parts with a `data:` URL, in user messages | Image parts. Remote URLs get a 400, so the server never fetches for a client. |
 | `response_format` of type `json_schema` | `responseSchema`. `message.content` is the JSON of the structured answer. With `stream: true` it arrives as one content chunk at the end. |
 | `max_completion_tokens`, `max_tokens` | `maxOutputTokens` |
+| `temperature`, `top_p`, `stop`, `seed` | `sampling`, on providers with `capabilities.sampling` (API providers, OpenAI-compatible servers, Ollama). `stop` takes a string or up to 4 strings. See [Sampling](#sampling). |
 | `stream: true` | Server-sent events, ending with `[DONE]`. Errors that happen before the first event are a normal error response with a 4xx status. Later errors arrive as a `data:` line with an `error` object. |
 | `stream_options.include_usage` | A last chunk with `choices: []` and `usage`, as OpenAI sends it. Without the option, streams carry no usage. |
 | `reasoning_effort` | `selection.effort` |
@@ -40,6 +41,14 @@ Ids are `<provider>/<model>`, for example `claude/claude-sonnet-5`, `codex/gpt-5
 | `message.tool_calls` in the response | The run's `pendingToolCalls`, with `finish_reason: "tool_calls"`. Streams send each call's id and name first, then argument pieces, as OpenAI does. |
 | `usage.prompt_tokens`, `completion_tokens`, `total_tokens` | From the CLI's usage report, when it gives one. |
 | `finish_reason` | `length` for `finishReason: "length"`, `content_filter` for `denied`, `stop` otherwise |
+
+## Sampling
+
+`temperature` must be a number from 0 to 2, `top_p` a number from 0 to 1, `stop` a string or an array of at most 4 strings, and `seed` an integer. Anything else, such as `"temperature": "hot"` or `"top_p": 1.5`, gets a 400 with `code: "invalid_value"` on every provider. A `null` counts as not set.
+
+The CLI providers cannot apply sampling. They ignore the defaults (`temperature` or `top_p` of 1, an empty `stop`, no `seed`) and answer any other value with a 400 and `code: "unsupported_value"`, so a client never gets an answer that quietly ignored its setting. `/v1/responses` follows the same rule for `temperature` and `top_p`. It has no `stop` or `seed`.
+
+Vendors may still refuse values their models do not allow, for example a `temperature` other than 1 on recent reasoning models. That error comes back as the provider's own. The Anthropic API has no seed and ignores it.
 
 ## Extensions
 
@@ -84,7 +93,7 @@ The response `id` is the run's session id, so `previous_response_id` continues t
 | `previous_response_id` | `sessionId`. `x_funnel.sessionId` works too. |
 | `reasoning.effort` | `selection.effort` |
 | `max_output_tokens` | `maxOutputTokens` |
-| `temperature`, `top_p` | `sampling`, on providers with `capabilities.sampling`. Other providers get a 400 for a value other than 1. |
+| `temperature`, `top_p` | `sampling`, on providers with `capabilities.sampling`. Other providers get a 400 for a value other than 1. Ranges are checked as in [Sampling](#sampling). |
 | `text.format` of type `json_schema` | `responseSchema`. The output text is the JSON of the structured answer. |
 | `tools` of type `function`, `tool_choice` | `tools` and `toolChoice`, on providers with `capabilities.tools` |
 | `output` | A `message` item with the answer and a `function_call` item per pending tool call |
@@ -101,4 +110,4 @@ The OpenAI wire format has no approve button. Requests to this endpoint therefor
 
 A CLI runs its own tools. They do not appear as OpenAI `tool_calls`; `x_funnel.toolCalls` lists them. The client's `tools` work only on the API providers, Ollama and OpenAI-compatible servers. The endpoint is stateless unless you send `x_funnel.sessionId`, and some vendors want more than the call back: see the end of [Tool calling](run-options.md#tool-calling).
 
-Fields the server cannot honour get a 400 with `error.param` set, instead of being ignored: `tools` (when not empty) and `tool_choice` (other than `none` or `auto`) on a CLI provider, `n` other than 1, `stop`, `temperature` or `top_p` other than 1, `seed`, and `response_format` of type `json_object`. A body that is not valid JSON, or has no `model` string or no non-empty `messages` array of objects with a `role`, gets a 400 too, and so does a chat with a role other than `system`, `developer`, `user`, `assistant` or `tool`, a content part other than text or an image, a tool message without `tool_call_id`, a tool that is not a function, or a last message that is not from the user or a tool. Bodies over 10 MB get a 413. `maxBodyBytes` on the handler changes the limit.
+Fields the server cannot honour get a 400 with `error.param` set, instead of being ignored: `tools` (when not empty) and `tool_choice` (other than `none` or `auto`) on a CLI provider, `n` other than 1, `temperature`, `top_p`, `stop` and `seed` on a provider without sampling, and `response_format` of type `json_object`. A body that is not valid JSON, or has no `model` string or no non-empty `messages` array of objects with a `role`, gets a 400 too, and so does a chat with a role other than `system`, `developer`, `user`, `assistant` or `tool`, a content part other than text or an image, a tool message without `tool_call_id`, a tool that is not a function, or a last message that is not from the user or a tool. Bodies over 10 MB get a 413. `maxBodyBytes` on the handler changes the limit.
