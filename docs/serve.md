@@ -21,6 +21,12 @@ By default it listens on `127.0.0.1:4747` and answers only requests that come fr
 | `--fs-root <dir>` | home folder and `--cwd` | Folder that runs may use as their project folder and the folder picker may browse. Repeat it for more. |
 | `--approval-timeout <seconds>` | `300` | How long a `supervised` run waits for an answer before the request is denied. |
 | `--timeout <seconds>` | `1800` | Stop each run after this long. `0` turns it off. See [Deadline](run-options.md#deadline). |
+| `--keep-alive` | off | Keep Claude Code and Codex processes between turns and turn on the `/sessions` routes. See [Live sessions](#live-sessions). |
+| `--session-idle <seconds>` | `600` | Close a live session after this long without a turn. Needs `--keep-alive`. |
+| `--max-sessions <n>` | `8` | Most live sessions at once. Needs `--keep-alive`. |
+| `--max-concurrent <n>` | no limit | Most runs at the same time. Runs over it wait in a queue. See [Limit concurrent runs](#limit-concurrent-runs). |
+| `--max-queued <n>` | no limit | Most runs that may wait. One more gets 429. `0` means no waiting. Needs `--max-concurrent`. |
+| `--queue-timeout <seconds>` | no limit | How long a run may wait for a slot. Needs `--max-concurrent`. |
 | `--cors <origin>` | off | One web origin that may call the API from a browser. See [CORS](#cors). |
 | `--log-jsonl <file>` | off | Append one JSON line per run to the file. See [Log runs](#log-runs). |
 | `--log-content` | off | Add the prompt and the answer text to each log line. Needs `--log-jsonl`. |
@@ -39,6 +45,10 @@ By default it listens on `127.0.0.1:4747` and answers only requests that come fr
 | `approvalTimeoutSec` | `--approval-timeout` |
 | `maxRunMs` | `--timeout`, in milliseconds |
 | `cors` | `--cors` |
+| `sessions` | `{ "keepAlive": true, "idleMs": 600000, "max": 8 }`. `keepAlive` is `--keep-alive`, `idleMs` is `--session-idle` in milliseconds, `max` is `--max-sessions`. |
+| `maxConcurrentRuns` | `--max-concurrent`. Also takes `{ "total": 4, "perProvider": { "claude": 2 } }`, which the flag cannot. |
+| `maxQueuedRuns` | `--max-queued` |
+| `queueTimeoutMs` | `--queue-timeout`, in milliseconds |
 | `logJsonl`, `logContent` | `--log-jsonl`, `--log-content` |
 | `allowedHosts` | `CLI_FUNNEL_ALLOWED_HOSTS`, as a list |
 | `tailscale` | `false` stops accepting `*.ts.net` hosts from `tailscale serve` |
@@ -52,6 +62,10 @@ By default it listens on `127.0.0.1:4747` and answers only requests that come fr
   "fsRoots": ["/home/you/code"],
   "cwd": "/home/you/code",
   "approvalTimeoutSec": 120,
+  "sessions": { "keepAlive": true },
+  "maxConcurrentRuns": { "total": 4, "perProvider": { "claude": 2 } },
+  "maxQueuedRuns": 20,
+  "queueTimeoutMs": 120000,
   "cors": "https://app.example.com"
 }
 ```
@@ -88,7 +102,13 @@ The origin check stays on. A page on any other origin is still refused when ther
 
 ## Live sessions
 
-When the handler's funnel has `sessions.keepAlive`, three routes manage the live processes. Without it they answer 409 with code `unsupported`. Token, host and origin checks apply as for every route. `cli-funnel serve` does not turn `keepAlive` on. Use `createHandler(createFunnel({ sessions: { keepAlive: true } }))` to get it.
+`--keep-alive` keeps Claude Code and Codex processes alive between turns, so a follow-up turn skips the startup. It also turns on three routes that manage the live processes. Without it they answer 409 with code `unsupported`. Token, host and origin checks apply as for every route.
+
+```bash
+npx cli-funnel serve --keep-alive --session-idle 300 --max-sessions 4
+```
+
+`--session-idle` and `--max-sessions` tune the pool and are an error without `--keep-alive`. In code, `createFunnel({ sessions: { keepAlive: true } })` does the same.
 
 | Route | Effect |
 | --- | --- |
@@ -97,6 +117,16 @@ When the handler's funnel has `sessions.keepAlive`, three routes manage the live
 | `DELETE /sessions/<id>?provider=codex` | Stops the session's process. 404 when it has none |
 
 `provider` is optional in both. Pass it when two providers could share a session id. The browser client has `sessions()`, `steer()` and `closeSession()`. See [Live sessions](sessions.md#over-http).
+
+## Limit concurrent runs
+
+Every run starts a CLI process or a vendor request. `--max-concurrent` caps how many run at once, and the rest wait in a first-in, first-out queue:
+
+```bash
+npx cli-funnel serve --max-concurrent 4 --max-queued 20 --queue-timeout 120
+```
+
+With 4 runs going, the next 20 wait. The 25th gets 429 with `retry-after`, and a run that waits more than 120 seconds fails with code `busy`. The limits cover `/run`, `/v1/chat/completions` and `/v1/responses`. `--max-queued` and `--queue-timeout` do nothing without a run limit, so `serve` refuses them on their own. To cap each provider, set `maxConcurrentRuns` in the config file. See [Concurrency limits and the queue](run-options.md#concurrency-limits-and-the-queue).
 
 ## Log runs
 
@@ -165,7 +195,7 @@ The [`deploy/`](../deploy) folder has two ready setups that do this.
 
 ### Docker Compose
 
-[`deploy/compose.yaml`](../deploy/compose.yaml) builds an image with `cli-funnel`, Claude Code and Codex, and publishes port 4747 on the tailnet address only. Compose stops when the token or the address is missing.
+[`deploy/compose.yaml`](../deploy/compose.yaml) builds an image from your checkout of this repo, with `cli-funnel`, Claude Code and Codex, and publishes port 4747 on the tailnet address only. Compose stops when the token or the address is missing.
 
 ```bash
 cd deploy
@@ -182,7 +212,7 @@ Sign in once from the container:
 docker compose run --rm funnel login claude
 ```
 
-Edit the `CLIS` build argument in [`deploy/Dockerfile`](../deploy/Dockerfile) to change which CLIs the image holds.
+The build context is the repo root, so run these commands from a clone. The image runs the `cli-funnel` of that clone, not the version on npm. Pull the clone and run `docker compose up -d --build` to update it. Edit the `CLIS` build argument in [`deploy/Dockerfile`](../deploy/Dockerfile) to change which CLIs the image holds. To add flags, put them after `serve` in its `CMD` line.
 
 ### systemd
 

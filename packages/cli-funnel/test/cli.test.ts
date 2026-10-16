@@ -155,6 +155,43 @@ describe("cli serve", () => {
     expect(r.stderr).toContain("--token");
   });
 
+  it("rejects bad session and queue flags with exit 2", async () => {
+    const cases: [string, string, string][] = [["--max-concurrent", "0", "--max-concurrent"], ["--session-idle", "30", "--keep-alive"], ["--max-queued", "5", "--max-concurrent"]];
+    for (const [flag, value, want] of cases) {
+      const r = await runCli(["serve", "--port", "0", flag, value]);
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain(want);
+    }
+  });
+
+  it("serves /sessions with --keep-alive and answers 409 without it", async () => {
+    const start = async (extra: string[]) => {
+      const child = spawn(process.execPath, [cli, "serve", "--port", "0", ...extra], { cwd: work, stdio: ["ignore", "pipe", "pipe"] });
+      const url = await new Promise<string>((resolve, reject) => {
+        let text = "";
+        const timer = setTimeout(() => reject(new Error(`no output: ${text}`)), 10_000);
+        child.stdout.on("data", (d) => {
+          text += d;
+          const m = /listening on (http:\/\/\S+)/.exec(text);
+          if (m?.[1]) (clearTimeout(timer), resolve(m[1]));
+        });
+        child.stderr.on("data", (d) => (text += d));
+      }).catch((err) => (child.kill(), Promise.reject(err)));
+      return { url, stop: () => child.kill() };
+    };
+    const on = await start(["--keep-alive", "--max-sessions", "2", "--max-concurrent", "1"]);
+    const off = await start([]);
+    try {
+      const live = await fetch(`${on.url}/sessions`);
+      expect(live.status).toBe(200);
+      expect(await live.json()).toEqual([]);
+      expect((await fetch(`${off.url}/sessions`)).status).toBe(409);
+    } finally {
+      on.stop();
+      off.stop();
+    }
+  });
+
   it.each(["::1", "[::1]"])("treats %s as local", async (host) => {
     const child = spawn(process.execPath, [cli, "serve", "--host", host, "--port", "0"], { cwd: work, stdio: ["ignore", "pipe", "pipe"] });
     const line = await new Promise<string>((resolve, reject) => {

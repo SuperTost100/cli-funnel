@@ -120,7 +120,7 @@ During a run, Codex still reports a reached limit as a `limit` event. See [Limit
 
 ## Over HTTP
 
-A server made with `sessions.keepAlive` exposes the live sessions. Without it, all three routes answer 409 with code `unsupported`. They sit behind the same token and host checks as every other route.
+`cli-funnel serve --keep-alive` makes a server with `sessions.keepAlive`. `--session-idle <seconds>` and `--max-sessions <n>` set `idleMs` and `max`, and the config file takes them under `sessions`. See [Run the server](serve.md#live-sessions). A server made with `sessions.keepAlive` exposes the live sessions. Without it, all three routes answer 409 with code `unsupported`. They sit behind the same token and host checks as every other route.
 
 | Route | Effect |
 | --- | --- |

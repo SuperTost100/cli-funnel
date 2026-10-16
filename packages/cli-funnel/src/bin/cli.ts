@@ -42,10 +42,18 @@ const HELP = `cli-funnel <command>
   serve [--port 4747] [--host 127.0.0.1] [--cwd dir] [--access level] [--token secret]
         [--config file.json] [--fs-root dir]... [--approval-timeout seconds] [--cors origin]
         [--log-jsonl file] [--log-content] [--timeout seconds]
+        [--keep-alive] [--session-idle seconds] [--max-sessions n]
+        [--max-concurrent n] [--max-queued n] [--queue-timeout seconds]
                                HTTP API, SSE streaming and OpenAI-compatible /v1 endpoints.
                                Flags beat the config file, the file beats the environment. See docs/serve.md.
                                --log-jsonl appends one line per run: ids, timing, usage, no text. --log-content adds the prompt and text.
                                --timeout stops each run after that many seconds, default ${SERVE_TIMEOUT_SEC}. 0 means no limit.
+                               --keep-alive keeps Claude Code and Codex processes between turns and turns on /sessions.
+                               --session-idle closes a live session after that many seconds idle (default 600).
+                               --max-sessions caps live sessions (default 8). Both need --keep-alive.
+                               --max-concurrent caps runs at the same time. Runs over it wait in a queue.
+                               --max-queued caps the waiting runs (more get 429). --queue-timeout stops a wait after that many seconds.
+                               Both need --max-concurrent. Per-provider caps go in the config file.
   mcp [--max-access ${ACCESS_LEVELS.join("|")}] [--fs-root dir]... [--cwd dir]
                                MCP server on stdio. Tools: list_providers, list_models, run.
                                --max-access caps what a run may ask for (default none).
@@ -78,6 +86,12 @@ const { values, positionals } = parseArgs({
     cors: { type: "string" },
     "log-jsonl": { type: "string" },
     "log-content": { type: "boolean" },
+    "keep-alive": { type: "boolean" },
+    "session-idle": { type: "string" },
+    "max-sessions": { type: "string" },
+    "max-concurrent": { type: "string" },
+    "max-queued": { type: "string" },
+    "queue-timeout": { type: "string" },
     json: { type: "boolean" },
     quiet: { type: "boolean" },
     image: { type: "string", multiple: true },
@@ -135,6 +149,7 @@ const serveSettings = positionals[0] === "serve" ? resolveServeOrExit() : undefi
 const logSecrets = [serveSettings?.token, ...(serveConfig.openaiCompatible ?? []).map((e) => e.apiKey), process.env.ANTHROPIC_API_KEY, process.env.OPENAI_API_KEY, process.env.GEMINI_API_KEY];
 const funnel = createFunnel({
   openaiCompatible: openaiCompatible(),
+  sessions: serveSettings?.sessions,
   history: fileHistory(sessions),
   onEvent: serveSettings?.log && jsonlRunLog(serveSettings.log.file, { content: serveSettings.log.content, secrets: logSecrets }),
 });

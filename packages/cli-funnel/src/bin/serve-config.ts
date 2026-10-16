@@ -2,11 +2,12 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type { HandlerOptions } from "../server/handler.js";
 import type { OpenAICompatibleEndpoint } from "../providers/openai-compatible.js";
+import type { SessionOptions } from "../sessions.js";
 import { ACCESS_LEVELS, type AccessLevel } from "../types.js";
 import { UsageError } from "./run-input.js";
 
 /** What `serve --config` reads. The handler options keep their names, so the file mirrors `createHandler`. */
-export interface ServeConfig extends Pick<HandlerOptions, "basePath" | "token" | "allowedHosts" | "tailscale" | "fsRoots" | "approvalTimeoutSec" | "maxRunMs" | "cors" | "openai"> {
+export interface ServeConfig extends Pick<HandlerOptions, "basePath" | "token" | "allowedHosts" | "tailscale" | "fsRoots" | "approvalTimeoutSec" | "maxRunMs" | "cors" | "openai" | "maxConcurrentRuns" | "maxQueuedRuns" | "queueTimeoutMs"> {
   port?: number;
   host?: string;
   /** Project folder for the OpenAI-compatible endpoints. Same as `openai.cwd`. */
@@ -18,11 +19,13 @@ export interface ServeConfig extends Pick<HandlerOptions, "basePath" | "token" |
   logJsonl?: string;
   /** Add the prompt and the answer text to each log line. */
   logContent?: boolean;
+  /** Live sessions, as in `createFunnel({ sessions })`. `idleMs` and `max` need `keepAlive: true`. */
+  sessions?: SessionOptions;
 }
 
 const KEYS = [
   "port", "host", "cwd", "access", "token", "allowedHosts", "tailscale", "fsRoots", "approvalTimeoutSec", "cors", "basePath", "openai", "openaiCompatible",
-  "logJsonl", "logContent", "maxRunMs",
+  "logJsonl", "logContent", "maxRunMs", "sessions", "maxConcurrentRuns", "maxQueuedRuns", "queueTimeoutMs",
 ] as const;
 
 /** How long `serve` lets a run take when neither --timeout nor `maxRunMs` says otherwise. */
@@ -30,6 +33,16 @@ export const SERVE_TIMEOUT_SEC = 1800;
 
 const isStrings = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+const isCount = (v: unknown, min: number): v is number => Number.isInteger(v) && (v as number) >= min;
+const SESSION_KEYS = ["keepAlive", "idleMs", "max"];
+
+/** `maxConcurrentRuns`: a count, or `{ total?, perProvider? }` where `perProvider` is a count or a count per provider id. */
+function isConcurrency(v: unknown): boolean {
+  if (isCount(v, 1)) return true;
+  if (!isObject(v) || Object.keys(v).some((k) => k !== "total" && k !== "perProvider")) return false;
+  const per = v.perProvider;
+  return (v.total === undefined || isCount(v.total, 1)) && (per === undefined || isCount(per, 1) || (isObject(per) && Object.values(per).every((n) => isCount(n, 1))));
+}
 
 /**
  * Reads and checks a serve config file. A key it does not know is an error, because a misspelled `fsRoots`
@@ -62,6 +75,17 @@ export function parseServeConfig(raw: unknown, path: string): ServeConfig {
   need("fsRoots", isStrings(raw.fsRoots), "a list of folders");
   need("approvalTimeoutSec", typeof raw.approvalTimeoutSec === "number" && raw.approvalTimeoutSec > 0, "a positive number of seconds");
   need("maxRunMs", typeof raw.maxRunMs === "number" && raw.maxRunMs >= 0, "a number of milliseconds, 0 for no limit");
+  need("maxConcurrentRuns", isConcurrency(raw.maxConcurrentRuns), "a whole number above 0, or { total, perProvider } with whole numbers above 0");
+  need("maxQueuedRuns", isCount(raw.maxQueuedRuns, 0), "a whole number, 0 for no waiting");
+  need("queueTimeoutMs", typeof raw.queueTimeoutMs === "number" && raw.queueTimeoutMs > 0, "a positive number of milliseconds");
+  const sessions = raw.sessions;
+  need("sessions", isObject(sessions), "an object with keepAlive, idleMs and max");
+  if (isObject(sessions)) {
+    for (const k of Object.keys(sessions)) if (!SESSION_KEYS.includes(k)) throw bad(`unknown key "sessions.${k}". Known keys: ${SESSION_KEYS.join(", ")}.`);
+    if (sessions.keepAlive !== undefined && typeof sessions.keepAlive !== "boolean") throw bad(`"sessions.keepAlive" must be true or false.`);
+    if (sessions.idleMs !== undefined && !(typeof sessions.idleMs === "number" && sessions.idleMs > 0)) throw bad(`"sessions.idleMs" must be a positive number of milliseconds.`);
+    if (sessions.max !== undefined && !isCount(sessions.max, 1)) throw bad(`"sessions.max" must be a whole number above 0.`);
+  }
   need("cors", typeof raw.cors === "string", "one origin");
   need("basePath", typeof raw.basePath === "string", "a string");
   need("openai", isObject(raw.openai), "an object with cwd and access");
@@ -90,6 +114,12 @@ export interface ServeFlags {
   cors?: string;
   "log-jsonl"?: string;
   "log-content"?: boolean;
+  "keep-alive"?: boolean;
+  "session-idle"?: string;
+  "max-sessions"?: string;
+  "max-concurrent"?: string;
+  "max-queued"?: string;
+  "queue-timeout"?: string;
 }
 
 export interface ServeSettings {
@@ -99,6 +129,8 @@ export interface ServeSettings {
   port: number;
   token?: string;
   handler: HandlerOptions;
+  /** Set when live sessions are on. Pass it to `createFunnel({ sessions })`. */
+  sessions?: SessionOptions;
   openaiCompatible?: OpenAICompatibleEndpoint[];
 }
 
@@ -113,6 +145,12 @@ const positive = (flag: string, v: string) => {
   const n = Number(v);
   if (!Number.isFinite(n) || n <= 0) throw new UsageError(`${flag} must be a positive number, got "${v}".`);
   return n;
+};
+
+/** A whole number of at least `min`. */
+const count = (flag: string, v: string, min: number) => {
+  if (!/^\d+$/.test(v.trim()) || Number(v) < min) throw new UsageError(`${flag} must be a whole number ${min === 0 ? "of 0 or more" : `above ${min - 1}`}, got "${v}".`);
+  return Number(v);
 };
 
 /**
@@ -135,6 +173,18 @@ export function resolveServe(flags: ServeFlags, config: ServeConfig, env: NodeJS
   const logFile = flags["log-jsonl"] ?? config.logJsonl;
   const logContent = flags["log-content"] ?? config.logContent ?? false;
   if (logContent && !logFile) throw new UsageError("--log-content needs --log-jsonl, since it only adds fields to that log.");
+  const keepAlive = flags["keep-alive"] ?? config.sessions?.keepAlive ?? false;
+  const idleMs = flags["session-idle"] !== undefined ? positive("--session-idle", flags["session-idle"]) * 1000 : config.sessions?.idleMs;
+  const maxSessions = flags["max-sessions"] !== undefined ? count("--max-sessions", flags["max-sessions"], 1) : config.sessions?.max;
+  if (!keepAlive && (idleMs !== undefined || maxSessions !== undefined)) {
+    throw new UsageError("--session-idle and --max-sessions need --keep-alive, since they only tune live sessions.");
+  }
+  const maxConcurrentRuns = flags["max-concurrent"] !== undefined ? count("--max-concurrent", flags["max-concurrent"], 1) : config.maxConcurrentRuns;
+  const maxQueuedRuns = flags["max-queued"] !== undefined ? count("--max-queued", flags["max-queued"], 0) : config.maxQueuedRuns;
+  const queueTimeoutMs = flags["queue-timeout"] !== undefined ? positive("--queue-timeout", flags["queue-timeout"]) * 1000 : config.queueTimeoutMs;
+  if ((maxQueuedRuns !== undefined || queueTimeoutMs !== undefined) && maxConcurrentRuns === undefined) {
+    throw new UsageError("--max-queued and --queue-timeout need --max-concurrent, since nothing queues without a run limit.");
+  }
   return {
     host: flags.host ?? config.host ?? "127.0.0.1",
     port,
@@ -150,7 +200,11 @@ export function resolveServe(flags: ServeFlags, config: ServeConfig, env: NodeJS
       approvalTimeoutSec: timeout,
       maxRunMs,
       cors: flags.cors ?? config.cors,
+      maxConcurrentRuns,
+      maxQueuedRuns,
+      queueTimeoutMs,
     },
+    sessions: keepAlive ? { keepAlive, idleMs, max: maxSessions } : undefined,
     openaiCompatible: config.openaiCompatible,
   };
 }
