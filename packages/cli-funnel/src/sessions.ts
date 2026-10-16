@@ -54,6 +54,8 @@ export function fingerprint(input: RunInput): string {
     input.responseSchema ?? null,
     Object.entries(input.env ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
     Boolean(input.onApproval),
+    // Flags such as --add-dir are fixed when the process starts, so other options need another process.
+    (input.providerOptions as Record<string, unknown> | undefined)?.[s.provider] ?? null,
   ]);
 }
 

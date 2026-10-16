@@ -69,6 +69,56 @@ cli-funnel does not validate the answer against the schema. `schema: "native"` m
 
 Codex, the Anthropic API and the OpenAI API need `additionalProperties: false` on every object in the schema. The OpenAI API also needs every property in `required`, because it enforces the schema with `strict: true`.
 
+## Provider options
+
+`providerOptions` passes settings that only one CLI has. It is keyed by provider id, and a run reads only the entry for `selection.provider`, so one object can hold settings for several CLIs.
+
+```ts
+await funnel.run({
+  selection: { provider: "claude", model: "claude-sonnet-5", cwd: "/srv/app", access: "accept-edits" },
+  prompt: "Update the shared types",
+  providerOptions: {
+    claude: { addDirs: ["/srv/shared"], disallowedTools: ["WebFetch"], maxBudgetUsd: 2 },
+    codex: { webSearch: "cached" },
+  },
+});
+```
+
+Options never give the agent more than `selection.access` allows. An option that would fails the run with `invalid-selection` before the CLI starts. So does an unknown key, a value of the wrong type, or an entry for a provider that takes no options. Nothing is dropped silently.
+
+| Provider | Option | `none` | `supervised` | `accept-edits` | `auto` | `full` |
+| --- | --- | --- | --- | --- | --- | --- |
+| Claude Code | `allowedTools` | refused | refused | refused | refused | yes |
+| Claude Code | `mcpConfig` | refused | refused | refused | refused | yes |
+| Claude Code | `addDirs`, `agents` | refused | yes | yes | yes | yes |
+| Claude Code | `disallowedTools`, `fallbackModel`, `maxBudgetUsd`, `forkSession`, `betas` | yes | yes | yes | yes | yes |
+| Codex | `approvalPolicy` | `untrusted` | `untrusted` | `untrusted` | `untrusted`, `on-request` | any |
+| Codex | `webSearch` | `disabled` only | `disabled`, `cached`, `indexed` | `disabled`, `cached`, `indexed` | yes | yes |
+| Codex | `ephemeral` | yes | yes | yes | yes | yes |
+| Cursor Agent | `addDirs` | refused | | | yes | yes |
+| Cursor Agent | `sandbox` | `enabled` only | | | `enabled` only | yes |
+| Cursor Agent | `mode: "plan"` | refused | | | yes | yes |
+| Antigravity | `addDirs` | refused | | yes | | yes |
+| Antigravity | `printTimeoutSec` | yes | | yes | | yes |
+
+Empty cells are levels the provider does not offer. Each provider page lists the flag behind every option: [Claude Code](providers/claude.md), [Codex](providers/codex.md), [Cursor Agent](providers/agent.md) and [Antigravity](providers/antigravity.md).
+
+Why these lines:
+
+- `allowedTools` skips the approval step for the tools it names. Below `full` that always gives the agent more than the level allows.
+- `mcpConfig` starts each stdio MCP server as a command before any permission check, so it needs `full`.
+- `agents` accepts only `description`, `prompt`, `tools`, `disallowedTools` and `model` per subagent. Keys such as `permissionMode`, `mcpServers` and `hooks` are refused.
+- `addDirs` takes absolute paths. Through the HTTP server each one must sit inside the handler's `fsRoots`, the same check `cwd` gets, or the request fails with 403. The server passes the resolved real path to the CLI, so a symlink changed after the check cannot point the run elsewhere.
+- At `none` Cursor Agent and Antigravity run in an empty folder cli-funnel owns. Another directory would undo that, so `addDirs` is refused there. Cursor's plan mode is refused there too, since nobody has tested where it writes its plan.
+- Codex `webSearch: "live"` fetches pages and nobody approves it, so only `auto` and `full` accept it. `"cached"` and `"indexed"` search an index and are accepted from `supervised` up.
+- `fallbackModel` and a subagent's `model` go to the CLI unchecked. The catalog check that `selection.model` gets does not apply to them.
+
+On the command line, `--opt key=value` sets one entry for the provider you run. Values that parse as JSON become JSON, and a repeated key builds a list:
+
+```bash
+cli-funnel run claude claude-sonnet-5 "Update the shared types" --opt addDirs=/srv/shared --opt maxBudgetUsd=2
+```
+
 ## Text only: access `none`
 
 `none` is for apps that want a model, not an agent. Nothing on the machine changes: no file writes, no commands, no MCP tool calls. Point `cwd` at an empty folder anyway, since some CLIs can still read files.

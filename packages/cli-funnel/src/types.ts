@@ -250,7 +250,81 @@ export interface RunInput {
   env?: Record<string, string>;
   /** Where providers without server-side sessions keep the conversation. Default: the funnel's `history` option. */
   history?: HistoryStore;
+  /**
+   * Extra settings for one CLI, keyed by provider id. Only the entry for `selection.provider` is used. An option that
+   * would give the agent more than `selection.access` allows fails the run with `invalid-selection`.
+   */
+  providerOptions?: ProviderOptions;
 }
+
+/** A custom Claude Code subagent. */
+export interface ClaudeAgent {
+  description: string;
+  prompt: string;
+  tools?: string[];
+  disallowedTools?: string[];
+  model?: string;
+}
+
+/** Claude Code settings. See docs/providers/claude.md for the access levels each one needs. */
+export interface ClaudeOptions {
+  /** Tools that run without asking. This only widens access, so only `full` accepts it. */
+  allowedTools?: string[];
+  /** Tools the agent may not use. */
+  disallowedTools?: string[];
+  /** More directories the agent may work in. Absolute paths. Refused at `none`. */
+  addDirs?: string[];
+  /** MCP servers, as `{ mcpServers: { ... } }`. Starting a server runs a command, so only `full` accepts it. */
+  mcpConfig?: Record<string, unknown>;
+  /** Custom subagents keyed by name. Refused at `none`. */
+  agents?: Record<string, ClaudeAgent>;
+  /** Models to try in order when the selected one is overloaded, comma-separated. */
+  fallbackModel?: string;
+  /** Stop once the run's list-price estimate passes this many dollars. */
+  maxBudgetUsd?: number;
+  /** With `sessionId`, continue in a new session and leave the old one as it was. */
+  forkSession?: boolean;
+  /** Beta headers. Only API key logins use them. */
+  betas?: string[];
+}
+
+/** Codex settings. See docs/providers/codex.md. */
+export interface CodexOptions {
+  /** Start a thread Codex does not save. Not with `sessionId`. */
+  ephemeral?: boolean;
+  /** Codex's `web_search` setting. `none` accepts only "disabled". */
+  webSearch?: "disabled" | "cached" | "indexed" | "live";
+  /** Ask for approval at least as often as the access level does. A policy that asks less is refused. */
+  approvalPolicy?: "untrusted" | "on-request" | "never";
+}
+
+/** Cursor Agent settings. See docs/providers/agent.md. */
+export interface AgentOptions {
+  /** More workspace roots. Absolute paths. Refused at `none`. */
+  addDirs?: string[];
+  /** Turn the CLI's sandbox on or off. "disabled" only at `full`. */
+  sandbox?: "enabled" | "disabled";
+  /** Plan mode: the agent proposes changes and makes none. */
+  mode?: "plan";
+}
+
+/** Antigravity settings. See docs/providers/antigravity.md. */
+export interface AntigravityOptions {
+  /** More workspace directories. Absolute paths. Refused at `none`. */
+  addDirs?: string[];
+  /** End the turn after this many seconds. */
+  printTimeoutSec?: number;
+}
+
+export interface ProviderOptions {
+  claude?: ClaudeOptions;
+  codex?: CodexOptions;
+  agent?: AgentOptions;
+  antigravity?: AntigravityOptions;
+}
+
+/** Provider ids that take `providerOptions`. */
+export const PROVIDER_OPTION_IDS: readonly (keyof ProviderOptions)[] = ["claude", "codex", "agent", "antigravity"];
 
 /**
  * Conversation storage for providers that keep no session on their side: the API providers, Ollama and

@@ -46,6 +46,17 @@ Denied tools appear as `tool.end` events whose error starts with `denied:`. That
 
 The CLI has no system prompt flag, so `system` goes in front of the prompt inside `<instructions>`. `responseSchema` goes to `--json-schema`, as a path to a private temp file when the schema is over 4 KB (removed after the run), and the `result` event carries the parsed answer in `structured_output`. Verified live. Images are refused.
 
+## Provider options
+
+`providerOptions.antigravity` maps to these flags, checked against 1.3.6 and run live:
+
+| Option | Flag | Access levels |
+| --- | --- | --- |
+| `addDirs: string[]` | `--add-dir=<dir>`, absolute paths | `accept-edits`, `full` |
+| `printTimeoutSec: number` | `--print-timeout=<n>s` | all |
+
+At `none` the run happens in a folder that holds only the deny hook, so `addDirs` is refused there.
+
 ## Models
 
 `models()` runs `agy models` and merges the result with `data/models/antigravity.json`, which is the offline fallback.

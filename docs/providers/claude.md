@@ -46,6 +46,24 @@ Approvals work. The CLI writes a `control_request` (subtype `can_use_tool`) to s
 
 `system` goes to `--system-prompt` at `none`, which replaces Claude Code's own prompt, and to `--append-system-prompt` at the other levels. Over 4 KB the text goes to a private temp file instead (`--system-prompt-file` or `--append-system-prompt-file`), which is removed after the run, because Linux refuses one argument over 128 KiB and Windows limits the whole command line to 32,767 characters. `--json-schema` takes only inline JSON, so a very large schema can still hit that limit. Images go as `image` blocks in the stream-json user message. `responseSchema` goes to `--json-schema`, and the `result` message carries the parsed answer in `structured_output`. All three were verified live on 2.1.285. A `none` run with an image and a schema used about 1,200 input tokens.
 
+## Provider options
+
+`providerOptions.claude` maps to flags checked against 2.1.300. Every value goes in `--flag=value` form, one flag per list item, so a value that starts with a dash is never read as a flag.
+
+| Option | Flag | Access levels |
+| --- | --- | --- |
+| `allowedTools: string[]` | `--allowed-tools=<tool>` | `full` only |
+| `disallowedTools: string[]` | `--disallowed-tools=<tool>` | all |
+| `addDirs: string[]` | `--add-dir=<dir>`, absolute paths | all but `none` |
+| `mcpConfig: object` | `--mcp-config=<json>` | `full` only |
+| `agents: Record<string, ClaudeAgent>` | `--agents=<json>` | all but `none` |
+| `fallbackModel: string` | `--fallback-model=<ids>` | all |
+| `maxBudgetUsd: number` | `--max-budget-usd=<n>` | all |
+| `forkSession: boolean` | `--fork-session`, needs `sessionId` | all |
+| `betas: string[]` | `--betas=<header>` | all |
+
+`mcpConfig` and `agents` take objects, not file paths. A subagent may set `description`, `prompt`, `tools`, `disallowedTools` and `model`. `maxBudgetUsd` compares against the CLI's list-price estimate, which is not what a subscription pays. `betas` only matters for API key logins. See [Run options](../run-options.md#provider-options) for why each limit is where it is.
+
 ## Models
 
 Claude has no list command, so models come from `data/models/claude.json`.

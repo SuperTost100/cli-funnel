@@ -1,5 +1,6 @@
-import { FunnelError, type AccessLevel, type ApprovalDecision, type ApprovalRequest, type AuthStatus, type Capabilities, type FunnelEvent, type Provider, type ProviderContext, type RunInput } from "../../types.js";
+import { ACCESS_LEVELS, FunnelError, type AccessLevel, type ApprovalDecision, type ApprovalRequest, type AuthStatus, type Capabilities, type FunnelEvent, type Provider, type ProviderContext, type RunInput } from "../../types.js";
 import { detectInstallation, findBinary, runLogout, runUpdate, spawnLogin } from "../base.js";
+import { bool, dirList, flag, invalidOption, object, optionsFor, positive, requireAccess, str, stringList } from "../options.js";
 import { fromManifest, loadManifest, mergeModels } from "../../catalog/manifest.js";
 import { needsArgFile, writeArgFile, type ArgFile } from "../../util/argfile.js";
 import { compareVersions, exec, spawnStream, type Streamed } from "../../util/process.js";
@@ -66,6 +67,69 @@ export function buildArgs(input: RunInput, systemFile?: string): string[] {
   // Without this flag the CLI denies anything that needs a prompt instead of asking.
   if (selection.access !== "full" && selection.access !== "none" && input.onApproval) args.push("--permission-prompt-tool", "stdio");
   if (input.sessionId) args.push("--resume", input.sessionId);
+  args.push(...optionArgs(input));
+  return args;
+}
+
+const OPTION_KEYS = ["allowedTools", "disallowedTools", "addDirs", "mcpConfig", "agents", "fallbackModel", "maxBudgetUsd", "forkSession", "betas"];
+const AGENT_KEYS = ["description", "prompt", "tools", "disallowedTools", "model"];
+const NOT_NONE = ACCESS_LEVELS.filter((a) => a !== "none");
+
+/** Checks one custom subagent. Other keys, such as `permissionMode`, `mcpServers` or `hooks`, could widen access. */
+function agentDefinition(name: string, value: unknown): Record<string, unknown> {
+  const where = `agents.${name}`;
+  const def = object(value, where)!;
+  const unknown = Object.keys(def).filter((k) => !AGENT_KEYS.includes(k));
+  if (unknown.length) invalidOption(`Unknown key ${unknown.join(", ")} in ${where}. Known: ${AGENT_KEYS.join(", ")}.`);
+  if (!str(def.description, `${where}.description`) || !str(def.prompt, `${where}.prompt`)) {
+    invalidOption(`${where} needs a description and a prompt.`);
+  }
+  stringList(def.tools, `${where}.tools`);
+  stringList(def.disallowedTools, `${where}.disallowedTools`);
+  str(def.model, `${where}.model`);
+  return def;
+}
+
+/**
+ * Flags for `providerOptions.claude`. Throws `invalid-selection` when an option would widen `selection.access`.
+ * Values use the `--flag=value` form, so a value that starts with a dash is never read as a flag.
+ */
+export function optionArgs(input: RunInput): string[] {
+  const o = optionsFor(input, "claude", OPTION_KEYS);
+  const { access } = requireMachine(input.selection);
+  const args: string[] = [];
+  const allowed = stringList(o.allowedTools, "allowedTools");
+  if (allowed) {
+    requireAccess(access, ["full"], "allowedTools");
+    for (const t of allowed) args.push(flag("--allowed-tools", t));
+  }
+  for (const t of stringList(o.disallowedTools, "disallowedTools") ?? []) args.push(flag("--disallowed-tools", t));
+  const dirs = dirList(o.addDirs, "addDirs");
+  if (dirs) {
+    requireAccess(access, NOT_NONE, "addDirs");
+    for (const d of dirs) args.push(flag("--add-dir", d));
+  }
+  const mcp = object(o.mcpConfig, "mcpConfig");
+  if (mcp) {
+    // A stdio MCP server is a command that starts before any permission check.
+    requireAccess(access, ["full"], "mcpConfig");
+    args.push(flag("--mcp-config", JSON.stringify(mcp)));
+  }
+  const agents = object(o.agents, "agents");
+  if (agents) {
+    requireAccess(access, NOT_NONE, "agents");
+    for (const [name, def] of Object.entries(agents)) agentDefinition(name, def);
+    args.push(flag("--agents", JSON.stringify(agents)));
+  }
+  const fallback = str(o.fallbackModel, "fallbackModel");
+  if (fallback) args.push(flag("--fallback-model", fallback));
+  const budget = positive(o.maxBudgetUsd, "maxBudgetUsd");
+  if (budget !== undefined) args.push(flag("--max-budget-usd", budget));
+  if (bool(o.forkSession, "forkSession")) {
+    if (!input.sessionId) invalidOption("forkSession needs a sessionId to fork from.");
+    args.push("--fork-session");
+  }
+  for (const b of stringList(o.betas, "betas") ?? []) args.push(flag("--betas", b));
   return args;
 }
 

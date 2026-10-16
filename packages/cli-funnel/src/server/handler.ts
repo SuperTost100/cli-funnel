@@ -14,7 +14,7 @@ import {
   type Selection,
 } from "../types.js";
 import { BodyError, DEFAULT_MAX_BODY_BYTES, readJson } from "./body.js";
-import { handleOpenAI, type OpenAIDefaults, type TrackedRun } from "./openai.js";
+import { handleOpenAI, resolveOptionDirs, type OpenAIDefaults, type TrackedRun } from "./openai.js";
 import { json, sse, sseHeaders } from "./sse.js";
 import { BUSY_RETRY_AFTER_SEC, RunQueue, waitForSlot, type RunLimits } from "../queue.js";
 
@@ -164,13 +164,17 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
   };
 
   async function run(req: Request): Promise<Response> {
-    const body = (await readBody(req)) as Pick<RunInput, "prompt" | "sessionId" | "system" | "attachments" | "responseSchema" | "maxOutputTokens"> & {
+    const body = (await readBody(req)) as Pick<RunInput, "prompt" | "sessionId" | "system" | "attachments" | "responseSchema" | "maxOutputTokens" | "providerOptions"> & {
       selection: Selection;
     };
     // Providers with no access levels (Ollama, API providers) have no machine to protect, so cwd means nothing to them.
     const provider = funnel.providers[body.selection?.provider];
     if ((!provider || provider.capabilities.access.length > 0) && !cwdAllowed(body.selection?.cwd ?? "")) {
       return json({ error: "cwd does not exist or is outside the allowed roots. Set fsRoots on the handler." }, 403);
+    }
+    const providerOptions = resolveOptionDirs(body.providerOptions, cwdAllowed);
+    if (providerOptions === null) {
+      return json({ error: "An addDirs entry in providerOptions does not exist or is outside the allowed roots. Set fsRoots on the handler." }, 403);
     }
     if (queue?.full(body.selection.provider)) {
       return Response.json({ error: "Too many runs are waiting. Try again later.", code: "busy" }, { status: 429, headers: { "retry-after": String(BUSY_RETRY_AFTER_SEC) } });
@@ -200,6 +204,7 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
       sessionId: body.sessionId,
       signal: tracked.signal,
       timeoutMs: tracked.timeoutMs,
+      providerOptions,
       onApproval: (request) =>
         new Promise<ApprovalDecision>((resolveDecision) => {
           if (over || tracked.signal.aborted) return resolveDecision("deny");

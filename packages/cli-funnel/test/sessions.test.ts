@@ -435,8 +435,15 @@ describe("fingerprint", () => {
       { ...base, selection: { ...base.selection, effort: "high" } },
       { ...base, selection: { ...base.selection, access: "full" as const } },
       { ...base, selection: { ...base.selection, cwd: "/" } },
+      claude("a", { providerOptions: { claude: { addDirs: ["/srv"] } } }),
     ]) {
       expect(fingerprint(other)).not.toBe(fingerprint(base));
     }
+  });
+
+  it("keys on the selected provider's options only", () => {
+    const withOpts = claude("a", { providerOptions: { claude: { maxBudgetUsd: 1 } } });
+    expect(fingerprint(claude("a", { providerOptions: { claude: { maxBudgetUsd: 2 } } }))).not.toBe(fingerprint(withOpts));
+    expect(fingerprint(claude("a", { providerOptions: { codex: { webSearch: "live" } } }))).toBe(fingerprint(claude("a")));
   });
 });

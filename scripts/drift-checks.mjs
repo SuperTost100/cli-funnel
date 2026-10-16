@@ -4,7 +4,7 @@ export const CHECKS = {
   claude: {
     bin: "claude",
     help: [
-      [["--help"], ["--output-format", "--input-format", "--include-partial-messages", "--permission-mode", "--permission-prompt-tool", "--model", "--effort", "--resume", "--verbose", "--tools", "--strict-mcp-config", "--setting-sources", "--json-schema", "--system-prompt", "--append-system-prompt", "--system-prompt[-file]", "--append-system-prompt[-file]"]],
+      [["--help"], ["--output-format", "--input-format", "--include-partial-messages", "--permission-mode", "--permission-prompt-tool", "--model", "--effort", "--resume", "--verbose", "--tools", "--strict-mcp-config", "--setting-sources", "--json-schema", "--system-prompt", "--append-system-prompt", "--system-prompt[-file]", "--append-system-prompt[-file]", "--allowed-tools", "--disallowed-tools", "--add-dir", "--mcp-config", "--agents", "--fallback-model", "--max-budget-usd", "--fork-session", "--betas"]],
       [["auth", "--help"], ["login", "logout", "status"]],
     ],
   },
@@ -20,13 +20,13 @@ export const CHECKS = {
   agent: {
     bin: "agent",
     help: [
-      [["--help"], ["--output-format", "--stream-partial-output", "--model", "--list-models", "--force", "--auto-review", "--mode", "--workspace", "--trust", "--resume"]],
+      [["--help"], ["--output-format", "--stream-partial-output", "--model", "--list-models", "--force", "--auto-review", "--mode", "--workspace", "--trust", "--resume", "--add-dir", "--sandbox", '"plan"']],
       [["status", "--help"], ["--format"]],
       [["about", "--help"], ["--format"]],
     ],
   },
   antigravity: {
     bin: "agy",
-    help: [[["--help"], ["--output-format", "--model", "--effort", "--mode", "--conversation", "--dangerously-skip-permissions", "--print", "--input-format", "--json-schema", "path to a schema file", "models"]]],
+    help: [[["--help"], ["--output-format", "--model", "--effort", "--mode", "--conversation", "--dangerously-skip-permissions", "--print", "--input-format", "--json-schema", "path to a schema file", "--add-dir", "--print-timeout", "models"]]],
   },
 };

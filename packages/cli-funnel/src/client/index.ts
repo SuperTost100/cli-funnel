@@ -96,7 +96,7 @@ export function createClient(options: ClientOptions) {
 
     /** Streams run events. The first event is `{ type: "run", runId }`, needed to answer approvals. */
     run: (
-      input: Pick<RunInput, "prompt" | "sessionId" | "system" | "attachments" | "responseSchema" | "maxOutputTokens"> & { selection: Selection },
+      input: Pick<RunInput, "prompt" | "sessionId" | "system" | "attachments" | "responseSchema" | "maxOutputTokens" | "providerOptions"> & { selection: Selection },
       signal?: AbortSignal,
     ) =>
       events<RunEvent>("/run", input, signal),

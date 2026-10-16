@@ -1,6 +1,6 @@
 import { observeRun } from "./run-log.js";
 import { loadManifest } from "./catalog/manifest.js";
-import { validateSelection } from "./selection.js";
+import { validateProviderOptions, validateSelection } from "./selection.js";
 import { SessionPool, type LiveSessionInfo, type SessionOptions } from "./sessions.js";
 import { createRunFolder } from "./providers/base.js";
 import { PROVIDERS } from "./providers/index.js";
@@ -165,6 +165,7 @@ export function createFunnel(options: FunnelOptions = {}) {
     if (!install.installed) throw new FunnelError(install.detail ?? `${p.displayName} CLI is not installed.`, "not-installed");
     const models = options.allowUnlistedModels ? undefined : await modelsOf(p);
     validateSelection(input.selection, p, models);
+    validateProviderOptions(input.providerOptions);
     if (p.capabilities.access.length > 0 && input.selection.access === "supervised" && !input.onApproval) {
       throw new FunnelError('access "supervised" needs an onApproval callback.', "invalid-selection");
     }

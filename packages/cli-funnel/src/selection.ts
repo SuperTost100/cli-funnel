@@ -1,4 +1,4 @@
-import { ACCESS_LEVELS, FunnelError, type AccessLevel, type ModelInfo, type Provider, type Selection } from "./types.js";
+import { ACCESS_LEVELS, FunnelError, PROVIDER_OPTION_IDS, type AccessLevel, type ModelInfo, type Provider, type Selection } from "./types.js";
 import { existsSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 
@@ -43,5 +43,17 @@ export function validateSelection(selection: Selection, provider: Provider, mode
     if (selection.contextWindow && !model.contextWindows.includes(selection.contextWindow)) {
       bad(`${model.id} does not offer a ${selection.contextWindow} token context window.`);
     }
+  }
+}
+
+/** Throws FunnelError("invalid-selection") for `providerOptions` keyed by an id that takes no options. Providers check the values. */
+export function validateProviderOptions(options: unknown): void {
+  if (options === undefined) return;
+  if (typeof options !== "object" || options === null || Array.isArray(options)) {
+    throw new FunnelError("providerOptions must be an object keyed by provider id.", "invalid-selection");
+  }
+  const unknown = Object.keys(options).filter((k) => !(PROVIDER_OPTION_IDS as readonly string[]).includes(k));
+  if (unknown.length) {
+    throw new FunnelError(`${unknown.join(", ")} takes no providerOptions. Only ${PROVIDER_OPTION_IDS.join(", ")} do.`, "invalid-selection");
   }
 }
