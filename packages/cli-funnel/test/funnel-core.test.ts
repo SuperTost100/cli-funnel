@@ -191,7 +191,11 @@ describe("provider cache (#53)", () => {
 
   it("serves overview() from the same cache", async () => {
     const detect = vi.fn(async () => installed);
-    const funnel = createFunnel({ providers: { claude: fakeProvider({ detect }) } });
+    // overview() probes every provider, so the built-in ones are faked too. Otherwise it runs the real CLIs and Ollama.
+    const others = (["codex", "agent", "antigravity", "anthropic-api", "openai-api", "gemini-api", "ollama"] as const).map(
+      (id) => [id, fakeProvider({ id, detect: async () => ({ installed: false, testedRange: { min: "0" } }) })] as const,
+    );
+    const funnel = createFunnel({ providers: { claude: fakeProvider({ detect }), ...Object.fromEntries(others) } });
     await funnel.run(input());
     const overview = await funnel.overview();
     expect(overview.find((o) => o.id === "claude")?.installation.installed).toBe(true);
