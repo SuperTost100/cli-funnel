@@ -46,6 +46,8 @@ export interface Capabilities {
   images: boolean;
   /** True when the provider sends `RunInput.messages` as separate turns. Other providers get them rendered into `prompt`. */
   messages?: boolean;
+  /** True when the provider takes `RunInput.tools` and tool parts in `messages`. The CLIs run their own tools instead. */
+  tools?: boolean;
   /** `native` when the CLI or API takes a system prompt. `prompt` means cli-funnel puts it in front of the prompt. */
   system: "native" | "prompt";
   /** `native` when the CLI or API enforces `responseSchema`. `prompt` means the schema is only asked for in the prompt. */
@@ -106,8 +108,43 @@ export interface TextPart {
   text: string;
 }
 
-/** One piece of a message. Images use the same shape as attachments. */
-export type ContentPart = TextPart | ImageAttachment;
+/** A call the model made to one of the tools in `RunInput.tools`. */
+export interface ToolCall {
+  id: string;
+  name: string;
+  /** The parsed arguments. The raw string when the model wrote arguments that are not JSON. */
+  input: unknown;
+}
+
+/** In an assistant message: a tool call from an earlier turn. */
+export interface ToolCallPart extends ToolCall {
+  type: "tool_call";
+}
+
+/** In a user message: what your code returned for a tool call. */
+export interface ToolResultPart {
+  type: "tool_result";
+  /** The `id` of the tool call it answers. */
+  toolCallId: string;
+  output: string;
+  /** True when the tool failed and `output` is the error. */
+  isError?: boolean;
+}
+
+/** One piece of a message. Images use the same shape as attachments. Tool parts need `capabilities.tools`. */
+export type ContentPart = TextPart | ImageAttachment | ToolCallPart | ToolResultPart;
+
+/** A tool the model may call. Your code runs it; the model only asks. */
+export interface ToolDefinition {
+  /** Letters, digits, `_` and `-`, up to 64 characters. The vendors reject other names. */
+  name: string;
+  description?: string;
+  /** JSON Schema of the arguments object. Default: an object with no properties. */
+  parameters?: Record<string, unknown>;
+}
+
+/** `required` makes the model call some tool; `{ name }` makes it call that one. */
+export type ToolChoice = "auto" | "none" | "required" | { name: string };
 
 /**
  * One turn of a conversation, for `RunInput.messages`. A string `content` is the same as one text part.
@@ -125,8 +162,11 @@ export interface ResponseSchema {
   schema: Record<string, unknown>;
 }
 
-/** `length` means the answer hit the output token limit and is cut off. Only API providers and model servers report it. */
-export type FinishReason = "stop" | "cancelled" | "error" | "denied" | "length";
+/**
+ * `length` means the answer hit the output token limit and is cut off. `tool_calls` means the model waits for the
+ * results of the calls in `RunResult.pendingToolCalls`. Only API providers and model servers report these two.
+ */
+export type FinishReason = "stop" | "cancelled" | "error" | "denied" | "length" | "tool_calls";
 
 export interface ApprovalRequest {
   id: string;
@@ -158,8 +198,13 @@ export type FunnelEvent =
   | { type: "session"; sessionId: string; model?: string }
   | { type: "text.delta"; text: string }
   | { type: "reasoning.delta"; text: string }
+  /** A CLI agent started one of its own tools, such as a shell command or a file edit. */
   | { type: "tool.start"; id: string; name: string; input?: unknown }
   | { type: "tool.end"; id: string; output?: string; error?: string }
+  /** A piece of the JSON arguments of a call to one of `RunInput.tools`, as the model writes it. Not every vendor streams them. */
+  | { type: "tool_call.delta"; id: string; name: string; arguments: string }
+  /** A finished call to one of `RunInput.tools`. Your code runs the tool and sends the result in the next run. */
+  | ({ type: "tool_call" } & ToolCall)
   /** A provider yields this, then awaits `onApproval` for the answer. */
   | { type: "approval.request"; request: ApprovalRequest }
   | { type: "usage"; usage: Usage }
@@ -202,8 +247,10 @@ export interface RunResult {
   finishReason: FinishReason;
   /** How many times an API provider sent the request again after a 429 or 5xx. Absent when it did not. */
   retries?: number;
-  /** Tool calls the agent made, in order. */
+  /** Tool calls the CLI agent made with its own tools, in order. */
   toolCalls: { id: string; name: string; input?: unknown; error?: string }[];
+  /** Calls to `RunInput.tools` that the model waits on, in order. Present when there are any. */
+  pendingToolCalls?: ToolCall[];
   /** Tool calls the CLI refused because nobody could approve them. */
   deniedActions: string[];
   /** The parsed answer when `responseSchema` was set. Not validated against the schema: do that yourself. */
@@ -254,6 +301,13 @@ export interface RunInput {
   maxOutputTokens?: number;
   /** Temperature, top-p, stop sequences and seed. See `capabilities.sampling`. The vendor may reject values its models do not allow, for example a non-default temperature on recent Claude and OpenAI reasoning models. */
   sampling?: Sampling;
+  /**
+   * Tools the model may call. A call ends the run with `finishReason: "tool_calls"`. Run the tools, then answer in a
+   * new run with `tool_result` parts in `messages`. Needs `capabilities.tools`.
+   */
+  tools?: ToolDefinition[];
+  /** Whether and which tool the model must call. Default `auto`. */
+  toolChoice?: ToolChoice;
   /** Ollama only. Other providers ignore it. */
   ollama?: OllamaRunOptions;
   /** Anthropic API: mark the system prompt and the newest turn for prompt caching, so the next turn reads them from the cache. */

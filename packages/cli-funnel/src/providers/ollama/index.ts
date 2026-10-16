@@ -1,9 +1,9 @@
 import { readNDJSON } from "../../util/ndjson.js";
 import { redactErrors } from "../../util/redact.js";
 import { compareVersions } from "../../util/process.js";
-import { FunnelError, type AuthStatus, type FunnelEvent, type Installation, type ModelInfo, type Message, type Provider, type PullEvent, type RunInput } from "../../types.js";
-import { partsOf, textOf } from "../../messages.js";
+import { FunnelError, type AuthStatus, type FunnelEvent, type Installation, type ModelInfo, type Provider, type PullEvent, type RunInput, type ToolCall } from "../../types.js";
 import { runWithHistory } from "../history.js";
+import { newCallId, ollamaCalls, ollamaMessages, ollamaTools, type Msg } from "../wire.js";
 import { mapChatLine, mapPullLine, normalizeBaseUrl, parseTags, thinkValue } from "./parser.js";
 
 export interface OllamaOptions {
@@ -18,20 +18,8 @@ export interface OllamaOptions {
 const TESTED = { min: "0.35.0" };
 const PROBE_MS = 2000;
 
-interface ChatMessage {
-  role: "system" | "user" | "assistant";
-  content: string;
-  /** Base64 images without a `data:` prefix. */
-  images?: string[];
-}
-
-/** Typed messages in Ollama's format: text in `content`, images as base64 in `images`. */
-export function chatMessages(messages: Message[]): ChatMessage[] {
-  return messages.map((m) => {
-    const images = partsOf(m).flatMap((p) => (p.type === "image" ? [p.data] : []));
-    return { role: m.role, content: textOf(m), ...(images.length ? { images } : {}) };
-  });
-}
+/** A chat message: `content`, base64 `images`, `tool_calls` from the model, and `tool_name` on a tool result. */
+type ChatMessage = Msg;
 
 /** The `options` object of a chat request. Entries the caller passes in `ollama.options` come last and win. */
 function requestOptions(input: RunInput): Record<string, unknown> {
@@ -56,6 +44,8 @@ export function chatBody(input: RunInput, messages: ChatMessage[], keepAlive?: s
     messages: input.system ? [{ role: "system", content: input.system }, ...messages] : messages,
     stream: true,
     ...(input.responseSchema ? { format: input.responseSchema.schema } : {}),
+    // Ollama has no tool choice. `none` is honoured by not sending the tools; `required` and a named tool are refused before this.
+    ...(input.tools?.length && input.toolChoice !== "none" ? { tools: ollamaTools(input.tools) } : {}),
     ...(input.selection.effort ? { think: thinkValue(input.selection.effort) } : {}),
     ...(keep !== undefined ? { keep_alive: keep } : {}),
     ...(Object.keys(options).length ? { options } : {}),
@@ -104,8 +94,12 @@ export function createOllamaProvider(options: OllamaOptions = {}): Provider {
     return parseTags(await res.json());
   }
 
-  async function* chat(input: RunInput, messages: ChatMessage[]): AsyncGenerator<FunnelEvent> {
+  /** `calls` collects the tool calls of the turn, for the session history. */
+  async function* chat(input: RunInput, messages: ChatMessage[], calls: ToolCall[]): AsyncGenerator<FunnelEvent> {
     const cancelled: FunnelEvent = { type: "done", text: "", finishReason: "cancelled" };
+    if (input.toolChoice === "required" || typeof input.toolChoice === "object") {
+      return yield { type: "error", message: "Ollama cannot force a tool call. Use toolChoice auto or none.", code: "unsupported" };
+    }
     let finished = false;
     // The first line that was not JSON. A proxy error page looks like this, and it is what the user needs to see.
     let raw: string | undefined;
@@ -117,9 +111,12 @@ export function createOllamaProvider(options: OllamaOptions = {}): Provider {
           raw ??= String(line.__raw).slice(0, 200);
           continue;
         }
-        for (const e of mapChatLine(line)) {
+        for (const mapped of mapChatLine(line)) {
+          const e = mapped.type === "tool_call" && !mapped.id ? { ...mapped, id: newCallId() } : mapped;
           if (e.type === "done" || e.type === "error") finished = true;
-          yield e;
+          if (e.type === "tool_call") calls.push({ id: e.id, name: e.name, input: e.input });
+          // Ollama reports `stop` after tool calls. The run waits for their results, so it says so.
+          yield e.type === "done" && calls.length && e.finishReason === "stop" ? { ...e, finishReason: "tool_calls" } : e;
         }
         // Stop at the terminal event. A proxy may hold the connection open, and returning cancels the body.
         if (finished) return;
@@ -169,6 +166,7 @@ export function createOllamaProvider(options: OllamaOptions = {}): Provider {
       approvals: false,
       images: true,
       messages: true,
+      tools: true,
       system: "native",
       schema: "native",
       sampling: true,
@@ -192,10 +190,17 @@ export function createOllamaProvider(options: OllamaOptions = {}): Provider {
     models,
     pullModel,
     deleteModel,
-    run: (input) =>
-      redactErrors(
-        runWithHistory(input, chatMessages, (text): ChatMessage => ({ role: "assistant", content: text }), (messages) => chat(input, messages)),
+    run(input) {
+      const calls: ToolCall[] = [];
+      return redactErrors(
+        runWithHistory<ChatMessage>(
+          input,
+          ollamaMessages,
+          (text) => ({ role: "assistant", content: text, ...(calls.length ? { tool_calls: ollamaCalls(calls) } : {}) }),
+          (messages) => chat(input, messages, calls),
+        ),
         [options.apiKey],
-      ),
+      );
+    },
   };
 }

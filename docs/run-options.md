@@ -77,7 +77,7 @@ await funnel.run({
 });
 ```
 
-`content` is a string or an array of parts. A part is `{ type: "text", text }` or an image in the same shape as an attachment. Only user messages carry images. The last message must come from the user. System instructions go in `system`. A run that sets both `prompt` and `messages`, or `messages` with `attachments`, fails with `invalid-selection`.
+`content` is a string or an array of parts. A part is `{ type: "text", text }` or an image in the same shape as an attachment. Only user messages carry images. Tool calls and tool results are parts too, see [Tool calling](#tool-calling). The last message must come from the user. System instructions go in `system`. A run that sets both `prompt` and `messages`, or `messages` with `attachments`, fails with `invalid-selection`.
 
 How each provider gets them:
 
@@ -87,6 +87,54 @@ How each provider gets them:
 | With `sessionId` | The stored history, then the messages after the last assistant message. A session with nothing stored yet gets the whole array. | Only the messages after the last assistant message, since the CLI already holds the rest |
 
 So with a session you can send either the whole chat or only the new messages. When the session has stored turns, they win over earlier turns in `messages`. `capabilities.messages` is true for the providers that send separate turns.
+
+## Tool calling
+
+The API providers, Ollama and OpenAI-compatible servers can call tools that your code defines. The model asks, the run ends, your code runs the tool and sends the result in the next run. The CLIs refuse `tools` with `unsupported`, because they run their own. `capabilities.tools` says which providers take them.
+
+```ts
+const tools = [
+  {
+    name: "get_weather",
+    description: "Current weather for a city.",
+    parameters: { type: "object", properties: { city: { type: "string" } }, required: ["city"] },
+  },
+];
+
+const first = await funnel.run({ selection, tools, prompt: "Do I need an umbrella in Turin?" });
+// first.finishReason === "tool_calls"
+// first.pendingToolCalls === [{ id: "toolu_01A", name: "get_weather", input: { city: "Turin" } }]
+
+const answer = await funnel.run({
+  selection,
+  tools,
+  sessionId: first.sessionId,
+  messages: [
+    { role: "user", content: first.pendingToolCalls!.map((c) => ({ type: "tool_result", toolCallId: c.id, output: JSON.stringify(weather(c.input)) })) },
+  ],
+});
+```
+
+With `sessionId` the session already holds the question and the call, so `messages` carries only the results. Without a session, send the whole conversation: the user message, an assistant message with `{ type: "tool_call", id, name, input }` parts, then a user message with the `tool_result` parts. Set `isError: true` on a result when the tool failed.
+
+`toolChoice` is `auto` (the default), `none`, `required`, or `{ name }` for one tool. Ollama has no tool choice: `none` leaves the tools out of the request, and `required` or a named tool end the run with an `unsupported` error.
+
+Two kinds of tool events exist, and they never mix:
+
+| Events | Whose tools | What to do |
+|---|---|---|
+| `tool.start`, `tool.end` | The CLI agent's own tools, such as a shell command or a file edit. The CLI runs them. | Show them. They end up in `result.toolCalls`. |
+| `tool_call.delta`, `tool_call` | The tools in `RunInput.tools`. Nobody runs them until your code does. | Run the calls in `result.pendingToolCalls` and answer in the next run. |
+
+`tool_call.delta` carries a piece of the JSON arguments as the model writes it, for a UI that shows them live. Anthropic, OpenAI and OpenAI-compatible servers stream arguments. Gemini and Ollama send each call whole, so they emit only `tool_call`. `tool_call.input` holds the parsed arguments, or the raw string when the model wrote something that is not JSON.
+
+| | Anthropic API | OpenAI API, OpenAI-compatible | Gemini API | Ollama |
+|---|---|---|---|---|
+| `tools` | `tools` with `input_schema` | `tools` of type `function` | `functionDeclarations` with `parametersJsonSchema` | `tools` of type `function` |
+| `toolChoice` | `tool_choice`: `auto`, `none`, `any`, `tool` | `tool_choice` | `toolConfig.functionCallingConfig`: `AUTO`, `NONE`, `ANY` | `none` drops the tools, others refused |
+| `tool_result` | `tool_result` block, first in its user message | a `tool` message | `functionResponse` with `output` or `error` | a `tool` message with `tool_name` |
+
+Some vendors want more than the call back. Anthropic wants the thinking block that led to a call, and Gemini 3 wants its thought signature. A session keeps both, so answer tool calls through the same `sessionId` when you set an effort. Without a session, Gemini 3 calls get the placeholder signature Google documents for history from elsewhere, and Anthropic may refuse a conversation that has thinking turned on. Gemini and Ollama do not always send call ids, so cli-funnel makes them up and keeps them in the session history.
 
 ## Structured answers
 

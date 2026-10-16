@@ -35,6 +35,9 @@ Ids are `<provider>/<model>`, for example `claude/claude-sonnet-5`, `codex/gpt-5
 | `stream: true` | Server-sent events, ending with `[DONE]`. Errors that happen before the first event are a normal error response with a 4xx status. Later errors arrive as a `data:` line with an `error` object. |
 | `stream_options.include_usage` | A last chunk with `choices: []` and `usage`, as OpenAI sends it. Without the option, streams carry no usage. |
 | `reasoning_effort` | `selection.effort` |
+| `tools` of type `function`, `tool_choice` | `tools` and `toolChoice`, on providers with `capabilities.tools`. See [Tool calling](run-options.md#tool-calling). |
+| `tool_calls` on assistant messages, `role: "tool"` messages | `tool_call` parts, and `tool_result` parts in one user message per run of tool messages |
+| `message.tool_calls` in the response | The run's `pendingToolCalls`, with `finish_reason: "tool_calls"`. Streams send each call's id and name first, then argument pieces, as OpenAI does. |
 | `usage.prompt_tokens`, `completion_tokens`, `total_tokens` | From the CLI's usage report, when it gives one. |
 | `finish_reason` | `length` for `finishReason: "length"`, `content_filter` for `denied`, `stop` otherwise |
 
@@ -66,6 +69,6 @@ Every `addDirs` path must sit inside the server's allowed roots, like `x_funnel.
 
 The OpenAI wire format has no approve button. Requests to this endpoint therefore deny anything that needs approval, and `supervised` behaves as deny-by-default. Use `accept-edits`, `auto` or `full` here, or use the `/run` route and `useRun` when a human should approve actions.
 
-Tool calls happen inside the CLI. They do not appear as OpenAI `tool_calls`.
+A CLI runs its own tools. They do not appear as OpenAI `tool_calls`; `x_funnel.toolCalls` lists them. The client's `tools` work only on the API providers, Ollama and OpenAI-compatible servers. The endpoint is stateless unless you send `x_funnel.sessionId`, and some vendors want more than the call back: see the end of [Tool calling](run-options.md#tool-calling).
 
-Fields the server cannot honour get a 400 with `error.param` set, instead of being ignored: `tools` (when not empty), `tool_choice` (other than `none` or `auto`), `n` other than 1, `stop`, `temperature` or `top_p` other than 1, `seed`, and `response_format` of type `json_object`. A body that is not valid JSON, or has no `model` string or no non-empty `messages` array of objects with a `role`, gets a 400 too, and so does a chat with a role other than `system`, `developer`, `user` or `assistant`, a content part other than text or an image, or a last message that is not from the user. Bodies over 10 MB get a 413. `maxBodyBytes` on the handler changes the limit.
+Fields the server cannot honour get a 400 with `error.param` set, instead of being ignored: `tools` (when not empty) and `tool_choice` (other than `none` or `auto`) on a CLI provider, `n` other than 1, `stop`, `temperature` or `top_p` other than 1, `seed`, and `response_format` of type `json_object`. A body that is not valid JSON, or has no `model` string or no non-empty `messages` array of objects with a `role`, gets a 400 too, and so does a chat with a role other than `system`, `developer`, `user`, `assistant` or `tool`, a content part other than text or an image, a tool message without `tool_call_id`, a tool that is not a function, or a last message that is not from the user or a tool. Bodies over 10 MB get a 413. `maxBodyBytes` on the handler changes the limit.

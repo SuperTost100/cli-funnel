@@ -37,6 +37,8 @@ The provider is always registered. `detect()` calls `/api/version`. When nothing
 | resume | yes, history kept like the API providers' |
 | approvals | no |
 | images | yes, for models that accept them |
+| messages | yes |
+| tools | yes, for models that report the `tools` capability. No tool choice: `none` drops the tools, `required` and a named tool are refused. |
 | system | native |
 | schema | native |
 

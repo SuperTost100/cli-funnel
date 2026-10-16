@@ -1,5 +1,5 @@
 import { observeRun } from "./run-log.js";
-import { toRunInput } from "./messages.js";
+import { hasToolParts, toRunInput } from "./messages.js";
 import { loadManifest } from "./catalog/manifest.js";
 import { validateProviderOptions, validateSelection } from "./selection.js";
 import { SessionPool, type LiveSessionInfo, type SessionOptions } from "./sessions.js";
@@ -176,6 +176,9 @@ export function createFunnel(options: FunnelOptions = {}) {
     }
     if ((input.cache || input.cachedContent) && !p.capabilities.cache) {
       throw new FunnelError(`${p.displayName} does not take prompt cache options.`, "unsupported");
+    }
+    if ((input.tools?.length || input.toolChoice || (input.messages && hasToolParts(input.messages))) && !p.capabilities.tools) {
+      throw new FunnelError(`${p.displayName} does not take caller-defined tools. It runs its own.`, "unsupported");
     }
     if (input.attachments?.length && !p.capabilities.images) {
       throw new FunnelError(`${p.displayName} cannot take image attachments.`, "unsupported");

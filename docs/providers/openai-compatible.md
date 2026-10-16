@@ -41,8 +41,10 @@ Same as the API providers: no machine access, history kept like the API provider
 | `maxOutputTokens` | `max_tokens`, which more servers accept than `max_completion_tokens` |
 | `sampling` | `temperature`, `top_p`, `stop` and `seed` |
 | `selection.effort` | `reasoning_effort`, when `efforts` is set |
+| `messages` | one message per turn |
+| `tools`, `toolChoice` | `tools` of type `function` and `tool_choice`. See [Tool calling](../run-options.md#tool-calling). |
 
-Whether the server honours images or the schema depends on the server and the model. cli-funnel sends them and reports what comes back.
+Whether the server honours images, the schema or tools depends on the server and the model. cli-funnel sends them and reports what comes back.
 
 Reasoning text arrives as `reasoning.delta`. Servers name the field `reasoning_content` (vLLM, llama.cpp, LM Studio) or `reasoning` (Ollama), and both are read. Usage comes from the last chunk when the server honours `stream_options.include_usage`, including `cachedInputTokens` when it reports `prompt_tokens_details.cached_tokens`.
 

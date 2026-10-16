@@ -61,7 +61,7 @@ For Gemini, create cached content with Google's API and pass its name as `cached
 
 ## What they do and do not do
 
-They stream text and report usage. They have no tools, no file access and no approvals, so `capabilities.access` is empty and `cwd` and `access` are ignored. The picker hides those controls.
+They stream text and report usage. They have no file access and no approvals, so `capabilities.access` is empty and `cwd` and `access` are ignored. The picker hides those controls. They run no tools of their own, but they can call tools your code defines, see [Tool calling](run-options.md#tool-calling).
 
 Model lists come live from each vendor's `/models` endpoint, so they need a valid key. The OpenAI list leaves out models that only work with the Responses API (`-pro`, `-codex`, deep research) and aliases such as `chatgpt-4o-latest`. Fine-tuned `ft:` models stay.
 

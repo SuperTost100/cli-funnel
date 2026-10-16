@@ -202,6 +202,9 @@ export function createRunFolder(input: RunInput): RunFolder {
           if (e.error?.startsWith("denied:")) result.deniedActions.push(call?.name ?? e.error.slice(7).trim());
           break;
         }
+        case "tool_call":
+          (result.pendingToolCalls ??= []).push({ id: e.id, name: e.name, input: e.input });
+          break;
         case "usage":
           result.usage = e.usage;
           break;

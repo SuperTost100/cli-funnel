@@ -109,7 +109,7 @@ const run = useRun(client);
 
 `useRun` keeps the session id between calls, so the next `send` continues the conversation. `newConversation()` ends the run in flight and clears the session. `cancel()` stops the run on the server and closes the stream. When the server limits concurrent runs, `queued` holds the number of runs ahead while this one waits, so you can show "2 ahead of you". Calling `send` during a run cancels that run first. Leaving the page cancels it too.
 
-`run.result` has `text`, `provider`, `model`, `sessionId`, `usage`, `finishReason`, `toolCalls`, `deniedActions` and `structured`. `provider` and `model` are the ones you passed to `send`, even if the picker has changed since. If `approve` fails, the prompt stays and `run.error` has the message, so the user can press the button again.
+`run.result` has `text`, `provider`, `model`, `sessionId`, `usage`, `finishReason`, `toolCalls`, `deniedActions`, `pendingToolCalls` and `structured`. `provider` and `model` are the ones you passed to `send`, even if the picker has changed since. If `approve` fails, the prompt stays and `run.error` has the message, so the user can press the button again.
 
 `run.result` summarizes the latest run in the shape of `funnel.run()`: `text`, `provider`, `model`, `sessionId`, `usage`, `finishReason`, `toolCalls`, `deniedActions` and `structured`. When you pass `responseSchema` to `send` and the provider does not report a parsed answer, `structured` is the answer text parsed as JSON, or `structuredError` says why that failed. Validate it against your schema yourself.
 
