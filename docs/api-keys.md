@@ -42,6 +42,7 @@ const funnel = createFunnel({
 | `headers` | Sent with every request, including model lists, after the default headers. A name that matches a default in any letter case replaces it. |
 | `retries` | Extra attempts after a 429 or 5xx. Default 2. `0` turns retries off. |
 | `retryDelayMs` | First wait before a retry. Default 500, doubled each time. |
+| `mode` | OpenAI only. `chat` or `responses`, the API every run uses. See [OpenAI Responses API](#openai-responses-api). |
 
 The default base URLs are `https://api.anthropic.com`, `https://api.openai.com/v1` and `https://generativelanguage.googleapis.com/v1beta`. With `headers` set and no key, no key header is sent, for gateways that authenticate by their own headers. `authStatus()` then reports the method as `Headers`.
 
@@ -53,6 +54,18 @@ Retries happen only before any output. Once the response has started streaming, 
 
 Each retry emits a `retry` event with `attempt`, `status` and `delayMs`, and `result.retries` holds the count. It is absent when nothing was retried. `retries` and `headers` also work on OpenAI-compatible endpoints, see [OpenAI-compatible servers](providers/openai-compatible.md).
 
+## OpenAI Responses API
+
+`openai-api` talks to OpenAI through Chat Completions or the Responses API. Each model in the list says which in `apis`: chat models have `["chat", "responses"]`, and `-pro` and `-codex` models have `["responses"]`, because Chat Completions does not serve them. A run uses Chat Completions when the model takes it and Responses otherwise. Set `mode` to send every run through one of them:
+
+```ts
+const funnel = createFunnel({ api: { openai: { mode: "responses" } } });
+```
+
+With Responses, OpenAI keeps the conversation. The `session` event carries the id of the response, and passing it back as `sessionId` sends it as `previous_response_id`, with only the messages after the last assistant turn. Each turn has a new id, so always pass the newest. Nothing goes into the funnel's `history` store. A session started on Chat Completions cannot continue on Responses, and the other way round.
+
+The run options map to `instructions` (sent every turn, since OpenAI does not carry them over), `max_output_tokens`, `reasoning.effort` with `summary: "auto"`, `temperature`, `top_p`, `text.format` with a strict JSON schema, and function `tools`. Reasoning summaries stream as `reasoning.delta`. The Responses API has no stop sequences and no seed, so `sampling.stop` and `sampling.seed` are not sent. `finishReason` is `length` when the response is incomplete for `max_output_tokens` and `denied` for a content filter or a refusal.
+
 ## Prompt caching
 
 Set `cache: true` on a run to use the Anthropic API's prompt cache. cli-funnel puts a `cache_control` breakpoint on the system prompt and on the newest turn, so the next turn in the session reads that prefix from the cache. The saving shows in `usage.cachedInputTokens`. Stored history is not changed. Models have a minimum prompt length for caching, and shorter prompts are simply not cached.
@@ -63,7 +76,7 @@ For Gemini, create cached content with Google's API and pass its name as `cached
 
 They stream text and report usage. They have no file access and no approvals, so `capabilities.access` is empty and `cwd` and `access` are ignored. The picker hides those controls. They run no tools of their own, but they can call tools your code defines, see [Tool calling](run-options.md#tool-calling).
 
-Model lists come live from each vendor's `/models` endpoint, so they need a valid key. The OpenAI list leaves out models that only work with the Responses API (`-pro`, `-codex`, deep research) and aliases such as `chatgpt-4o-latest`. Fine-tuned `ft:` models stay.
+Model lists come live from each vendor's `/models` endpoint, so they need a valid key. The OpenAI list leaves out deep research, computer use, models without text chat and aliases such as `chatgpt-4o-latest`. Fine-tuned `ft:` models stay. Each OpenAI model carries `apis`, the APIs it works with.
 
 Usage on the Anthropic API counts cache reads and cache writes in `inputTokens`, as Claude Code does, and reports the writes as `cacheCreationInputTokens`. `finishReason` is `denied` for a refusal and `length` for `max_tokens` or a full context window. The OpenAI API sends `responseSchema` with `strict: true`, so every object in the schema needs `additionalProperties: false` and all its properties listed in `required`. OpenAI-compatible servers get the schema without `strict`.
 

@@ -15,10 +15,11 @@ import {
 } from "../types.js";
 import { BodyError, DEFAULT_MAX_BODY_BYTES, readJson } from "./body.js";
 import { handleOpenAI, resolveOptionDirs, type OpenAIDefaults, type TrackedRun } from "./openai.js";
+import { handleResponses } from "./responses.js";
 import { json, sse, sseHeaders } from "./sse.js";
 import { BUSY_RETRY_AFTER_SEC, RunQueue, waitForSlot, type RunLimits } from "../queue.js";
 
-/** `maxConcurrentRuns`, `maxQueuedRuns` and `queueTimeoutMs` limit the runs on `/run` and `/v1/chat/completions`. */
+/** `maxConcurrentRuns`, `maxQueuedRuns` and `queueTimeoutMs` limit the runs on `/run`, `/v1/chat/completions` and `/v1/responses`. */
 export interface HandlerOptions extends RunLimits {
   /** Path prefix the routes live under, for example "/api/funnel". Default "". */
   basePath?: string;
@@ -307,6 +308,7 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
       const seg = path.split("/").filter(Boolean);
       const m = req.method;
 
+      if (path === "/v1/responses") return await handleResponses(funnel, req, openai, cwdAllowed, maxBody, startRun);
       if (path.startsWith("/v1/")) return await handleOpenAI(funnel, req, path, openai, cwdAllowed, maxBody, startRun);
 
       if (m === "GET" && path === "/providers") return json(await funnel.overview());

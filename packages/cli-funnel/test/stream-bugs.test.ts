@@ -298,9 +298,13 @@ describe("model lists (#40)", () => {
     expect(drop.filter(openaiChatModel)).toEqual([]);
   });
 
-  it("lists OpenAI models through the filter", async () => {
+  it("lists OpenAI models with the APIs they take (#74)", async () => {
     stubFetch(() => Response.json({ data: [{ id: "gpt-5-pro" }, { id: "gpt-5" }, { id: "ft:gpt-4o-mini:acme::1" }] }));
-    expect((await api()["openai-api"].models()).map((m) => m.id)).toEqual(["ft:gpt-4o-mini:acme::1", "gpt-5"]);
+    expect((await api()["openai-api"].models()).map((m) => [m.id, m.apis])).toEqual([
+      ["ft:gpt-4o-mini:acme::1", ["chat", "responses"]],
+      ["gpt-5", ["chat", "responses"]],
+      ["gpt-5-pro", ["responses"]],
+    ]);
   });
 
   it("follows Anthropic pages", async () => {

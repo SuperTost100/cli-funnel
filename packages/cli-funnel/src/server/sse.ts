@@ -8,8 +8,11 @@ export function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-/** Turns an async iterable into an SSE body. Each item becomes one `data:` line of JSON. */
-export function sse(items: AsyncIterable<unknown>, opts: { done?: string; onCancel?: () => void } = {}): ReadableStream<Uint8Array> {
+/** Turns an async iterable into an SSE body. Each item becomes one `data:` line of JSON, after an `event:` line when `event` names one. */
+export function sse(
+  items: AsyncIterable<unknown>,
+  opts: { done?: string; onCancel?: () => void; event?: (item: unknown) => string | undefined } = {},
+): ReadableStream<Uint8Array> {
   const enc = new TextEncoder();
   const it = items[Symbol.asyncIterator]();
   return new ReadableStream({
@@ -21,7 +24,8 @@ export function sse(items: AsyncIterable<unknown>, opts: { done?: string; onCanc
           controller.close();
           return;
         }
-        controller.enqueue(enc.encode(`data: ${JSON.stringify(value)}\n\n`));
+        const name = opts.event?.(value);
+        controller.enqueue(enc.encode(`${name ? `event: ${name}\n` : ""}data: ${JSON.stringify(value)}\n\n`));
       } catch (err) {
         controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: "error", message: String(err) })}\n\n`));
         controller.close();

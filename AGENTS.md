@@ -16,6 +16,7 @@ Use Claude Code, Codex, Cursor Agent and Antigravity CLIs like an API. The packa
 - `src/providers/ollama/` talks to an Ollama server over HTTP. `src/providers/api.ts` holds the API-key providers and the shared Chat Completions stream. `src/providers/openai-compatible.ts` builds one provider per configured server. `src/providers/history.ts` keeps session history for providers without server-side sessions.
 - `src/messages.ts` checks `RunInput.messages` and renders them into a prompt for providers without typed turns.
 - `src/providers/wire.ts` maps typed messages and caller-defined tools to each HTTP vendor's format.
+- `src/providers/responses.ts` streams the OpenAI Responses API. `src/server/responses.ts` serves `POST /v1/responses`.
 - `src/server/` is the HTTP handler and the OpenAI-compatible endpoints. `src/client/` is its browser client.
 - `src/mcp/` is the MCP stdio server (`cli-funnel mcp`). It reuses `createFunnel`. `src/util/fs-roots.ts` holds the folder check, the same rule as `fsRoots` in the HTTP handler.
 - `packages/react/` has hooks and components.
