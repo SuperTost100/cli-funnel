@@ -13,6 +13,7 @@ import { RpcClient } from "./rpc.js";
 import { threadOptions } from "./options.js";
 import { noToolsConfig } from "./tools.js";
 import { openCodexSession } from "./live.js";
+import { forkThread, listThreads, rateLimits } from "./threads.js";
 
 export const BINARY = "codex";
 const TESTED_RANGE = { min: "0.150.0" };
@@ -218,4 +219,7 @@ export const codexProvider: Provider = {
   models,
   run,
   openSession: openCodexSession,
+  listThreads,
+  forkThread,
+  rateLimits,
 };

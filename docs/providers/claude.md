@@ -60,7 +60,12 @@ Approvals work. The CLI writes a `control_request` (subtype `can_use_tool`) to s
 | `fallbackModel: string` | `--fallback-model=<ids>` | all |
 | `maxBudgetUsd: number` | `--max-budget-usd=<n>` | all |
 | `forkSession: boolean` | `--fork-session`, needs `sessionId` | all |
+| `forwardSubagentText: boolean` | `--forward-subagent-text` | all |
 | `betas: string[]` | `--betas=<header>` | all |
+
+`forkSession` works on live sessions: the fork gets its own process and the parent's stays up. See [Live sessions](../sessions.md#fork-a-session).
+
+`forwardSubagentText` makes Claude Code send the subagents' messages with `parent_tool_use_id` set to the id of the `Agent` call. cli-funnel turns each text block into a `subagent.text` event with that id as `parentId`. Without the flag, the CLI sends only the subagent's prompt, as a `user` message with `parent_tool_use_id` (checked on 2.1.300), and the parser drops it. With it, a subagent's `assistant` message arrives whole, not as stream deltas, and its thinking block is empty. The parser ignores the subagent's prompt, thinking and tool calls. `test/fixtures/claude/subagent-text.ndjson` is a recorded run, with ids replaced.
 
 `mcpConfig` and `agents` take objects, not file paths. A subagent may set `description`, `prompt`, `tools`, `disallowedTools` and `model`. `maxBudgetUsd` compares against the CLI's list-price estimate, which is not what a subscription pays. `betas` only matters for API key logins. See [Run options](../run-options.md#provider-options) for why each limit is where it is.
 

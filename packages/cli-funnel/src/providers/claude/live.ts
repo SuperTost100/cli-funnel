@@ -3,7 +3,7 @@ import { Channel } from "../../util/channel.js";
 import { needsArgFile, writeArgFile } from "../../util/argfile.js";
 import { spawnStream, type Streamed } from "../../util/process.js";
 import { findBinary } from "../base.js";
-import { BIN, answerControlRequest, buildArgs, userContent } from "./index.js";
+import { BIN, answerControlRequest, buildArgs, forwardsSubagents, userContent } from "./index.js";
 import { parseClaudeMessage } from "./parser.js";
 
 /**
@@ -80,7 +80,7 @@ export async function openClaudeSession(first: RunInput): Promise<LiveSession> {
           yield* answerControlRequest(proc, msg, input);
           continue;
         }
-        for (const e of parseClaudeMessage(raw)) {
+        for (const e of parseClaudeMessage(raw, forwardsSubagents(first))) {
           if (e.type === "session") sessionId = e.sessionId;
           // Set before yielding: a consumer that stops at `done` never comes back to this loop.
           if (e.type === "done" || e.type === "error") finished = true;

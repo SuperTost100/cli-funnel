@@ -71,7 +71,7 @@ export function buildArgs(input: RunInput, systemFile?: string): string[] {
   return args;
 }
 
-const OPTION_KEYS = ["allowedTools", "disallowedTools", "addDirs", "mcpConfig", "agents", "fallbackModel", "maxBudgetUsd", "forkSession", "betas"];
+const OPTION_KEYS = ["allowedTools", "disallowedTools", "addDirs", "mcpConfig", "agents", "fallbackModel", "maxBudgetUsd", "forkSession", "forwardSubagentText", "betas"];
 const AGENT_KEYS = ["description", "prompt", "tools", "disallowedTools", "model"];
 const NOT_NONE = ACCESS_LEVELS.filter((a) => a !== "none");
 
@@ -129,9 +129,13 @@ export function optionArgs(input: RunInput): string[] {
     if (!input.sessionId) invalidOption("forkSession needs a sessionId to fork from.");
     args.push("--fork-session");
   }
+  if (bool(o.forwardSubagentText, "forwardSubagentText")) args.push("--forward-subagent-text");
   for (const b of stringList(o.betas, "betas") ?? []) args.push(flag("--betas", b));
   return args;
 }
+
+/** True when the run asked for `--forward-subagent-text`, so its parser keeps the subagents' text. */
+export const forwardsSubagents = (input: RunInput): boolean => input.providerOptions?.claude?.forwardSubagentText === true;
 
 /** Plain text, or content blocks when images are attached. Same block shape as the Messages API. */
 export function userContent(input: RunInput): string | unknown[] {
@@ -170,7 +174,7 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
       // `result` is the last message of the turn. Close stdin before yielding it, since a consumer that stops at
       // `done` never resumes this loop, and Claude Code waits on stdin for another turn until it closes.
       if (msg.type === "result") proc.closeStdin();
-      for (const e of parseClaudeMessage(raw)) {
+      for (const e of parseClaudeMessage(raw, forwardsSubagents(input))) {
         if (e.type === "done" || e.type === "error") finished = true;
         yield e;
       }

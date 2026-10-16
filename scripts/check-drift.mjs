@@ -26,6 +26,22 @@ function checkCodexSchema() {
     for (const key of ["ephemeral", "approvalPolicy", "config"]) if (!start.properties?.[key]) report(key, "ThreadStartParams");
     const policies = JSON.stringify(start.definitions?.AskForApproval ?? {});
     for (const p of ["untrusted", "on-request", "never"]) if (!policies.includes(`"${p}"`)) report(`approval policy ${p}`, "AskForApproval");
+    // Live sessions and the thread calls: thread/list, thread/fork, account/rateLimits/read and turn/interrupt.
+    const schema = (name) => JSON.parse(readFileSync(join(dir, "v2", `${name}.json`), "utf8"));
+    const list = schema("ThreadListParams");
+    for (const key of ["cwd", "searchTerm", "limit", "cursor", "sortKey"]) if (!list.properties?.[key]) report(key, "ThreadListParams");
+    if (!list.definitions?.ThreadSortKey?.enum?.includes("updated_at")) report("sort key updated_at", "ThreadSortKey");
+    const fork = schema("ThreadForkParams");
+    for (const key of ["threadId", "excludeTurns"]) if (!fork.properties?.[key]) report(key, "ThreadForkParams");
+    if (!schema("ThreadForkResponse").properties?.thread) report("thread", "ThreadForkResponse");
+    const threads = schema("ThreadListResponse");
+    for (const key of ["data", "nextCursor"]) if (!threads.properties?.[key]) report(key, "ThreadListResponse");
+    const thread = threads.definitions?.Thread?.properties ?? {};
+    for (const key of ["id", "name", "preview", "cwd", "createdAt", "updatedAt", "forkedFromId"]) if (!thread[key]) report(key, "Thread");
+    if (!schema("GetAccountRateLimitsResponse").properties?.rateLimits) report("rateLimits", "GetAccountRateLimitsResponse");
+    for (const key of ["threadId", "turnId"]) if (!schema("TurnInterruptParams").properties?.[key]) report(key, "TurnInterruptParams");
+    const methods = readFileSync(join(dir, "ClientRequest.json"), "utf8");
+    for (const m of ["thread/list", "thread/fork", "account/rateLimits/read", "turn/interrupt", "turn/steer"]) if (!methods.includes(`"${m}"`)) report(m, "ClientRequest");
     const bundle = JSON.parse(readFileSync(join(dir, "codex_app_server_protocol.v2.schemas.json"), "utf8"));
     if (!bundle.definitions?.Config?.properties?.web_search) report("web_search", "Config");
     const modes = bundle.definitions?.WebSearchMode?.enum ?? [];

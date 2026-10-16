@@ -45,6 +45,40 @@ describe("claude parser", () => {
     const ev = fixture("error-credits");
     expect(ev.at(-1)).toMatchObject({ type: "error", code: "429" });
   });
+
+  // Recorded from claude 2.1.300 with --forward-subagent-text and one subagent call.
+  const subagentRun = (forward: boolean) =>
+    readFileSync(new URL("./fixtures/claude/subagent-text.ndjson", import.meta.url), "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .flatMap((l) => parseClaudeMessage(JSON.parse(l), forward));
+
+  it("drops subagent messages by default", () => {
+    const ev = subagentRun(false);
+    expect(ev.some((e) => e.type === "subagent.text")).toBe(false);
+    expect(ev.filter((e) => e.type === "text.delta").map((e) => (e as { text: string }).text).join("")).toBe("17 plus 25 equals 42.");
+    expect(ev.at(-1)).toMatchObject({ type: "done", text: "17 plus 25 equals 42." });
+  });
+
+  it("forwards a subagent's text with the id of the call that started it", () => {
+    const ev = subagentRun(true);
+    const call = ev.find((e) => e.type === "tool.start");
+    expect(call).toMatchObject({ name: "Agent", input: { subagent_type: "calc" } });
+    // The subagent's prompt and its empty thinking block are not forwarded.
+    expect(ev.filter((e) => e.type === "subagent.text")).toEqual([{ type: "subagent.text", parentId: (call as { id: string }).id, text: "42", agent: "calc" }]);
+    // The main thread reads the same as without the flag.
+    expect(ev.filter((e) => e.type !== "subagent.text")).toEqual(subagentRun(false));
+  });
+
+  it("keeps subagent text out of the result", async () => {
+    const result = await collect(
+      (async function* () {
+        yield* subagentRun(true);
+      })(),
+      { selection: sel(), prompt: "x" },
+    );
+    expect(result.text).toBe("17 plus 25 equals 42.");
+  });
 });
 
 describe("claude args", () => {

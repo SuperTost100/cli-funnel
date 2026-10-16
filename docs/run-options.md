@@ -59,7 +59,7 @@ Thinking text arrives as `reasoning.delta` events. The Anthropic API returns it 
 
 ## Sessions
 
-`sessionId` continues an earlier conversation. Each turn starts a new CLI process unless the funnel keeps processes alive. See [Live sessions](sessions.md).
+`sessionId` continues an earlier conversation. Each turn starts a new CLI process unless the funnel keeps processes alive. See [Live sessions](sessions.md), which also covers forking a session and listing Codex threads.
 
 ## Messages instead of a prompt
 
@@ -166,7 +166,7 @@ Options never give the agent more than `selection.access` allows. An option that
 | Claude Code | `allowedTools` | refused | refused | refused | refused | yes |
 | Claude Code | `mcpConfig` | refused | refused | refused | refused | yes |
 | Claude Code | `addDirs`, `agents` | refused | yes | yes | yes | yes |
-| Claude Code | `disallowedTools`, `fallbackModel`, `maxBudgetUsd`, `forkSession`, `betas` | yes | yes | yes | yes | yes |
+| Claude Code | `disallowedTools`, `fallbackModel`, `maxBudgetUsd`, `forkSession`, `forwardSubagentText`, `betas` | yes | yes | yes | yes | yes |
 | Codex | `approvalPolicy` | `untrusted` | `untrusted` | `untrusted` | `untrusted`, `on-request` | any |
 | Codex | `webSearch` | `disabled` only | `disabled`, `cached`, `indexed` | `disabled`, `cached`, `indexed` | yes | yes |
 | Codex | `ephemeral` | yes | yes | yes | yes | yes |
@@ -305,3 +305,5 @@ A limit usually ends the run with an `error` event right after. The API provider
 | Cursor Agent, Antigravity, Ollama | nothing: they report no limits cli-funnel can read |
 
 `useRun().result.limit` has the same value in the browser. `cli-funnel run` prints the limit on stderr.
+
+To check Codex before a run, `funnel.rateLimits("codex")` reads the usage windows and the limit that is reached. See [Live sessions](sessions.md#read-usage-and-limits).

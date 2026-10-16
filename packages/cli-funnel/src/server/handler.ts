@@ -66,7 +66,7 @@ export function corsOrigin(value: string): string {
 }
 
 const CORS_ALLOW = {
-  "access-control-allow-methods": "GET, POST, OPTIONS",
+  "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
   "access-control-allow-headers": "authorization, content-type",
   "access-control-max-age": "600",
 };
@@ -344,6 +344,22 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
         if (!controller) return json({ error: "Unknown run" }, 404);
         controller.abort();
         return json({ ok: true });
+      }
+
+      // Live sessions. They exist only when the funnel was made with `sessions.keepAlive`.
+      if (seg[0] === "sessions") {
+        if (!funnel.sessionsEnabled) throw new FunnelError("Live sessions are off. Create the funnel with sessions: { keepAlive: true }.", "unsupported");
+        const provider = (url.searchParams.get("provider") || undefined) as ProviderId | undefined;
+        if (m === "GET" && !seg[1]) return json(funnel.sessions());
+        if (m === "POST" && seg[1] && seg[2] === "steer" && !seg[3]) {
+          const { text, provider: from } = (await readBody(req)) as { text?: unknown; provider?: ProviderId };
+          if (typeof text !== "string" || !text) return json({ error: "text is required" }, 400);
+          await funnel.steer(seg[1], text, from ?? provider);
+          return json({ ok: true });
+        }
+        if (m === "DELETE" && seg[1] && !seg[2]) {
+          return funnel.closeSession(seg[1], provider) ? json({ ok: true }) : json({ error: "Unknown session" }, 404);
+        }
       }
 
       if (m === "POST" && seg[0] === "logins" && seg[1]) {

@@ -1,0 +1,28 @@
+{
+  "ordinaryUsageAllowed": true,
+  "rateLimits": {
+    "limitId": "codex",
+    "limitName": null,
+    "normalModelSlug": null,
+    "primary": {
+      "usedPercent": 7,
+      "windowDurationMins": 300,
+      "resetsAt": 1792150253
+    },
+    "secondary": {
+      "usedPercent": 10,
+      "windowDurationMins": 10080,
+      "resetsAt": 1792663278
+    },
+    "credits": {
+      "hasCredits": false,
+      "unlimited": false,
+      "balance": "0"
+    },
+    "individualLimit": null,
+    "spendControlReached": false,
+    "planType": "plus",
+    "rateLimitReachedType": null
+  },
+  "accountId": "acct-0"
+}

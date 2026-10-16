@@ -21,6 +21,24 @@ interface Turn {
   finished: boolean;
 }
 
+/** How long Codex has to end an interrupted turn. After that the funnel ends it and drops the app-server. */
+const INTERRUPT_GRACE_MS = 5000;
+
+/** Whether `turn/interrupt` was acknowledged. The turn can end a moment before its answer arrives, so wait briefly. */
+async function acknowledged(interrupt: Promise<boolean> | undefined): Promise<boolean> {
+  if (!interrupt) return false;
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), 1000);
+    timer.unref();
+  });
+  try {
+    return await Promise.race([interrupt, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * One `codex app-server` and one thread, kept across turns. Each turn is a `turn/start` on the same thread.
  * `steer` sends `turn/steer`, which adds a user message to the running turn.
@@ -119,13 +137,26 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
     if (exited || closed) finish(t, [{ type: "error", message: "Codex app-server is not running.", code: "cli-failed" }]);
 
     const signal = input.signal;
+    // Set when the abort arrived while the turn ran. An abort after the turn ended changes nothing.
     let aborted = false;
+    // The answer to `turn/interrupt`: true when Codex acknowledged it.
+    let interrupt: Promise<boolean> | undefined;
+    let grace: NodeJS.Timeout | undefined;
+    // Set when Codex did not end the turn within INTERRUPT_GRACE_MS and the funnel ended it instead.
+    let forced = false;
     const onAbort = () => {
-      aborted = true;
       if (t.finished) return;
+      aborted = true;
       if (threadId && t.turnId) {
-        rpc.request("turn/interrupt", { threadId, turnId: t.turnId }).catch(() => {});
-        setTimeout(() => finish(t, [{ type: "done", text: "", finishReason: "cancelled" }]), 5000).unref();
+        interrupt = rpc.request("turn/interrupt", { threadId, turnId: t.turnId }).then(
+          () => true,
+          () => false,
+        );
+        grace = setTimeout(() => {
+          forced = true;
+          finish(t, [{ type: "done", text: "", finishReason: "cancelled" }]);
+        }, INTERRUPT_GRACE_MS);
+        grace.unref();
       } else {
         finish(t, [{ type: "done", text: "", finishReason: "cancelled" }]);
       }
@@ -154,8 +185,11 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
       }
     } finally {
       signal?.removeEventListener("abort", onAbort);
-      // An aborted turn, or one the consumer left before it ended, leaves the thread in an unknown state.
-      if (aborted || !terminal) stop();
+      clearTimeout(grace);
+      // A turn the consumer left before it ended leaves the thread in an unknown state. So does an aborted turn,
+      // unless Codex acknowledged `turn/interrupt` and ended the turn itself. Then the thread is idle and reusable.
+      const clean = !aborted || (!forced && (await acknowledged(interrupt)));
+      if (!terminal || !clean) stop();
       if (current === t) current = undefined;
       proc.hold(false);
     }

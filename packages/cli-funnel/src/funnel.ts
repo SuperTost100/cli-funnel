@@ -16,11 +16,15 @@ import {
   type FunnelEvent,
   type HistoryStore,
   type Installation,
+  type ListThreadsOptions,
   type LoginSession,
   type ModelInfo,
+  type ProcessOptions,
   type Provider,
   type ProviderId,
   type PullEvent,
+  type RateLimits,
+  type ThreadPage,
   type RunEventRecord,
   type RunInput,
   type RunRequest,
@@ -310,6 +314,33 @@ export function createFunnel(options: FunnelOptions = {}) {
     /** Stops every live session process. Running turns end as cancelled. */
     close(): void {
       pool?.closeAll();
+    },
+    /** True when the funnel was made with `sessions.keepAlive`. */
+    sessionsEnabled: Boolean(pool),
+
+    /** Lists the conversations a CLI saved, newest first. Codex only: other providers throw `unsupported`. */
+    async listThreads(id: ProviderId, opts?: ListThreadsOptions): Promise<ThreadPage> {
+      const p = provider(id);
+      if (!p.listThreads) throw new FunnelError(`${p.displayName} cannot list saved conversations.`, "unsupported");
+      return p.listThreads(opts);
+    },
+    /**
+     * Copies a saved conversation into a new one and resolves with the new session id. The original stays as it was.
+     * Codex only: other providers throw `unsupported`. Claude Code forks on a run, with `providerOptions.claude.forkSession`.
+     */
+    async forkSession(id: ProviderId, sessionId: string, opts?: ProcessOptions): Promise<string> {
+      const p = provider(id);
+      if (!p.forkThread) {
+        const hint = id === "claude" ? " Set providerOptions.claude.forkSession on a run with a sessionId instead." : "";
+        throw new FunnelError(`${p.displayName} cannot fork a conversation without running it.${hint}`, "unsupported");
+      }
+      return p.forkThread(sessionId, opts);
+    },
+    /** The account's usage windows now, and the limit that is reached, if any. Codex only: other providers throw `unsupported`. */
+    async rateLimits(id: ProviderId, opts?: ProcessOptions): Promise<RateLimits> {
+      const p = provider(id);
+      if (!p.rateLimits) throw new FunnelError(`${p.displayName} cannot report its usage windows.`, "unsupported");
+      return p.rateLimits(opts);
     },
 
     /** Runs one turn and resolves with the final text, usage and tool calls. */

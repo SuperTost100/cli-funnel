@@ -48,6 +48,7 @@ describe("claude providerOptions", () => {
       fallbackModel: "claude-sonnet-5",
       maxBudgetUsd: 0.5,
       forkSession: true,
+      forwardSubagentText: true,
       betas: ["b1"],
     }, { sessionId: "s1" });
     expect(a).toEqual(expect.arrayContaining([
@@ -61,6 +62,7 @@ describe("claude providerOptions", () => {
       "--fallback-model=claude-sonnet-5",
       "--max-budget-usd=0.5",
       "--fork-session",
+      "--forward-subagent-text",
       "--betas=b1",
     ]));
     expect(a).not.toContain("--bare");
@@ -102,6 +104,7 @@ describe("claude providerOptions", () => {
     expect(outcome(() => args("full", { betas: [1] }))).toBe("invalid-selection");
     expect(outcome(() => args("full", { mcpConfig: "/path/to/file.json" }))).toBe("invalid-selection");
     expect(outcome(() => args("full", { forkSession: true }))).toBe("invalid-selection");
+    expect(outcome(() => args("full", { forwardSubagentText: "yes" }))).toBe("invalid-selection");
     expect(outcome(() => args("full", "not an object"))).toBe("invalid-selection");
   });
 
