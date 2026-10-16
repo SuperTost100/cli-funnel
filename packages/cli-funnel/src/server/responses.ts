@@ -17,7 +17,7 @@ import {
   type Usage,
 } from "../types.js";
 import { BodyError, DEFAULT_MAX_BODY_BYTES, readJson } from "./body.js";
-import { IMAGE_DATA_URL, errorBody, fail, isObject, replay, resolveSelection, samplingOptions, statusOf, type OpenAIDefaults, type TrackedRun } from "./openai.js";
+import { IMAGE_DATA_URL, errorBody, fail, isObject, notFound, replay, resolveSelection, samplingOptions, statusOf, type OpenAIDefaults, type TrackedRun } from "./openai.js";
 import { json, sse, sseHeaders } from "./sse.js";
 
 /**
@@ -146,7 +146,7 @@ export async function handleResponses(
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
   startRun: (signal: AbortSignal) => TrackedRun = (signal) => ({ id: `run_${Date.now().toString(36)}`, signal, end: () => {} }),
 ): Promise<Response> {
-  if (req.method !== "POST") return json({ error: { message: "Not found" } }, 404);
+  if (req.method !== "POST") return notFound();
   let body: Json;
   try {
     body = await readJson(req, maxBodyBytes);

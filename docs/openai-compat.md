@@ -111,3 +111,21 @@ The OpenAI wire format has no approve button. Requests to this endpoint therefor
 A CLI runs its own tools. They do not appear as OpenAI `tool_calls`; `x_funnel.toolCalls` lists them. The client's `tools` work only on the API providers, Ollama and OpenAI-compatible servers. The endpoint is stateless unless you send `x_funnel.sessionId`, and some vendors want more than the call back: see the end of [Tool calling](run-options.md#tool-calling).
 
 Fields the server cannot honour get a 400 with `error.param` set, instead of being ignored: `tools` (when not empty) and `tool_choice` (other than `none` or `auto`) on a CLI provider, `n` other than 1, `temperature`, `top_p`, `stop` and `seed` on a provider without sampling, and `response_format` of type `json_object`. A body that is not valid JSON, or has no `model` string or no non-empty `messages` array of objects with a `role`, gets a 400 too, and so does a chat with a role other than `system`, `developer`, `user`, `assistant` or `tool`, a content part other than text or an image, a tool message without `tool_call_id`, a tool that is not a function, or a last message that is not from the user or a tool. Bodies over 10 MB get a 413. `maxBodyBytes` on the handler changes the limit.
+
+## Errors
+
+Every error on `/v1/*` has the OpenAI shape `{ "error": { "message", "type", "param", "code" } }`, including the ones the server raises before it reads the body. `type` is `invalid_request_error`, or `cli_funnel_error` when a provider failed. `param` names the request field at fault, or is `null`.
+
+| Status | `code` | Cause |
+|---|---|---|
+| 400 | `invalid_value` | Bad `model` id (`param: "model"`), unknown `x_funnel.access`, or a sampling value out of range |
+| 400 | `unsupported_value` | A field the provider or the endpoint cannot honour |
+| 400 | `invalid_json` | The body is not JSON |
+| 401 | `invalid_api_key` | The server has a token and the request has none or a wrong one |
+| 403 | `path_not_allowed` | `x_funnel.cwd` or an `addDirs` entry is outside `fsRoots` (`param: "x_funnel.cwd"` or `"x_funnel.providerOptions"`) |
+| 403 | `host_not_allowed` | No token is set and the request came from another website or host |
+| 404 | `not_found` | Unknown route or method. An unknown model on `GET /v1/models/{id}` is `model_not_found`. |
+| 413 | `request_too_large` | The body is over the limit |
+| 409, 429, 500 | the funnel's error code, for example `busy` | The provider could not take or finish the run |
+
+Routes outside `/v1/*` keep `{ "error": "<message>" }`.

@@ -401,6 +401,68 @@ describe("chat completions: sampling fields", () => {
   });
 });
 
+describe("every /v1 error has the OpenAI shape", () => {
+  const shape = (param: string | null, code: string | null, type = "invalid_request_error") => ({ message: expect.any(String), type, param, code });
+  const bodyOf = async (res: Response) => (await res.json()).error;
+  const claude = () => scripted("claude", () => [delta("x"), done()]);
+
+  it("answers a bad model id", async () => {
+    const res = await setup(claude()).chat({}, "nope");
+    expect(res.status).toBe(400);
+    expect(await bodyOf(res)).toEqual(shape("model", "invalid_value"));
+  });
+
+  it("answers an unknown access level", async () => {
+    const res = await setup(claude()).chat({ x_funnel: { access: "root" } });
+    expect(res.status).toBe(400);
+    expect(await bodyOf(res)).toEqual(shape("x_funnel.access", "invalid_value"));
+  });
+
+  it("answers a folder outside the roots", async () => {
+    const { chat } = setup(claude());
+    const res = await chat({ x_funnel: { cwd: "/" } });
+    expect(res.status).toBe(403);
+    expect(await bodyOf(res)).toEqual(shape("x_funnel.cwd", "path_not_allowed"));
+    const fallback = await setup(claude(), { openai: undefined }).chat();
+    expect(fallback.status).toBe(403);
+    expect(await bodyOf(fallback)).toEqual(shape(null, "path_not_allowed"));
+  });
+
+  it("answers an addDirs entry outside the roots", async () => {
+    const res = await setup(claude()).chat({ x_funnel: { providerOptions: { claude: { addDirs: ["/"] } } } });
+    expect(res.status).toBe(403);
+    expect(await bodyOf(res)).toEqual(shape("x_funnel.providerOptions", "path_not_allowed"));
+  });
+
+  it("answers an unknown route and a wrong method with 404", async () => {
+    const { get, post } = setup(claude());
+    for (const res of [await get("/v1/nothing"), await get("/v1/chat/completions"), await get("/v1/responses")]) {
+      expect(res.status).toBe(404);
+      expect(await bodyOf(res)).toEqual(shape(null, "not_found"));
+    }
+    expect((await bodyOf(await post("/v1/nothing", {})))).toEqual(shape(null, "not_found"));
+  });
+
+  it("answers a missing or wrong token with 401", async () => {
+    const { get } = setup(claude(), { token: "s3cret" });
+    const res = await get("/v1/models");
+    expect(res.status).toBe(401);
+    expect(await bodyOf(res)).toEqual(shape(null, "invalid_api_key"));
+  });
+
+  it("answers a foreign origin with 403", async () => {
+    const { handler } = setup(claude());
+    const res = await handler(new Request("http://x/v1/models", { headers: { origin: "https://evil.example" } }));
+    expect(res.status).toBe(403);
+    expect(await bodyOf(res)).toEqual(shape(null, "host_not_allowed"));
+  });
+
+  it("keeps the plain error body on other routes", async () => {
+    const { get } = setup(claude(), { token: "s3cret" });
+    expect(await (await get("/providers")).json()).toEqual({ error: "Unauthorized" });
+  });
+});
+
 describe("model routes (#50)", () => {
   const down = scripted("codex", () => [done()], { detect: async () => ({ installed: false, testedRange: { min: "1.0.0" } }) });
   const signedOut = scripted("agent", () => [done()], { authStatus: async () => ({ loggedIn: false }) });

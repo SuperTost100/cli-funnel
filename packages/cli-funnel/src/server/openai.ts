@@ -213,6 +213,8 @@ export const errorBody = (message: string, extra: { type?: string; param?: strin
 });
 export const fail = (status: number, message: string, extra?: Parameters<typeof errorBody>[1]) => json(errorBody(message, extra), status);
 
+export const notFound = () => fail(404, "Not found", { code: "not_found" });
+
 /** A bad selection is the client's mistake. Other FunnelError codes mean the provider cannot take the run right now. */
 export const statusOf = (code?: string) => (code === "invalid-selection" ? 400 : code ? 409 : 500);
 
@@ -324,10 +326,12 @@ export function resolveSelection(
   const provider = modelId.slice(0, slash) as ProviderId;
   const model = modelId.slice(slash + 1);
   if (slash < 0 || !funnel.providers[provider]) {
-    return json({ error: { message: 'model must look like "<provider>/<model>", for example "claude/claude-sonnet-5".' } }, 400);
+    return fail(400, 'model must look like "<provider>/<model>", for example "claude/claude-sonnet-5".', { param: "model", code: "invalid_value" });
   }
   let access = x?.access ?? defaults.access ?? "accept-edits";
-  if (!ACCESS_LEVELS.includes(access)) return json({ error: { message: `bad access "${access}"` } }, 400);
+  if (!ACCESS_LEVELS.includes(access)) {
+    return fail(400, `Unknown access level "${access}". Use one of ${ACCESS_LEVELS.join(", ")}.`, { param: x?.access ? "x_funnel.access" : undefined, code: "invalid_value" });
+  }
   const supported = funnel.providers[provider]!.capabilities.access;
   if (!x?.access && supported.length && !supported.includes(access)) {
     // Never grant more than the default. ACCESS_LEVELS runs from strictest to most open.
@@ -342,11 +346,11 @@ export function resolveSelection(
     const message = x?.cwd
       ? "x_funnel.cwd does not exist or is outside the allowed roots."
       : "The server's default folder does not exist or is outside the allowed roots. Start the server with a folder inside fsRoots.";
-    return json({ error: { message } }, 403);
+    return fail(403, message, { param: x?.cwd ? "x_funnel.cwd" : undefined, code: "path_not_allowed" });
   }
   const providerOptions = resolveOptionDirs(x?.providerOptions, cwdAllowed);
   if (providerOptions === null) {
-    return json({ error: { message: "An addDirs entry in x_funnel.providerOptions does not exist or is outside the allowed roots." } }, 403);
+    return fail(403, "An addDirs entry in x_funnel.providerOptions does not exist or is outside the allowed roots.", { param: "x_funnel.providerOptions", code: "path_not_allowed" });
   }
   return { provider, model, cwd, access, providerOptions };
 }
@@ -381,7 +385,7 @@ export async function handleOpenAI(
     return found ? json(found) : fail(404, `The model '${id}' does not exist.`, { param: "model", code: "model_not_found" });
   }
 
-  if (req.method !== "POST" || path !== "/v1/chat/completions") return json({ error: { message: "Not found" } }, 404);
+  if (req.method !== "POST" || path !== "/v1/chat/completions") return notFound();
 
   let raw: Record<string, unknown>;
   try {

@@ -14,7 +14,7 @@ import {
   type Selection,
 } from "../types.js";
 import { BodyError, DEFAULT_MAX_BODY_BYTES, readJson } from "./body.js";
-import { handleOpenAI, resolveOptionDirs, type OpenAIDefaults, type TrackedRun } from "./openai.js";
+import { errorBody, fail, handleOpenAI, resolveOptionDirs, type OpenAIDefaults, type TrackedRun } from "./openai.js";
 import { handleResponses } from "./responses.js";
 import { json, sse, sseHeaders } from "./sse.js";
 import { BUSY_RETRY_AFTER_SEC, RunQueue, waitForSlot, type RunLimits } from "../queue.js";
@@ -299,11 +299,16 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
       if (!path.startsWith(base)) return json({ error: "Not found" }, 404);
       path = path.slice(base.length) || "/";
     }
+    // The OpenAI routes answer in the OpenAI error shape. The others keep `{ error: string }`.
+    const oai = path.startsWith("/v1/");
     if (options.token && !tokenOk(req.headers.get("authorization"))) {
-      return json({ error: "Unauthorized" }, 401);
+      return oai ? fail(401, "Unauthorized", { code: "invalid_api_key" }) : json({ error: "Unauthorized" }, 401);
     }
     const refused = options.token ? undefined : localOnly(req);
-    if (refused) return json({ error: `${refused} Set a token or allowedHosts on the handler to accept it.` }, 403);
+    if (refused) {
+      const message = `${refused} Set a token or allowedHosts on the handler to accept it.`;
+      return oai ? fail(403, message, { code: "host_not_allowed" }) : json({ error: message }, 403);
+    }
     try {
       const seg = path.split("/").filter(Boolean);
       const m = req.method;
@@ -388,9 +393,11 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
 
       return json({ error: "Not found" }, 404);
     } catch (err) {
-      if (err instanceof BodyError) return json({ error: err.message }, err.status);
+      if (err instanceof BodyError) return oai ? fail(err.status, err.message, { code: err.status === 413 ? "request_too_large" : "invalid_json" }) : json({ error: err.message }, err.status);
       const status = err instanceof FunnelError ? (err.code === "invalid-selection" ? 400 : 409) : 500;
-      return json({ error: err instanceof Error ? err.message : String(err), code: (err as FunnelError).code }, status);
+      const message = err instanceof Error ? err.message : String(err);
+      if (oai) return json(errorBody(message, { type: "cli_funnel_error", code: (err as FunnelError).code }), status);
+      return json({ error: message, code: (err as FunnelError).code }, status);
     }
   }
 
