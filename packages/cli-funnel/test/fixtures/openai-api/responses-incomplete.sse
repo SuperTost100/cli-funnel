@@ -1,0 +1,9 @@
+event: response.created
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_02B","object":"response","created_at":1790000100,"status":"in_progress","model":"gpt-5.5","output":[],"usage":null}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":1,"item_id":"msg_02","output_index":0,"content_index":0,"delta":"Once upon","logprobs":[]}
+
+event: response.incomplete
+data: {"type":"response.incomplete","sequence_number":2,"response":{"id":"resp_02B","object":"response","created_at":1790000100,"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"model":"gpt-5.5","output":[],"usage":{"input_tokens":10,"input_tokens_details":{"cached_tokens":0},"output_tokens":16,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":26}}}
+

@@ -26,10 +26,12 @@ import {
   type FunnelEvent,
   type Message,
   type ModelInfo,
+  type OpenAIApi,
   type Provider,
   type RunInput,
   type ToolCall,
 } from "../types.js";
+import { streamResponses } from "./responses.js";
 
 export { chatMessages, type Msg } from "./wire.js";
 
@@ -58,6 +60,11 @@ export interface ApiVendorConfig {
   retries?: number;
   /** First retry wait in milliseconds, doubled for each retry. Default 500. A `Retry-After` header wins. */
   retryDelayMs?: number;
+  /**
+   * OpenAI only: the API every run uses. Default: Chat Completions for models that take it, and Responses for the
+   * models that only Responses serves (`-pro`, `-codex`). With Responses the conversation lives on OpenAI's side.
+   */
+  mode?: OpenAIApi;
 }
 
 export interface ApiConfig {
@@ -88,6 +95,8 @@ interface ApiSpec {
   stream(ctx: ApiContext, input: RunInput, messages: Msg[], turn: Turn): AsyncGenerator<FunnelEvent>;
   /** Typed messages in this vendor's message format. `earlier` is the stored history, for tool call lookups. */
   toMessages(messages: Message[], input: RunInput, earlier: Msg[]): Msg[];
+  /** A run whose conversation the vendor keeps, without local history. Undefined runs the usual way. */
+  ownRun?(input: RunInput, config: ApiVendorConfig): ((ctx: ApiContext) => AsyncIterable<FunnelEvent>) | undefined;
 }
 
 /** A failed response as events: a `limit` first when the API answered 429, then the error. */
@@ -372,6 +381,20 @@ export function openaiChatModel(id: string): boolean {
   return !/(audio|realtime|tts|transcribe|image|search|embedding|moderation|instruct|codex|deep-research|computer-use|-pro(-|$))/.test(base);
 }
 
+/**
+ * The OpenAI APIs a model id works with. Chat models work with both. `-pro` and `-codex` models work only with
+ * Responses. Deep research, computer use, aliases and models without text chat get none.
+ */
+export function openaiApis(id: string): OpenAIApi[] {
+  if (openaiChatModel(id)) return ["chat", "responses"];
+  if (!/^(gpt-|o\d)/.test(id) || /-latest$/.test(id)) return [];
+  if (/(audio|realtime|tts|transcribe|image|search|embedding|moderation|instruct|deep-research|computer-use)/.test(id)) return [];
+  return /(codex|-pro(-|$))/.test(id) ? ["responses"] : [];
+}
+
+/** The API a run uses: the configured mode, else Chat Completions when the model takes it, else Responses. */
+const openaiApiFor = (model: string, mode?: OpenAIApi): OpenAIApi => mode ?? (openaiApis(model)[0] ?? "chat");
+
 const openai: ApiSpec = {
   id: "openai-api",
   displayName: "OpenAI API",
@@ -384,15 +407,20 @@ const openai: ApiSpec = {
     const res = await fetch(`${ctx.baseUrl}/models`, { headers: ctx.headers });
     if (!res.ok) throw new FunnelError(`OpenAI API returned ${res.status}.`, "cli-failed");
     const body = (await res.json()) as { data: { id: string }[] };
-    return body.data
-      .filter((m) => openaiChatModel(m.id))
-      .map((m) => ({ id: m.id, name: m.id, provider: "openai-api" as const, efforts: openaiEfforts(m.id), ...MODEL_BASE }))
-      .sort((a, b) => a.id.localeCompare(b.id));
+    const models = body.data.flatMap((m) => {
+      const apis = openaiApis(m.id);
+      return apis.length ? [{ id: m.id, name: m.id, provider: "openai-api" as const, efforts: openaiEfforts(m.id), apis, ...MODEL_BASE }] : [];
+    });
+    return models.sort((a, b) => a.id.localeCompare(b.id));
   },
   // The key is already in ctx.headers, so it is passed as a header and not as `key`.
   stream: (ctx, input, messages, turn) =>
     streamChatCompletions({ baseUrl: ctx.baseUrl, headers: ctx.headers, retry: ctx.retry, maxTokensField: "max_completion_tokens", label: "OpenAI API", strictSchema: true }, input, messages, turn),
   toMessages: chatMessages,
+  ownRun: (input, config) =>
+    openaiApiFor(input.selection.model, config.mode) === "responses"
+      ? (ctx) => streamResponses({ baseUrl: ctx.baseUrl, headers: ctx.headers, retry: ctx.retry, label: "OpenAI API", strictSchema: true }, input)
+      : undefined,
 };
 
 /** Gemini ids that are aliases or models without text chat. Aliases like `gemini-flash-latest` break the versioned-id rule. */
@@ -590,12 +618,15 @@ function makeApiProvider(spec: ApiSpec, getKey: () => string | undefined, config
     update: async () => ({ changed: false, output: "API providers have nothing to update." }),
     models: async () => spec.listModels(context()),
     run(input) {
+      const secrets = [getKey() ?? process.env[spec.envVar], ...Object.values(config.headers ?? {})];
+      const own = spec.ownRun?.(input, config);
+      if (own) return redactErrors(settle(spec, input, () => own(context())), secrets);
       const turn: Turn = {};
       return redactErrors(
         runWithHistory<Msg>(input, (messages, earlier) => spec.toMessages(messages, input, earlier), (text): Msg => turn.assistant ?? { role: "assistant", content: text }, (messages) =>
           settle(spec, input, () => spec.stream(context(), input, messages, turn)),
         ),
-        [getKey() ?? process.env[spec.envVar], ...Object.values(config.headers ?? {})],
+        secrets,
       );
     },
   };

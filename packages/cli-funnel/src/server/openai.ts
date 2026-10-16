@@ -111,7 +111,7 @@ export function resolveOptionDirs<T>(options: T, allowed: (dir: string) => boole
 const text = (c: ChatMessage["content"]) =>
   typeof c === "string" ? c : (c ?? []).map((p) => (p.type === "text" ? p.text ?? "" : "")).join("");
 
-const IMAGE_DATA_URL = /^data:(image\/(?:png|jpeg|webp|gif));base64,(.+)$/;
+export const IMAGE_DATA_URL = /^data:(image\/(?:png|jpeg|webp|gif));base64,(.+)$/;
 
 const SYSTEM_ROLES = new Set(["system", "developer"]);
 
@@ -204,18 +204,18 @@ function toolOptions(
   return { ...(tools.length ? { tools } : {}), ...(toolChoice ? { toolChoice } : {}) };
 }
 
-const usageOut = (u?: Usage) =>
+export const usageOut = (u?: Usage) =>
   u ? { prompt_tokens: u.inputTokens, completion_tokens: u.outputTokens, total_tokens: u.totalTokens } : undefined;
 
-const errorBody = (message: string, extra: { type?: string; param?: string; code?: string | null } = {}) => ({
+export const errorBody = (message: string, extra: { type?: string; param?: string; code?: string | null } = {}) => ({
   error: { message, type: extra.type ?? "invalid_request_error", param: extra.param ?? null, code: extra.code ?? null },
 });
-const fail = (status: number, message: string, extra?: Parameters<typeof errorBody>[1]) => json(errorBody(message, extra), status);
+export const fail = (status: number, message: string, extra?: Parameters<typeof errorBody>[1]) => json(errorBody(message, extra), status);
 
 /** A bad selection is the client's mistake. Other FunnelError codes mean the provider cannot take the run right now. */
-const statusOf = (code?: string) => (code === "invalid-selection" ? 400 : code ? 409 : 500);
+export const statusOf = (code?: string) => (code === "invalid-selection" ? 400 : code ? 409 : 500);
 
-const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+export const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 
 /** Checks the shape of a chat body, so a malformed request gets a 400 and not a TypeError. Returns the problem, if any. */
 function badShape(body: Record<string, unknown>): { message: string; param: string } | undefined {
@@ -240,7 +240,7 @@ function badShape(body: Record<string, unknown>): { message: string; param: stri
  * Request fields the funnel cannot honour. A client that sets one gets a 400 and not a plausible answer that ignored it.
  * Returns the first field set to something other than its default.
  */
-function unsupportedField(body: Record<string, unknown>): string | undefined {
+export function unsupportedField(body: Record<string, unknown>): string | undefined {
   const set = (v: unknown) => v !== undefined && v !== null;
   const notOne = (v: unknown) => set(v) && v !== 1;
   // `tools` and `tool_choice` depend on the provider, so `toolOptions` checks them.
@@ -256,9 +256,51 @@ function unsupportedField(body: Record<string, unknown>): string | undefined {
 }
 
 /** Replays an event pulled off the iterator ahead of time, then the rest. Leaving early closes the iterator. */
-async function* replay(first: IteratorResult<FunnelEvent>, it: AsyncIterator<FunnelEvent>): AsyncGenerator<FunnelEvent> {
+export async function* replay(first: IteratorResult<FunnelEvent>, it: AsyncIterator<FunnelEvent>): AsyncGenerator<FunnelEvent> {
   if (!first.done) yield first.value;
   yield* { [Symbol.asyncIterator]: () => it };
+}
+
+/**
+ * The provider, model, folder and access level of an OpenAI-style request, or the error response. Shared by
+ * `/v1/chat/completions` and `/v1/responses`.
+ */
+export function resolveSelection(
+  funnel: Funnel,
+  modelId: string,
+  x: { cwd?: string; access?: AccessLevel; providerOptions?: ProviderOptions } | undefined,
+  defaults: OpenAIDefaults,
+  cwdAllowed: (cwd: string) => boolean,
+): { provider: ProviderId; model: string; cwd: string; access: AccessLevel; providerOptions?: ProviderOptions } | Response {
+  const slash = modelId.indexOf("/");
+  const provider = modelId.slice(0, slash) as ProviderId;
+  const model = modelId.slice(slash + 1);
+  if (slash < 0 || !funnel.providers[provider]) {
+    return json({ error: { message: 'model must look like "<provider>/<model>", for example "claude/claude-sonnet-5".' } }, 400);
+  }
+  let access = x?.access ?? defaults.access ?? "accept-edits";
+  if (!ACCESS_LEVELS.includes(access)) return json({ error: { message: `bad access "${access}"` } }, 400);
+  const supported = funnel.providers[provider]!.capabilities.access;
+  if (!x?.access && supported.length && !supported.includes(access)) {
+    // Never grant more than the default. ACCESS_LEVELS runs from strictest to most open.
+    const stricter = ACCESS_LEVELS.slice(0, ACCESS_LEVELS.indexOf(access)).filter((a) => a !== "supervised" && supported.includes(a));
+    if (stricter.length) access = stricter.at(-1)!;
+  }
+
+  // The resolved folder is always checked, the server's default and process.cwd() included.
+  // Providers with no access levels have no machine to protect, so they skip the check.
+  const cwd = x?.cwd ?? defaults.cwd ?? process.cwd();
+  if (supported.length && !cwdAllowed(cwd)) {
+    const message = x?.cwd
+      ? "x_funnel.cwd does not exist or is outside the allowed roots."
+      : "The server's default folder does not exist or is outside the allowed roots. Start the server with a folder inside fsRoots.";
+    return json({ error: { message } }, 403);
+  }
+  const providerOptions = resolveOptionDirs(x?.providerOptions, cwdAllowed);
+  if (providerOptions === null) {
+    return json({ error: { message: "An addDirs entry in x_funnel.providerOptions does not exist or is outside the allowed roots." } }, 403);
+  }
+  return { provider, model, cwd, access, providerOptions };
 }
 
 /** Model ids on this endpoint are "<provider>/<model>", for example "claude/claude-sonnet-5". */
@@ -311,34 +353,9 @@ export async function handleOpenAI(
   }
   const body = raw as unknown as ChatBody;
 
-  const slash = body.model.indexOf("/");
-  const provider = body.model.slice(0, slash) as ProviderId;
-  const model = body.model.slice(slash + 1);
-  if (slash < 0 || !funnel.providers[provider]) {
-    return json({ error: { message: 'model must look like "<provider>/<model>", for example "claude/claude-sonnet-5".' } }, 400);
-  }
-  let access = body.x_funnel?.access ?? defaults.access ?? "accept-edits";
-  if (!ACCESS_LEVELS.includes(access)) return json({ error: { message: `bad access "${access}"` } }, 400);
-  const supported = funnel.providers[provider]!.capabilities.access;
-  if (!body.x_funnel?.access && supported.length && !supported.includes(access)) {
-    // Never grant more than the default. ACCESS_LEVELS runs from strictest to most open.
-    const stricter = ACCESS_LEVELS.slice(0, ACCESS_LEVELS.indexOf(access)).filter((a) => a !== "supervised" && supported.includes(a));
-    if (stricter.length) access = stricter.at(-1)!;
-  }
-
-  // The resolved folder is always checked, the server's default and process.cwd() included.
-  // Providers with no access levels have no machine to protect, so they skip the check.
-  const cwd = body.x_funnel?.cwd ?? defaults.cwd ?? process.cwd();
-  if (supported.length && !cwdAllowed(cwd)) {
-    const message = body.x_funnel?.cwd
-      ? "x_funnel.cwd does not exist or is outside the allowed roots."
-      : "The server's default folder does not exist or is outside the allowed roots. Start the server with a folder inside fsRoots.";
-    return json({ error: { message } }, 403);
-  }
-  const providerOptions = resolveOptionDirs(body.x_funnel?.providerOptions, cwdAllowed);
-  if (providerOptions === null) {
-    return json({ error: { message: "An addDirs entry in x_funnel.providerOptions does not exist or is outside the allowed roots." } }, 403);
-  }
+  const resolved = resolveSelection(funnel, body.model, body.x_funnel, defaults, cwdAllowed);
+  if (resolved instanceof Response) return resolved;
+  const { provider, model, cwd, access, providerOptions } = resolved;
 
   const chat = toMessages(body.messages);
   if (!("messages" in chat)) return fail(400, chat.message, { param: chat.param });

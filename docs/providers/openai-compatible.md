@@ -26,6 +26,9 @@ await funnel.run({
 | `retries` | Optional. Extra attempts after a 429 or 5xx before any output. Default 2. See [API keys](../api-keys.md#retries). |
 | `models` | Optional. Used only when the server's `/models` fails or lists nothing. |
 | `efforts` | Optional. Levels the server accepts as `reasoning_effort`, for example `["low", "high"]`. A server cannot say which models reason, so they apply to every model of the endpoint. Without it the endpoint offers no effort. |
+| `mode` | Optional. `responses` sends runs to `/responses` instead of `/chat/completions`, for servers with the Responses API. Default `chat`. Models report it in `apis`. |
+
+In `responses` mode the server keeps the conversation, as with the OpenAI API: the session id is the last response id, sent back as `previous_response_id`. That needs a server that stores responses. On one that does not, run without `sessionId` and send the whole conversation in `messages`. See [OpenAI Responses API](../api-keys.md#openai-responses-api).
 
 These providers exist only when configured. Nothing is probed by default.
 

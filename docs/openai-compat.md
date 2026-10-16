@@ -1,6 +1,6 @@
 # OpenAI compatibility
 
-`cli-funnel serve` exposes `/v1/models` and `/v1/chat/completions`. Any OpenAI SDK, or any tool that lets you set a base URL, can use your CLI subscriptions.
+`cli-funnel serve` exposes `/v1/models`, `/v1/chat/completions` and `/v1/responses`. Any OpenAI SDK, or any tool that lets you set a base URL, can use your CLI subscriptions.
 
 ```bash
 npx cli-funnel serve --cwd /path/to/project --access accept-edits
@@ -64,6 +64,36 @@ When the server limits concurrent runs, a request waits for a free slot before t
 ```
 
 Every `addDirs` path must sit inside the server's allowed roots, like `x_funnel.cwd`, or the request gets 403. An option the access level does not allow fails with code `invalid-selection`: a 400 without `stream`, an error event in the stream with it.
+
+## Responses endpoint
+
+`POST /v1/responses` takes a Responses API request for any provider and turns it into a run, the same way chat completions do. `x_funnel`, `x_funnel.providerOptions` with its `addDirs` check, cancelling by run id and the queue work the same. A streamed response has `x_funnel.runId` on the `response.created` event.
+
+```ts
+const first = await client.responses.create({ model: "claude/claude-sonnet-5", input: "Explain src/index.ts" });
+const next = await client.responses.create({ model: "claude/claude-sonnet-5", previous_response_id: first.id, input: "Now the tests." });
+```
+
+The response `id` is the run's session id, so `previous_response_id` continues the conversation on any provider: in the CLI, in the funnel's history, or on OpenAI for `openai-api` in Responses mode. Send only the new input items with it.
+
+| Responses field | cli-funnel |
+|---|---|
+| `input` as a string | One user message |
+| `input` items | `message` items with `input_text`, `output_text` and `input_image` (data URLs only) parts, `function_call` and `function_call_output` items. `reasoning` items are skipped. |
+| `instructions`, `system` and `developer` messages | `system`, joined in order |
+| `previous_response_id` | `sessionId`. `x_funnel.sessionId` works too. |
+| `reasoning.effort` | `selection.effort` |
+| `max_output_tokens` | `maxOutputTokens` |
+| `temperature`, `top_p` | `sampling`, on providers with `capabilities.sampling`. Other providers get a 400 for a value other than 1. |
+| `text.format` of type `json_schema` | `responseSchema`. The output text is the JSON of the structured answer. |
+| `tools` of type `function`, `tool_choice` | `tools` and `toolChoice`, on providers with `capabilities.tools` |
+| `output` | A `message` item with the answer and a `function_call` item per pending tool call |
+| `status` | `incomplete` with `incomplete_details.reason` `max_output_tokens` or `content_filter`, else `completed` |
+| `stream: true` | Server-sent events with `event:` names: `response.created`, `response.in_progress`, `response.output_item.added`, `response.content_part.added`, `response.output_text.delta`, `response.function_call_arguments.delta` and `.done`, the matching `.done` events, and `response.completed` or `response.incomplete`. An error after the stream started arrives as `response.failed`. |
+
+`background`, `conversation`, stored `prompt` templates, `text.format` of type `json_object`, hosted tools such as web search, and `item_reference` items get a 400. `store`, `include`, `metadata` and `parallel_tool_calls` are ignored. Reasoning summaries are not streamed back on this endpoint.
+
+On a CLI the session id is known only once the CLI reports it. When that comes after the first event, `response.created` carries a placeholder id and `response.completed` the real one.
 
 ## Limits
 

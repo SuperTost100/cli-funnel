@@ -238,6 +238,7 @@ describe("providerOptions through the server", () => {
     post("/run", { selection: { provider: "claude", model: "m", cwd: root, access: "full" }, prompt: "go", providerOptions: { claude: { addDirs } } });
   const chat = (addDirs: unknown) =>
     post("/v1/chat/completions", { model: "claude/m", messages: [{ role: "user", content: "hi" }], x_funnel: { providerOptions: { claude: { addDirs } } } });
+  const responses = (addDirs: unknown) => post("/v1/responses", { model: "claude/m", input: "hi", x_funnel: { providerOptions: { claude: { addDirs } } } });
 
   it("checks addDirs against fsRoots like cwd", async () => {
     expect((await run([outside])).status).toBe(403);
@@ -250,6 +251,15 @@ describe("providerOptions through the server", () => {
     await ok.text();
     expect(seen.at(-1)).toEqual({ claude: { addDirs: [realpathSync(root)] } });
     expect((await chat([root])).status).toBe(200);
+    expect(seen.at(-1)).toEqual({ claude: { addDirs: [realpathSync(root)] } });
+  });
+
+  it("checks addDirs on /v1/responses with the same rule", async () => {
+    const refused = await responses([outside]);
+    expect(refused.status).toBe(403);
+    expect((await refused.json()).error.message).toContain("addDirs");
+    expect((await responses(join(root, "escape"))).status).toBe(403);
+    expect((await responses([root])).status).toBe(200);
     expect(seen.at(-1)).toEqual({ claude: { addDirs: [realpathSync(root)] } });
   });
 

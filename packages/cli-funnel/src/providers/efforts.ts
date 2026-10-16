@@ -47,6 +47,8 @@ export function anthropicAdaptive(id: string): boolean {
 /** Reasoning models: the o-series and GPT-5 onward. Chat and search variants take no `reasoning_effort`. */
 export function openaiEfforts(id: string): EffortOption[] {
   if (!/^(o\d|gpt-[5-9])/.test(id) || /^o1-(mini|preview)|chat|search/.test(id)) return [];
+  // GPT-5 pro reasons at high effort only.
+  if (/^gpt-5(\.\d+)?-pro/.test(id)) return levels("high");
   return levels("low", "medium", "high");
 }
 

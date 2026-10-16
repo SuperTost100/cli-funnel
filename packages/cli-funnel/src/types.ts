@@ -32,7 +32,12 @@ export interface ModelInfo {
   fast: boolean;
   /** Where this entry came from. */
   source: "manifest" | "cli";
+  /** The OpenAI APIs the model works with. Set on `openai-api` and OpenAI-compatible models. */
+  apis?: OpenAIApi[];
 }
+
+/** OpenAI's two chat APIs: Chat Completions (`chat`) and Responses (`responses`). */
+export type OpenAIApi = "chat" | "responses";
 
 export interface Capabilities {
   /** Access levels this provider can enforce headlessly. `supervised` appears only when approvals can be passed through. Empty means the provider has no machine access (API providers). */

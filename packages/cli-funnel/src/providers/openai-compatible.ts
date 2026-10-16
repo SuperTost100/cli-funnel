@@ -1,8 +1,9 @@
-import { FunnelError, type AuthStatus, type EffortOption, type Installation, type ModelInfo, type Provider, type ProviderId } from "../types.js";
+import { FunnelError, type AuthStatus, type EffortOption, type Installation, type ModelInfo, type OpenAIApi, type Provider, type ProviderId } from "../types.js";
 import { chatMessages, streamChatCompletions, type Msg, type Turn } from "./api.js";
 import { redact, redactErrors } from "../util/redact.js";
 import { runWithHistory } from "./history.js";
 import { mergeHeaders } from "./http.js";
+import { streamResponses } from "./responses.js";
 
 /** One OpenAI-compatible server: LM Studio, llama.cpp server, vLLM, a hosted gateway. */
 export interface OpenAICompatibleEndpoint {
@@ -25,6 +26,12 @@ export interface OpenAICompatibleEndpoint {
    * server cannot say which models reason, so the levels apply to every model of this endpoint. Leave it out to offer no effort setting.
    */
   efforts?: string[];
+  /**
+   * `responses` sends every run to `/responses` instead of `/chat/completions`, for servers that have the Responses
+   * API. The server then keeps the conversation: the session id is the last response id, sent as
+   * `previous_response_id`, so sessions need a server that stores responses. Default `chat`.
+   */
+  mode?: OpenAIApi;
 }
 
 const ID = /^[a-z0-9][a-z0-9-]*$/;
@@ -74,8 +81,10 @@ export function createOpenAICompatibleProvider(endpoint: OpenAICompatibleEndpoin
     const res = await listing(PROBE_MS * 5);
     if (res?.status === 401 || res?.status === 403) throw new FunnelError(`${endpoint.name} refused the request. Check its apiKey.`, "not-logged-in");
     const listed = res?.ok ? parseModelList(await res.json().catch(() => undefined), id, efforts) : [];
-    if (listed.length) return listed;
-    if (endpoint.models?.length) return configured();
+    // Every model of the endpoint goes through the one API it is set to.
+    const apis = [endpoint.mode ?? "chat"] as OpenAIApi[];
+    if (listed.length) return listed.map((m) => ({ ...m, apis }));
+    if (endpoint.models?.length) return configured().map((m) => ({ ...m, apis }));
     if (!res) throw new FunnelError(notReachable(), "not-installed");
     throw new FunnelError(`${endpoint.name} lists no models at ${shown}/models. Pass models: [...] for this endpoint.`, "cli-failed");
   }
@@ -115,12 +124,16 @@ export function createOpenAICompatibleProvider(endpoint: OpenAICompatibleEndpoin
     update: async () => ({ changed: false, output: `Update ${endpoint.name} with its own installer.` }),
     models,
     run(input) {
+      const secrets = [endpoint.apiKey, ...Object.values(endpoint.headers ?? {})];
+      if (endpoint.mode === "responses") {
+        return redactErrors(streamResponses({ baseUrl: base, key: endpoint.apiKey, headers: endpoint.headers, retry: { retries: endpoint.retries }, label: endpoint.name }, input), secrets);
+      }
       const turn: Turn = {};
       return redactErrors(
         runWithHistory<Msg>(input, chatMessages, (text) => turn.assistant ?? { role: "assistant", content: text }, (messages) =>
           streamChatCompletions({ baseUrl: base, key: endpoint.apiKey, headers: endpoint.headers, retry: { retries: endpoint.retries }, maxTokensField: "max_tokens", label: endpoint.name }, input, messages, turn),
         ),
-        [endpoint.apiKey, ...Object.values(endpoint.headers ?? {})],
+        secrets,
       );
     },
   };
