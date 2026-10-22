@@ -2,33 +2,9 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FunnelClient, RunEvent, Selection } from "cli-funnel/client";
 import { useRun } from "../src/index.js";
+import { stream } from "./stream.js";
 
 afterEach(cleanup);
-
-/** An async stream the test feeds by hand. */
-function stream<T>() {
-  const queue: T[] = [];
-  let wake: (() => void) | undefined;
-  let closed = false;
-  async function* gen(): AsyncGenerator<T> {
-    for (;;) {
-      if (queue.length) yield queue.shift()!;
-      else if (closed) return;
-      else await new Promise<void>((r) => (wake = r));
-    }
-  }
-  return {
-    gen: gen(),
-    push(e: T) {
-      queue.push(e);
-      wake?.();
-    },
-    end() {
-      closed = true;
-      wake?.();
-    },
-  };
-}
 
 const clientFor = (...streams: ReturnType<typeof stream<RunEvent>>[]) => ({ run: vi.fn(() => streams.shift()!.gen), approve: vi.fn() }) as unknown as FunnelClient;
 const SEL: Selection = { provider: "claude", model: "claude-1", cwd: "/work", access: "full" };

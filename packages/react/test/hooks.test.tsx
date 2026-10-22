@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from "@t
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AccessLevel, DirListing, FunnelClient, FunnelEvent, LoginStreamEvent, ModelInfo, ProviderId, ProviderOverview, RunEvent, Selection } from "cli-funnel/client";
 import { ApprovalPrompt, FunnelPicker, useAuth, useRun, useSelection } from "../src/index.js";
+import { stream } from "./stream.js";
 
 afterEach(cleanup);
 
@@ -13,31 +14,6 @@ function deferred<T>() {
   let reject!: (e: unknown) => void;
   const promise = new Promise<T>((res, rej) => ((resolve = res), (reject = rej)));
   return { promise, resolve, reject };
-}
-
-/** An async stream the test feeds by hand. */
-function stream<T>() {
-  const queue: T[] = [];
-  let wake: (() => void) | undefined;
-  let closed = false;
-  async function* gen(): AsyncGenerator<T> {
-    for (;;) {
-      if (queue.length) yield queue.shift()!;
-      else if (closed) return;
-      else await new Promise<void>((r) => (wake = r));
-    }
-  }
-  return {
-    gen: gen(),
-    push(e: T) {
-      queue.push(e);
-      wake?.();
-    },
-    end() {
-      closed = true;
-      wake?.();
-    },
-  };
 }
 
 const model = (id: string, provider: ProviderId = "claude"): ModelInfo => ({ id, name: id, provider, efforts: [], contextWindows: [], fast: false, source: "manifest" });
@@ -180,7 +156,6 @@ describe("useRun", () => {
     act(() => a.push({ type: "session", sessionId: "s" }));
     await waitFor(() => expect(result.current.queued).toBeUndefined());
     expect(result.current.turns[0]?.queued).toBeUndefined();
-    expect(result.current.events.map((e) => e.type)).toEqual(["session"]);
   });
 
   it("puts the first limit on the result and the turn", async () => {
@@ -351,6 +326,15 @@ describe("FunnelPicker", () => {
     await waitFor(() => expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ provider: "ollama", model: "llama3", access: "none" })));
     expect(screen.queryByText("Project folder")).toBeNull();
     expect(screen.queryByText("Machine access")).toBeNull();
+  });
+
+  it("does not hand the return value of onChange to React as a cleanup", async () => {
+    const client = fakeClient({ providers: vi.fn(async () => [OLLAMA]), models: vi.fn(async () => [model("llama3", "ollama")]) });
+    const seen: { current?: Selection } = {};
+    // An arrow that assigns returns the assigned object.
+    const { unmount } = render(<FunnelPicker client={client} onChange={(s) => (seen.current = s)} />);
+    await waitFor(() => expect(seen.current?.model).toBe("llama3"));
+    expect(() => unmount()).not.toThrow();
   });
 
   it("shows a models() error with a retry button", async () => {

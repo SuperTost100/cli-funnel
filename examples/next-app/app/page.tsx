@@ -5,7 +5,7 @@ import { ApprovalPrompt, FunnelPicker, useRun } from "cli-funnel-react";
 import type { Selection } from "cli-funnel/client";
 import "cli-funnel-react/styles.css";
 
-const client = createClient({ baseUrl: "/api/funnel", token: process.env.NEXT_PUBLIC_FUNNEL_TOKEN });
+const client = createClient({ baseUrl: "/api/funnel" });
 
 export default function Page() {
   const [selection, setSelection] = useState<Selection>();
