@@ -1,0 +1,55 @@
+name: Publish
+
+# Publishes cli-funnel and cli-funnel-react to npm when a GitHub release is published. npm trusts this workflow
+# through trusted publishing, so no token is stored. Each package's npm settings name this file.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # No registry-url: it writes an _authToken line to .npmrc, and trusted publishing needs no token at all.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # Trusted publishing needs npm 11.5.1 or later.
+      - run: npm install -g npm@^11.5.1
+      - name: Check that both packages carry the tag's version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          for pkg in packages/cli-funnel packages/react; do
+            version=$(node -p "require('./$pkg/package.json').version")
+            if [ "v$version" != "$TAG" ]; then
+              echo "::error::$pkg is $version, but the release tag is $TAG."
+              exit 1
+            fi
+          done
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      # cli-funnel goes first: cli-funnel-react names it as a peer. A version that is already on npm is skipped, so a
+      # failed run can be started again.
+      - name: Publish
+        run: |
+          for pkg in packages/cli-funnel packages/react; do
+            name=$(node -p "require('./$pkg/package.json').name")
+            version=$(node -p "require('./$pkg/package.json').version")
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version is already on npm."
+            else
+              npm publish -w "$pkg" --access public
+            fi
+          done
