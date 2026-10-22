@@ -390,7 +390,8 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
     setApprovals([]);
     setStatus((s) => (s === "running" ? "done" : s));
     setSession(undefined);
-    if (keepTranscript) setTurns([]);
+    // Without a transcript the last turn stays on screen, but it no longer waits for a slot.
+    setTurns((ts) => (keepTranscript ? [] : ts.map((t) => (t.queued === undefined ? t : { ...t, queued: undefined }))));
   }, [keepTranscript]);
 
   // Leaving the page ends the run instead of letting it stream into nothing.

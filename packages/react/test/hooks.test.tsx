@@ -158,6 +158,20 @@ describe("useRun", () => {
     expect(result.current.turns[0]?.queued).toBeUndefined();
   });
 
+  it("stops showing the queue position on newConversation()", async () => {
+    const a = stream<RunEvent>();
+    const client = fakeClient({ run: vi.fn(() => a.gen) });
+    const { result } = renderHook(() => useRun(client));
+    act(() => void result.current.send("one", SEL));
+    act(() => {
+      a.push({ type: "run", runId: "A" });
+      a.push({ type: "queue.position", ahead: 1 });
+    });
+    await waitFor(() => expect(result.current.queued).toBe(1));
+    act(() => result.current.newConversation());
+    expect(result.current.queued).toBeUndefined();
+  });
+
   it("puts the first limit on the result and the turn", async () => {
     const a = stream<RunEvent>();
     const client = fakeClient({ run: vi.fn(() => a.gen) });
