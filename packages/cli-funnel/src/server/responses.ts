@@ -1,23 +1,19 @@
 import { randomUUID } from "node:crypto";
 import type { Funnel } from "../funnel.js";
 import { parseArguments, stringifyArguments } from "../messages.js";
-import { BUSY_RETRY_AFTER_SEC } from "../queue.js";
 import {
-  FunnelError,
   type AccessLevel,
   type ContentPart,
-  type FunnelEvent,
-  type ImageAttachment,
   type ProviderOptions,
   type Message,
   type RunRequest,
   type RunResult,
-  type ToolChoice,
-  type ToolDefinition,
   type Usage,
 } from "../types.js";
-import { BodyError, DEFAULT_MAX_BODY_BYTES, readJson } from "./body.js";
-import { IMAGE_DATA_URL, errorBody, fail, isObject, notFound, replay, resolveSelection, samplingOptions, statusOf, type OpenAIDefaults, type TrackedRun } from "./openai.js";
+import { isObject } from "../util/is-object.js";
+import { readJson } from "./body.js";
+import { resolveSelection, samplingOptions, type OpenAIDefaults } from "./openai.js";
+import { SYSTEM_ROLES, answerOf, errorResponse, fail, failure, imagePart, notFound, pullFirst, pushToolResult, runSlot, toolOptions, tracked, type TrackedRun } from "./shared.js";
 import { json, sse, sseHeaders } from "./sse.js";
 
 /**
@@ -29,7 +25,6 @@ import { json, sse, sseHeaders } from "./sse.js";
 type Json = Record<string, unknown>;
 type Problem = { message: string; param: string };
 
-const SYSTEM_ROLES = new Set(["system", "developer"]);
 const TEXT_PARTS = new Set(["input_text", "output_text", "text"]);
 
 /** Input items as typed messages plus the system text found in them. Returns the problem when an item cannot be mapped. */
@@ -38,12 +33,6 @@ export function inputToMessages(input: unknown): { messages: Message[]; system: 
   if (!Array.isArray(input) || input.length === 0) return { message: "input must be a string or a non-empty array of items.", param: "input" };
   const messages: Message[] = [];
   const system: string[] = [];
-  // Calls join the assistant message before them, results the user message of results before them.
-  const push = (role: Message["role"], parts: ContentPart[], joinable: (m: Message) => boolean) => {
-    const last = messages.at(-1);
-    if (last && last.role === role && Array.isArray(last.content) && joinable(last)) last.content.push(...parts);
-    else messages.push({ role, content: parts });
-  };
   for (const [i, raw] of input.entries()) {
     const at = `input[${i}]`;
     if (!isObject(raw)) return { message: `${at} must be an object.`, param: at };
@@ -51,13 +40,17 @@ export function inputToMessages(input: unknown): { messages: Message[]; system: 
     if (type === "reasoning") continue;
     if (type === "function_call") {
       if (typeof raw.call_id !== "string" || typeof raw.name !== "string") return { message: `${at} needs a call_id and a name.`, param: at };
-      push("assistant", [{ type: "tool_call", id: raw.call_id, name: raw.name, input: parseArguments(typeof raw.arguments === "string" ? raw.arguments : "") }], () => true);
+      // Calls join the assistant message before them.
+      const call: ContentPart = { type: "tool_call", id: raw.call_id, name: raw.name, input: parseArguments(typeof raw.arguments === "string" ? raw.arguments : "") };
+      const last = messages.at(-1);
+      if (last?.role === "assistant" && Array.isArray(last.content)) last.content.push(call);
+      else messages.push({ role: "assistant", content: [call] });
       continue;
     }
     if (type === "function_call_output") {
       if (typeof raw.call_id !== "string") return { message: `${at} needs a call_id.`, param: at };
       const output = typeof raw.output === "string" ? raw.output : Array.isArray(raw.output) ? raw.output.map((p) => (isObject(p) && typeof p.text === "string" ? p.text : "")).join("") : "";
-      push("user", [{ type: "tool_result", toolCallId: raw.call_id, output }], (m) => (m.content as ContentPart[]).every((p) => p.type === "tool_result"));
+      pushToolResult(messages, { type: "tool_result", toolCallId: raw.call_id, output });
       continue;
     }
     if (type !== "message") return { message: `${at}: item type "${String(type)}" is not supported.`, param: at };
@@ -71,9 +64,9 @@ export function inputToMessages(input: unknown): { messages: Message[]; system: 
         if (!isObject(p)) return { message: `${param} must be an object.`, param };
         if (TEXT_PARTS.has(String(p.type))) parts.push({ type: "text", text: typeof p.text === "string" ? p.text : "" });
         else if (p.type === "input_image" && role === "user") {
-          const data = IMAGE_DATA_URL.exec(typeof p.image_url === "string" ? p.image_url : "");
-          if (!data) return { message: `${param}: images must be base64 data URLs of png, jpeg, webp or gif.`, param };
-          parts.push({ type: "image", mediaType: data[1] as ImageAttachment["mediaType"], data: data[2]! });
+          const image = imagePart(typeof p.image_url === "string" ? p.image_url : "");
+          if (!image) return { message: `${param}: images must be base64 data URLs of png, jpeg, webp or gif.`, param };
+          parts.push(image);
         } else if (p.type !== "refusal") return { message: `${param}: content part "${String(p.type)}" is not supported here.`, param };
       }
     } else return { message: `${at}.content must be a string or an array of parts.`, param: `${at}.content` };
@@ -84,25 +77,8 @@ export function inputToMessages(input: unknown): { messages: Message[]; system: 
   return { messages, system };
 }
 
-/** `tools` and `tool_choice` of a Responses request. Only function tools: hosted tools such as web search have no provider here. */
-function toolOptions(body: Json, canCall: boolean): { tools?: ToolDefinition[]; toolChoice?: ToolChoice } | Problem {
-  const list = body.tools ?? [];
-  const choice = body.tool_choice;
-  if (!Array.isArray(list)) return { message: "tools must be an array.", param: "tools" };
-  if (!canCall && (list.length || (choice != null && choice !== "none" && choice !== "auto"))) {
-    return { message: `${list.length ? "tools" : "tool_choice"} is not supported by this provider with this value. It runs its own tools.`, param: list.length ? "tools" : "tool_choice" };
-  }
-  const tools: ToolDefinition[] = [];
-  for (const [i, t] of list.entries()) {
-    if (!isObject(t) || t.type !== "function" || typeof t.name !== "string" || !t.name) return { message: `tools[${i}] must be a function tool with a name.`, param: `tools[${i}]` };
-    tools.push({ name: t.name, ...(typeof t.description === "string" ? { description: t.description } : {}), ...(isObject(t.parameters) ? { parameters: t.parameters } : {}) });
-  }
-  let toolChoice: ToolChoice | undefined;
-  if (choice === "auto" || choice === "none" || choice === "required") toolChoice = choice;
-  else if (isObject(choice) && choice.type === "function" && typeof choice.name === "string") toolChoice = { name: choice.name };
-  else if (choice != null) return { message: 'tool_choice must be "auto", "none", "required" or a function.', param: "tool_choice" };
-  return { ...(tools.length ? { tools } : {}), ...(toolChoice ? { toolChoice } : {}) };
-}
+/** The function of a Responses tool or tool_choice, which is the item itself. Hosted tools such as web search have no provider here. */
+const functionOf = (v: unknown) => (isObject(v) && v.type === "function" ? v : undefined);
 
 /** Fields this endpoint cannot honour. A client that sets one gets a 400 instead of an answer that ignored it. */
 function unsupported(body: Json): string | undefined {
@@ -141,19 +117,13 @@ const callItem = (c: { id: string; name: string }, args: string, status: "in_pro
 export async function handleResponses(
   funnel: Funnel,
   req: Request,
-  defaults: OpenAIDefaults = {},
-  cwdAllowed: (cwd: string) => boolean = () => true,
-  maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
-  startRun: (signal: AbortSignal) => TrackedRun = (signal) => ({ id: `run_${Date.now().toString(36)}`, signal, end: () => {} }),
+  defaults: OpenAIDefaults,
+  cwdAllowed: (cwd: string) => boolean,
+  maxBodyBytes: number,
+  startRun: (signal: AbortSignal) => TrackedRun,
 ): Promise<Response> {
   if (req.method !== "POST") return notFound();
-  let body: Json;
-  try {
-    body = await readJson(req, maxBodyBytes);
-  } catch (err) {
-    if (err instanceof BodyError) return fail(err.status, err.message, { code: err.status === 413 ? "request_too_large" : "invalid_json" });
-    throw err;
-  }
+  const body = await readJson(req, maxBodyBytes);
   if (typeof body.model !== "string" || !body.model) return fail(400, "model is required and must be a string.", { param: "model" });
   if (body.x_funnel !== undefined && !isObject(body.x_funnel)) return fail(400, "x_funnel must be an object.", { param: "x_funnel" });
   const x = (body.x_funnel ?? {}) as { cwd?: string; access?: AccessLevel; sessionId?: string; fast?: boolean; contextWindow?: number; providerOptions?: ProviderOptions };
@@ -167,7 +137,7 @@ export async function handleResponses(
 
   const converted = inputToMessages(body.input);
   if ("param" in converted) return fail(400, converted.message, { param: converted.param });
-  const tools = toolOptions(body, !!caps.tools);
+  const tools = toolOptions(body, !!caps.tools, functionOf);
   if ("param" in tools) return fail(400, tools.message, { param: tools.param, code: "unsupported_value" });
   const sampled = samplingOptions(body, caps.sampling, { stop: false });
   if ("message" in sampled) return fail(400, sampled.message, { param: sampled.param, code: sampled.code });
@@ -204,7 +174,6 @@ export async function handleResponses(
   const fallbackId = `resp_${randomUUID().replace(/-/g, "")}`;
   const messageId = `msg_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
   const base = (id: string) => ({ id, object: "response", created_at: createdAt, model: body.model, ...(system ? { instructions: system } : {}) });
-  const answerOf = (r: RunResult) => (input.responseSchema && r.structured !== undefined ? JSON.stringify(r.structured) : r.text);
   const messageItem = (text: string, status: "in_progress" | "completed") => ({
     type: "message",
     id: messageId,
@@ -213,7 +182,7 @@ export async function handleResponses(
     content: status === "completed" ? [{ type: "output_text", text, annotations: [] }] : [],
   });
   const finalResponse = (r: RunResult) => {
-    const text = answerOf(r);
+    const text = answerOf(input, r);
     const reason = incompleteReason(r.finishReason);
     return {
       ...base(r.sessionId ?? fallbackId),
@@ -228,33 +197,18 @@ export async function handleResponses(
       x_funnel: { runId: run.id, queued, sessionId: r.sessionId, toolCalls: r.toolCalls, deniedActions: r.deniedActions },
     };
   };
-  const failure = (err: unknown) => errorBody(err instanceof Error ? err.message : String(err), { type: "cli_funnel_error", code: (err as FunnelError).code });
 
   let queued: { waitedMs: number } | undefined;
   let streaming = false;
-  let release: (() => void) | undefined;
-  const end = () => {
-    release?.();
-    run.end();
-  };
+  const slot = runSlot(run, resolved.provider);
   try {
-    // With a concurrency limit the request waits here for a slot, as on chat completions.
-    if (run.queue) {
-      const since = Date.now();
-      let waited = false;
-      release = await run.queue.acquire(resolved.provider, { signal: run.signal, onPosition: () => (waited = true) });
-      if (waited) queued = { waitedMs: Date.now() - since };
-    }
+    queued = await slot.acquire();
     if (!body.stream) return json(finalResponse(await funnel.run(input)));
 
     const stream = funnel.stream(input);
-    const it = stream[Symbol.asyncIterator]();
-    // Pull the first event before the 200 goes out, so a refused run can still be a 4xx.
-    const first = await it.next();
-    if (!first.done && first.value.type === "error") {
-      await it.return?.();
-      return json(failure(Object.assign(new Error(first.value.message), { code: first.value.code })), statusOf(first.value.code));
-    }
+    const started = await pullFirst(stream);
+    if (started instanceof Response) return started;
+    const { first } = started;
     let seq = 0;
     const ev = (type: string, fields: Json) => ({ type, sequence_number: seq++, ...fields });
     const events = (async function* () {
@@ -283,7 +237,7 @@ export async function handleResponses(
         return call;
       }
       try {
-        for await (const e of replay(first, it) as AsyncIterable<FunnelEvent>) {
+        for await (const e of started.events) {
           if (e.type === "session") id = e.sessionId;
           else if (e.type === "text.delta" && !input.responseSchema) yield* textDelta(e.text);
           else if (e.type === "tool_call.delta") {
@@ -301,7 +255,7 @@ export async function handleResponses(
         }
         const r = await stream.result;
         // Codex and Antigravity send the answer in `done.text`, and a schema answer is sent whole at the end.
-        const text = answerOf(r);
+        const text = answerOf(input, r);
         const rest = text.startsWith(streamed) ? text.slice(streamed.length) : "";
         if (rest) yield* textDelta(rest);
         if (messageIndex !== undefined) {
@@ -316,23 +270,11 @@ export async function handleResponses(
         yield ev("response.failed", { response: { ...base(id), status: "failed", error: { code: error.code ?? "server_error", message: error.message }, output: [] } });
       }
     })();
-    // The run stays cancellable until its body ends.
-    const tracked = (async function* () {
-      try {
-        yield* events;
-      } finally {
-        end();
-      }
-    })();
     streaming = true;
-    return new Response(sse(tracked, { event: (item) => (item as { type: string }).type, onCancel: end }), { headers: sseHeaders });
+    return new Response(sse(tracked(events, slot.end), { event: (item) => (item as { type: string }).type, onCancel: slot.end }), { headers: sseHeaders });
   } catch (err) {
-    // A full queue, or a wait past queueTimeoutMs.
-    if (err instanceof FunnelError && err.code === "busy") {
-      return Response.json(failure(err), { status: 429, headers: { "retry-after": String(BUSY_RETRY_AFTER_SEC) } });
-    }
-    return json(failure(err), err instanceof FunnelError ? statusOf(err.code) : 500);
+    return errorResponse(err);
   } finally {
-    if (!streaming) end();
+    if (!streaming) slot.end();
   }
 }

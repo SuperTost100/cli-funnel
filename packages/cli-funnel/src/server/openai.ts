@@ -1,14 +1,10 @@
 import type { Funnel } from "../funnel.js";
-import { realpathSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import {
   ACCESS_LEVELS,
-  FunnelError,
   type AccessLevel,
   type ContentPart,
   type FinishReason,
-  type FunnelEvent,
-  type ImageAttachment,
   type Message,
   type ProviderId,
   type ProviderOptions,
@@ -16,15 +12,28 @@ import {
   type Sampling,
   type ToolCall,
   type ToolCallPart,
-  type ToolChoice,
-  type ToolDefinition,
-  type ToolResultPart,
   type Usage,
 } from "../types.js";
 import { parseArguments, stringifyArguments } from "../messages.js";
-import { BodyError, DEFAULT_MAX_BODY_BYTES, readJson } from "./body.js";
+import { readJson } from "./body.js";
 import { json, sse, sseHeaders } from "./sse.js";
-import { BUSY_RETRY_AFTER_SEC, type RunQueue } from "../queue.js";
+import { real } from "../util/fs-roots.js";
+import { isObject } from "../util/is-object.js";
+import {
+  SYSTEM_ROLES,
+  answerOf,
+  errorResponse,
+  fail,
+  failure,
+  imagePart,
+  notFound,
+  pullFirst,
+  pushToolResult,
+  runSlot,
+  toolOptions,
+  tracked,
+  type TrackedRun,
+} from "./shared.js";
 
 export interface OpenAIDefaults {
   /** Project directory the agent works in. Default: the server's cwd. Must be inside the handler's `fsRoots`. */
@@ -34,18 +43,6 @@ export interface OpenAIDefaults {
    * A provider that cannot enforce the default gets the next stricter level it can, for example "none" on Cursor Agent.
    */
   access?: AccessLevel;
-}
-
-/** A run the handler can cancel by id. `end` removes it once the run is over. */
-export interface TrackedRun {
-  id: string;
-  /** Aborts when the request closes or the run is cancelled by id. */
-  signal: AbortSignal;
-  /** The handler's deadline for the run. */
-  timeoutMs?: number;
-  /** The handler's run queue, when it limits concurrent runs. */
-  queue?: RunQueue;
-  end: () => void;
 }
 
 interface ChatMessage {
@@ -70,14 +67,6 @@ interface ChatBody {
   x_funnel?: { cwd?: string; access?: AccessLevel; sessionId?: string; fast?: boolean; contextWindow?: number; providerOptions?: ProviderOptions };
 }
 
-const realPath = (p: string): string | undefined => {
-  try {
-    return realpathSync(p);
-  } catch {
-    return undefined;
-  }
-};
-
 /**
  * `providerOptions` with every `addDirs` entry replaced by its real path, or `null` when an entry does not exist or
  * resolves outside `allowed`, the check `cwd` gets. The run gets the resolved path, so a symlink swapped in after the
@@ -99,9 +88,9 @@ export function resolveOptionDirs<T>(options: T, allowed: (dir: string) => boole
         resolved.push(d);
         continue;
       }
-      const real = isAbsolute(d) ? realPath(d) : undefined;
-      if (!real || !allowed(real)) return null;
-      resolved.push(real);
+      const path = isAbsolute(d) ? real(d) : undefined;
+      if (!path || !allowed(path)) return null;
+      resolved.push(path);
     }
     entries.push([id, { ...(entry as object), addDirs: resolved }]);
   }
@@ -111,10 +100,6 @@ export function resolveOptionDirs<T>(options: T, allowed: (dir: string) => boole
 
 const text = (c: ChatMessage["content"]) =>
   typeof c === "string" ? c : (c ?? []).map((p) => (p.type === "text" ? p.text ?? "" : "")).join("");
-
-export const IMAGE_DATA_URL = /^data:(image\/(?:png|jpeg|webp|gif));base64,(.+)$/;
-
-const SYSTEM_ROLES = new Set(["system", "developer"]);
 
 /**
  * The chat as typed messages, without the system ones. Images must be data URLs: fetching remote URLs would make this
@@ -127,11 +112,7 @@ function toMessages(messages: ChatMessage[]): { messages: Message[] } | { messag
     if (SYSTEM_ROLES.has(m.role)) continue;
     if (m.role === "tool") {
       if (typeof m.tool_call_id !== "string" || !m.tool_call_id) return { message: `messages[${i}].tool_call_id is required on tool messages.`, param: `messages[${i}].tool_call_id` };
-      const result: ToolResultPart = { type: "tool_result", toolCallId: m.tool_call_id, output: text(m.content) };
-      const last = out.at(-1);
-      // Several tool messages in a row answer one assistant turn, so they share one user message.
-      if (last?.role === "user" && Array.isArray(last.content) && last.content.every((p) => p.type === "tool_result")) last.content.push(result);
-      else out.push({ role: "user", content: [result] });
+      pushToolResult(out, { type: "tool_result", toolCallId: m.tool_call_id, output: text(m.content) });
       continue;
     }
     if (m.role !== "user" && m.role !== "assistant") return { message: `messages[${i}].role "${m.role}" is not supported.`, param: `messages[${i}].role` };
@@ -154,9 +135,9 @@ function toMessages(messages: ChatMessage[]): { messages: Message[] } | { messag
       const param = `messages[${i}].content[${j}]`;
       if (p.type === "text") parts.push({ type: "text", text: p.text ?? "" });
       else if (p.type === "image_url" && m.role === "user") {
-        const data = IMAGE_DATA_URL.exec(p.image_url?.url ?? "");
-        if (!data) return { message: `${param}: images must be base64 data URLs of png, jpeg, webp or gif.`, param };
-        parts.push({ type: "image", mediaType: data[1] as ImageAttachment["mediaType"], data: data[2]! });
+        const image = imagePart(p.image_url?.url ?? "");
+        if (!image) return { message: `${param}: images must be base64 data URLs of png, jpeg, webp or gif.`, param };
+        parts.push(image);
       } else return { message: `${param}: content part "${p.type}" is not supported here.`, param };
     }
     out.push({ role: m.role, content: [...parts, ...calls] });
@@ -170,55 +151,11 @@ const finish = (r: FinishReason) => (r === "denied" ? "content_filter" : r === "
 const toolCallsOut = (calls: ToolCall[]) =>
   calls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: stringifyArguments(c.input) } }));
 
-/**
- * `tools` and `tool_choice` as run options. Only function tools exist in this API. Returns the problem when the
- * request asks for something the provider cannot do.
- */
-function toolOptions(
-  body: Record<string, unknown>,
-  canCall: boolean,
-): { tools?: ToolDefinition[]; toolChoice?: ToolChoice } | { message: string; param: string } {
-  const list = body.tools == null ? [] : body.tools;
-  const choice = body.tool_choice;
-  if (!Array.isArray(list)) return { message: "tools must be an array.", param: "tools" };
-  if (!canCall) {
-    // Tools inside a CLI are its own. `none` and `auto` without tools ask for nothing, so they pass.
-    const unsupported = (param: string) => ({ message: `${param} is not supported by this provider with this value. It runs its own tools.`, param });
-    if (list.length) return unsupported("tools");
-    if (choice != null && choice !== "none" && choice !== "auto") return unsupported("tool_choice");
-    return {};
-  }
-  const tools: ToolDefinition[] = [];
-  for (const [i, t] of list.entries()) {
-    const fn = isObject(t) && t.type === "function" && isObject(t.function) ? t.function : undefined;
-    if (!fn || typeof fn.name !== "string" || !fn.name) return { message: `tools[${i}] must be a function tool with a name.`, param: `tools[${i}]` };
-    tools.push({
-      name: fn.name,
-      ...(typeof fn.description === "string" ? { description: fn.description } : {}),
-      ...(isObject(fn.parameters) ? { parameters: fn.parameters } : {}),
-    });
-  }
-  let toolChoice: ToolChoice | undefined;
-  if (choice === "auto" || choice === "none" || choice === "required") toolChoice = choice;
-  else if (isObject(choice) && choice.type === "function" && isObject(choice.function) && typeof choice.function.name === "string") toolChoice = { name: choice.function.name };
-  else if (choice != null) return { message: 'tool_choice must be "auto", "none", "required" or a function.', param: "tool_choice" };
-  return { ...(tools.length ? { tools } : {}), ...(toolChoice ? { toolChoice } : {}) };
-}
+/** The function of a Chat Completions tool or tool_choice, which nests it under `function`. */
+const functionOf = (v: unknown) => (isObject(v) && v.type === "function" && isObject(v.function) ? v.function : undefined);
 
-export const usageOut = (u?: Usage) =>
+const usageOut = (u?: Usage) =>
   u ? { prompt_tokens: u.inputTokens, completion_tokens: u.outputTokens, total_tokens: u.totalTokens } : undefined;
-
-export const errorBody = (message: string, extra: { type?: string; param?: string; code?: string | null } = {}) => ({
-  error: { message, type: extra.type ?? "invalid_request_error", param: extra.param ?? null, code: extra.code ?? null },
-});
-export const fail = (status: number, message: string, extra?: Parameters<typeof errorBody>[1]) => json(errorBody(message, extra), status);
-
-export const notFound = () => fail(404, "Not found", { code: "not_found" });
-
-/** A bad selection is the client's mistake. Other FunnelError codes mean the provider cannot take the run right now. */
-export const statusOf = (code?: string) => (code === "invalid-selection" ? 400 : code ? 409 : 500);
-
-export const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 
 /** Checks the shape of a chat body, so a malformed request gets a 400 and not a TypeError. Returns the problem, if any. */
 function badShape(body: Record<string, unknown>): { message: string; param: string } | undefined {
@@ -243,7 +180,7 @@ function badShape(body: Record<string, unknown>): { message: string; param: stri
  * Request fields the funnel cannot honour. A client that sets one gets a 400 and not a plausible answer that ignored it.
  * Returns the first field set to something other than its default.
  */
-export function unsupportedField(body: Record<string, unknown>): string | undefined {
+function unsupportedField(body: Record<string, unknown>): string | undefined {
   const set = (v: unknown) => v !== undefined && v !== null;
   const notOne = (v: unknown) => set(v) && v !== 1;
   // `tools` and `tool_choice` depend on the provider, so `toolOptions` checks them. So do the sampling fields, in `samplingOptions`.
@@ -305,12 +242,6 @@ export function samplingOptions(
   return Object.keys(sampling).length ? { sampling } : {};
 }
 
-/** Replays an event pulled off the iterator ahead of time, then the rest. Leaving early closes the iterator. */
-export async function* replay(first: IteratorResult<FunnelEvent>, it: AsyncIterator<FunnelEvent>): AsyncGenerator<FunnelEvent> {
-  if (!first.done) yield first.value;
-  yield* { [Symbol.asyncIterator]: () => it };
-}
-
 /**
  * The provider, model, folder and access level of an OpenAI-style request, or the error response. Shared by
  * `/v1/chat/completions` and `/v1/responses`.
@@ -360,10 +291,10 @@ export async function handleOpenAI(
   funnel: Funnel,
   req: Request,
   path: string,
-  defaults: OpenAIDefaults = {},
-  cwdAllowed: (cwd: string) => boolean = () => true,
-  maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
-  startRun: (signal: AbortSignal) => TrackedRun = (signal) => ({ id: `run_${Date.now().toString(36)}`, signal, end: () => {} }),
+  defaults: OpenAIDefaults,
+  cwdAllowed: (cwd: string) => boolean,
+  maxBodyBytes: number,
+  startRun: (signal: AbortSignal) => TrackedRun,
 ): Promise<Response> {
   // Only providers that are installed and signed in, so a client never sees a model it cannot run.
   const listModels = async () => {
@@ -387,13 +318,7 @@ export async function handleOpenAI(
 
   if (req.method !== "POST" || path !== "/v1/chat/completions") return notFound();
 
-  let raw: Record<string, unknown>;
-  try {
-    raw = await readJson(req, maxBodyBytes);
-  } catch (err) {
-    if (err instanceof BodyError) return fail(err.status, err.message, { code: err.status === 413 ? "request_too_large" : "invalid_json" });
-    throw err;
-  }
+  const raw = await readJson(req, maxBodyBytes);
   const shape = badShape(raw);
   if (shape) return fail(400, shape.message, { param: shape.param });
   const unsupported = unsupportedField(raw);
@@ -411,7 +336,7 @@ export async function handleOpenAI(
 
   const chat = toMessages(body.messages);
   if (!("messages" in chat)) return fail(400, chat.message, { param: chat.param });
-  const tools = toolOptions(raw, !!funnel.providers[provider]!.capabilities.tools);
+  const tools = toolOptions(raw, !!funnel.providers[provider]!.capabilities.tools, functionOf);
   if ("message" in tools) return fail(400, tools.message, { param: tools.param, code: "unsupported_value" });
   const sampled = samplingOptions(raw, funnel.providers[provider]!.capabilities.sampling);
   if ("message" in sampled) return fail(400, sampled.message, { param: sampled.param, code: sampled.code });
@@ -455,31 +380,17 @@ export async function handleOpenAI(
     choices: [{ index: 0, delta, finish_reason }],
     ...extra,
   });
-  const failure = (err: unknown) =>
-    errorBody(err instanceof Error ? err.message : String(err), { type: "cli_funnel_error", code: (err as FunnelError).code });
-  // With a schema the answer is the structured data, not the prose around it.
-  const answerOf = (r: { text: string; structured?: unknown }) => (input.responseSchema && r.structured !== undefined ? JSON.stringify(r.structured) : r.text);
 
   let streaming = false;
-  let release: (() => void) | undefined;
-  const end = () => {
-    release?.();
-    run.end();
-  };
+  const slot = runSlot(run, provider);
   try {
-    // With a concurrency limit the request waits here for a slot. `queued` tells the client how long it waited.
-    let queued: { waitedMs: number } | undefined;
-    if (run.queue) {
-      const since = Date.now();
-      let waited = false;
-      release = await run.queue.acquire(provider, { signal: run.signal, onPosition: () => (waited = true) });
-      if (waited) queued = { waitedMs: Date.now() - since };
-    }
+    // `queued` tells the client how long it waited for a slot.
+    const queued = await slot.acquire();
     if (!body.stream) {
       const r = await funnel.run(input);
       const calls = r.pendingToolCalls ?? [];
       // OpenAI sends null content next to tool calls when the model wrote no text.
-      const message = calls.length ? { role: "assistant", content: answerOf(r) || null, tool_calls: toolCallsOut(calls) } : { role: "assistant", content: answerOf(r) };
+      const message = calls.length ? { role: "assistant", content: answerOf(input, r) || null, tool_calls: toolCallsOut(calls) } : { role: "assistant", content: answerOf(input, r) };
       return json({
         id,
         object: "chat.completion",
@@ -492,13 +403,8 @@ export async function handleOpenAI(
     }
 
     const stream = funnel.stream(input);
-    const it = stream[Symbol.asyncIterator]();
-    // Pull the first event before the 200 goes out. Validation errors surface here, so they can still be a 4xx.
-    const first = await it.next();
-    if (!first.done && first.value.type === "error") {
-      await it.return?.();
-      return json(failure(Object.assign(new Error(first.value.message), { code: first.value.code })), statusOf(first.value.code));
-    }
+    const started = await pullFirst(stream);
+    if (started instanceof Response) return started;
     const chunks = (async function* () {
       yield chunk({ role: "assistant" }, null, { x_funnel: { runId: run.id, queued } });
       try {
@@ -511,7 +417,7 @@ export async function handleOpenAI(
           callIndex.set(id, callIndex.size);
           return chunk({ tool_calls: [{ index: callIndex.size - 1, id, type: "function", function: { name, arguments: args } }] });
         };
-        for await (const e of replay(first, it)) {
+        for await (const e of started.events) {
           if (e.type === "text.delta") {
             streamed += e.text;
             if (!input.responseSchema) yield chunk({ content: e.text });
@@ -522,7 +428,7 @@ export async function handleOpenAI(
         }
         const r = await stream.result;
         // Codex and Antigravity send the answer in `done.text`, not as deltas. Send whatever the deltas did not cover.
-        const rest = input.responseSchema ? answerOf(r) : r.text.startsWith(streamed) ? r.text.slice(streamed.length) : "";
+        const rest = input.responseSchema ? answerOf(input, r) : r.text.startsWith(streamed) ? r.text.slice(streamed.length) : "";
         if (rest) yield chunk({ content: rest });
         yield chunk({}, finish(r.finishReason), { x_funnel: { runId: run.id, sessionId: r.sessionId, toolCalls: r.toolCalls, deniedActions: r.deniedActions } });
         // OpenAI sends usage in a last chunk with no choices, and only to clients that ask for it.
@@ -533,23 +439,11 @@ export async function handleOpenAI(
         yield failure(err);
       }
     })();
-    // The run stays cancellable until its body ends.
-    const tracked = (async function* () {
-      try {
-        yield* chunks;
-      } finally {
-        end();
-      }
-    })();
     streaming = true;
-    return new Response(sse(tracked, { done: "[DONE]", onCancel: end }), { headers: sseHeaders });
+    return new Response(sse(tracked(chunks, slot.end), { done: "[DONE]", onCancel: slot.end }), { headers: sseHeaders });
   } catch (err) {
-    // A full queue, or a wait past queueTimeoutMs.
-    if (err instanceof FunnelError && err.code === "busy") {
-      return Response.json(failure(err), { status: 429, headers: { "retry-after": String(BUSY_RETRY_AFTER_SEC) } });
-    }
-    return json(failure(err), err instanceof FunnelError ? statusOf(err.code) : 500);
+    return errorResponse(err);
   } finally {
-    if (!streaming) end();
+    if (!streaming) slot.end();
   }
 }
