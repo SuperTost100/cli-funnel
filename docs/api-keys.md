@@ -48,7 +48,7 @@ The default base URLs are `https://api.anthropic.com`, `https://api.openai.com/v
 
 ### Retries
 
-A request that gets a 429 or a 5xx answer (Anthropic's 529 included) is sent again, so a call goes out at most three times with the defaults. cli-funnel waits the time in the `Retry-After` header when there is one, and the backoff otherwise. If `Retry-After` asks for more than 30 seconds, there is no retry and the error comes back at once.
+A request that gets a 429 or a 5xx answer (Anthropic's 529 included) is sent again, so a call goes out at most three times with the defaults. cli-funnel waits the time in the `retry-after-ms` or `Retry-After` header when there is one, and the backoff otherwise. If the header asks for more than 30 seconds, there is no retry and the error comes back at once.
 
 Retries happen only before any output. Once the response has started streaming, an error ends the run, because sending the request again would repeat text the caller already has. Network errors are not retried.
 

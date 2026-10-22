@@ -3,21 +3,14 @@ import type {
   ApprovalDecision,
   ApprovalRequest,
   AuthStatus,
-  FinishReason,
   FunnelClient,
-  FunnelEvent,
-  Limit,
   LoginEvent,
   ModelInfo,
   ProviderOverview,
   RunInput,
   Selection,
-  ToolCall,
-  Usage,
 } from "cli-funnel/client";
 import { applyEvent, endTurn, startTurn, type Turn } from "./transcript.js";
-
-export type SelectionField = keyof Selection;
 
 /** Extra fields for one `useRun().send` call. */
 export type RunOptions = Pick<RunInput, "system" | "attachments" | "responseSchema" | "maxOutputTokens">;
@@ -277,15 +270,10 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
   const keepTranscript = !!opts.keepTranscript;
   const [turns, setTurns] = useState<Turn[]>([]);
   const turnCount = useRef(0);
-  const [text, setText] = useState("");
-  const [events, setEvents] = useState<FunnelEvent[]>([]);
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [status, setStatus] = useState<"idle" | "running" | "done" | "error">("idle");
   const [error, setError] = useState<string>();
   const [session, setSession] = useState<{ id: string; provider: string; cwd?: string }>();
-  // What the run was started with. Later changes to the picker must not relabel its answer.
-  const [queued, setQueued] = useState<number>();
-  const [started, setStarted] = useState<{ provider: Selection["provider"]; model: string }>();
   const runId = useRef<string | undefined>(undefined);
   // The controller of the run that owns the state. A run that is no longer this one is stale and writes nothing.
   const abort = useRef<AbortController | undefined>(undefined);
@@ -297,12 +285,8 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
       abort.current = ctl;
       const chosen = { ...selection };
       runId.current = undefined;
-      setText("");
-      setEvents([]);
       setApprovals([]);
       setError(undefined);
-      setQueued(undefined);
-      setStarted({ provider: chosen.provider, model: chosen.model });
       setStatus("running");
       const turnId = ++turnCount.current;
       const start = startTurn(turnId, prompt, chosen);
@@ -323,17 +307,8 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
             runId.current = e.runId;
             continue;
           }
-          if (e.type === "queue.position") {
-            setQueued(e.ahead);
-            patch((t) => applyEvent(t, e));
-            continue;
-          }
-          setQueued(undefined);
-          setEvents((prev) => [...prev, e]);
           patch((t) => applyEvent(t, e));
-          if (e.type === "text.delta") setText((t) => t + e.text);
-          else if (e.type === "done" && e.text) setText(e.text);
-          else if (e.type === "session") setSession({ id: e.sessionId, provider: chosen.provider, cwd: chosen.cwd });
+          if (e.type === "session") setSession({ id: e.sessionId, provider: chosen.provider, cwd: chosen.cwd });
           else if (e.type === "approval.request") setApprovals((a) => [...a, e.request]);
           else if (e.type === "error") {
             setError(e.message);
@@ -344,7 +319,6 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
           end({ aborted: true });
           return;
         }
-        setQueued(undefined);
         setStatus((s) => (s === "error" ? s : "done"));
         end({ aborted: ctl.signal.aborted });
       } catch (e) {
@@ -353,7 +327,6 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
           return;
         }
         const aborted = ctl.signal.aborted;
-        setQueued(undefined);
         if (aborted) setStatus("done");
         else {
           setError(messageOf(e));
@@ -383,50 +356,27 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
     [client],
   );
 
-  const result = useMemo(() => {
-    const out = {
-      text: "",
-      provider: started?.provider,
-      model: started?.model,
-      sessionId: undefined as string | undefined,
-      usage: undefined as Usage | undefined,
-      finishReason: undefined as FinishReason | undefined,
-      toolCalls: [] as { id: string; name: string; input?: unknown; error?: string }[],
+  // The latest turn already folds every event, so the summary is a read of it, not a second fold.
+  const last = turns[turns.length - 1];
+  const result = useMemo(
+    () => ({
+      text: last?.text ?? "",
+      provider: last?.selection.provider,
+      model: last?.model,
+      sessionId: last?.sessionId,
+      usage: last?.usage,
+      finishReason: last?.finishReason,
+      toolCalls: last?.toolCalls ?? [],
       /** Tool calls the CLI refused because nobody could approve them. */
-      deniedActions: [] as string[],
-      /** Calls to `RunInput.tools` that wait for results. Set only when there are any. */
-      pendingToolCalls: undefined as ToolCall[] | undefined,
-      /** The parsed answer when the provider reports structured output itself. */
-      structured: undefined as unknown,
+      deniedActions: last?.deniedActions ?? [],
+      /** The parsed answer: what the provider reported, else the text parsed as JSON when `responseSchema` was set. */
+      structured: last?.structured,
+      structuredError: last?.structuredError,
       /** The first limit the provider reported, as in RunResult.limit. */
-      limit: undefined as Limit | undefined,
-    };
-    for (const e of events) {
-      if (e.type === "session") {
-        out.sessionId = e.sessionId;
-        out.model = e.model ?? out.model;
-      } else if (e.type === "text.delta") out.text += e.text;
-      else if (e.type === "tool.start") out.toolCalls.push({ id: e.id, name: e.name, input: e.input });
-      else if (e.type === "tool.end") {
-        const call = out.toolCalls.find((c) => c.id === e.id);
-        if (call && e.error) call.error = e.error;
-        if (e.error?.startsWith("denied:")) out.deniedActions.push(call?.name ?? e.error.slice(7).trim());
-      } else if (e.type === "tool_call") (out.pendingToolCalls ??= []).push({ id: e.id, name: e.name, input: e.input });
-      else if (e.type === "usage") out.usage = e.usage;
-      else if (e.type === "structured") out.structured = e.data;
-      else if (e.type === "limit") {
-        const { type: _, ...limit } = e;
-        out.limit ??= limit;
-      } else if (e.type === "done") {
-        if (e.text) out.text = e.text;
-        out.finishReason = e.finishReason;
-      }
-    }
-    // A turn holds the parsed JSON answer and the reason it failed. The event fold above only sees what the provider reported.
-    const last = turns[turns.length - 1];
-    out.structured ??= last?.structured;
-    return { ...out, structuredError: last?.structuredError };
-  }, [events, started, turns]);
+      limit: last?.limit,
+    }),
+    [last],
+  );
 
   // Stops the run on the server too. Closing the stream alone also stops it, but only once the server notices.
   const cancel = useCallback(() => {
@@ -438,10 +388,10 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
     abort.current?.abort();
     abort.current = undefined;
     setApprovals([]);
-    setQueued(undefined);
     setStatus((s) => (s === "running" ? "done" : s));
     setSession(undefined);
-    if (keepTranscript) setTurns([]);
+    // Without a transcript the last turn stays on screen, but it no longer waits for a slot.
+    setTurns((ts) => (keepTranscript ? [] : ts.map((t) => (t.queued === undefined ? t : { ...t, queued: undefined }))));
   }, [keepTranscript]);
 
   // Leaving the page ends the run instead of letting it stream into nothing.
@@ -454,8 +404,8 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
   );
 
   return {
-    text,
-    events,
+    /** The latest answer so far, same as `result.text`. */
+    text: result.text,
     /** Every turn of the conversation when `keepTranscript` is set, else the latest run only. Pass it to `FunnelTranscript`. */
     turns,
     result,
@@ -463,7 +413,7 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
     status,
     error,
     /** While the run waits for a server slot: how many runs wait ahead of it. Undefined once it starts. */
-    queued,
+    queued: last?.queued,
     /** The conversation `send` will continue, or undefined when the next run starts fresh. */
     session,
     /** Same as `session?.id`. */

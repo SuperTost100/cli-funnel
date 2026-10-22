@@ -1,6 +1,6 @@
 # UI components
 
-`cli-funnel-react` has hooks for building your own UI and four small components. It talks to the HTTP handler from `cli-funnel/server`.
+`cli-funnel-react` has hooks for building your own UI and five small components: `FunnelPicker`, `FunnelPickerView`, `FunnelTranscript`, `FunnelLogin` and `ApprovalPrompt`. It talks to the HTTP handler from `cli-funnel/server`.
 
 ## Server side
 
@@ -11,7 +11,7 @@ Mount the handler in any framework that uses the standard `Request` and `Respons
 import { createFunnel } from "cli-funnel";
 import { createHandler } from "cli-funnel/server";
 
-const handler = createHandler(createFunnel(), { basePath: "/api/funnel", token: process.env.FUNNEL_TOKEN });
+const handler = createHandler(createFunnel(), { basePath: "/api/funnel" });
 
 export const GET = handler;
 export const POST = handler;
@@ -47,7 +47,29 @@ const client = createClient({ baseUrl: "/api/funnel", token });
 
 The client has no React dependency. It works in any browser or runtime.
 
-It mirrors the funnel: `providers()`, `models(id)`, `authStatus(id)`, `login(id)`, `logout(id)`, `update(id)`, `run(input)`, and on Ollama `pullModel(id, name, signal)` and `deleteModel(id, name)`.
+It mirrors the funnel. `signal` is an optional `AbortSignal`, and every method returns a promise unless it says it streams.
+
+| Method | What it does |
+| --- | --- |
+| `providers(signal?)` | Installed providers with their capabilities and login state. |
+| `models(id, signal?)` | The model list of one provider. |
+| `authStatus(id, signal?)` | Whether the provider is signed in. |
+| `login(id, signal?, { device? })` | Streams login events. The first is `{ type: "login", loginId }`. `device` asks for a device-code login. |
+| `sendLoginCode(loginId, code)` | Answers a `code-prompt` login event. |
+| `cancelLogin(loginId)` | Stops a login in progress. |
+| `logout(id)` | Signs the provider out. |
+| `update(id)` | Updates the CLI and returns what changed. |
+| `run(input, signal?)` | Streams run events. The first is `{ type: "run", runId }`. |
+| `approve(runId, approvalId, decision)` | Answers an approval request of a run. |
+| `cancelRun(runId)` | Stops a run on the server. Its stream ends with `finishReason: "cancelled"`. |
+| `listDirs(path?, signal?)` | Lists the folders under `path`, inside the server's `fsRoots`. |
+| `pullModel(id, name, signal?)` | Streams a model download. Ollama only. |
+| `deleteModel(id, name)` | Deletes a model. Ollama only. |
+| `sessions(signal?)` | Lists live sessions. Needs `sessions.keepAlive` on the server, else 409. |
+| `steer(sessionId, text, provider?)` | Adds a message to the turn running in a live session. Codex only. |
+| `closeSession(sessionId, provider?)` | Stops the live process of a session. The next turn resumes it in a new one. |
+
+Pass `provider` to `steer` and `closeSession` when two providers could share a session id. See [Live sessions](sessions.md#over-http).
 
 ## Picker
 
@@ -63,6 +85,8 @@ import "cli-funnel-react/styles.css";
 />
 ```
 
+`FunnelPicker` keeps its own state. When other parts of your UI need the same state, call `useSelection(client, { defaults, locked })` yourself and render `<FunnelPickerView client={client} state={state} locked={locked} />`. The two share the markup and the rules above.
+
 It shows provider, model, reasoning, context window, fast mode, project folder and access level. Only controls the chosen provider supports appear. Switching provider or model resets dependent fields to valid values. `onChange` receives a complete `Selection`, or `undefined` while something is missing.
 
 Providers without access levels (Ollama, API providers, OpenAI-compatible servers) have no folder and no machine access. The picker hides those two controls and a selection is complete once provider and model are set. Its `access` is `"none"` and its `cwd` is empty.
@@ -74,6 +98,8 @@ If the model list fails to load, the picker shows the error with a Retry button.
 ## Next.js
 
 The package starts with a `"use client"` directive, so a Server Component can import it without a hooks error. Props must still be serializable, and `client` holds functions. Create the client and render the components inside a file that starts with `"use client"`, as `examples/next-app` does.
+
+Do not put the handler's `token` in browser code. Anything in a `NEXT_PUBLIC_` variable ships to every visitor, and a browser client without the token gets a 401 from a handler that has one. `examples/next-app` sets no `token`, so the handler answers only the hosts listed under [Server side](#server-side). If others can reach the app, check your own session in the route before it calls the handler. Use `token` when a separate process calls the handler, for example `npx cli-funnel serve --token` with `createClient({ token })` in server code.
 
 Styles use CSS variables prefixed `--cf-` and follow `prefers-color-scheme`. Every component's root element has the class `cf`, and `.cf` declares the variables itself, so a value set on a parent element is ignored. Override them on `.cf`:
 
@@ -109,9 +135,9 @@ const run = useRun(client);
 
 `useRun` keeps the session id between calls, so the next `send` continues the conversation. `newConversation()` ends the run in flight and clears the session. `cancel()` stops the run on the server and closes the stream. When the server limits concurrent runs, `queued` holds the number of runs ahead while this one waits, so you can show "2 ahead of you". Calling `send` during a run cancels that run first. Leaving the page cancels it too.
 
-`run.result` has `text`, `provider`, `model`, `sessionId`, `usage`, `finishReason`, `toolCalls`, `deniedActions`, `pendingToolCalls` and `structured`. `provider` and `model` are the ones you passed to `send`, even if the picker has changed since. If `approve` fails, the prompt stays and `run.error` has the message, so the user can press the button again.
+`run.result` has `text`, `provider`, `model`, `sessionId`, `usage`, `finishReason`, `toolCalls`, `deniedActions`, `structured`, `structuredError` and `limit`. It is the latest run in the shape of `funnel.run()`, without `pendingToolCalls`, because `useRun` cannot pass `tools`. `provider` and `model` are the ones you passed to `send`, even if the picker has changed since. `run.text` is `run.result.text`. If `approve` fails, the prompt stays and `run.error` has the message, so the user can press the button again.
 
-`run.result` summarizes the latest run in the shape of `funnel.run()`: `text`, `provider`, `model`, `sessionId`, `usage`, `finishReason`, `toolCalls`, `deniedActions` and `structured`. When you pass `responseSchema` to `send` and the provider does not report a parsed answer, `structured` is the answer text parsed as JSON, or `structuredError` says why that failed. Validate it against your schema yourself.
+When you pass `responseSchema` to `send` and the provider does not report a parsed answer, `structured` is the answer text parsed as JSON, or `structuredError` says why that failed. Validate it against your schema yourself.
 
 ## Transcript
 

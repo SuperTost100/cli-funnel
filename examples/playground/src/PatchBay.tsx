@@ -1,6 +1,6 @@
 import type { ProviderId, ProviderOverview } from "cli-funnel/client";
 
-export const CABLE: Record<string, string> = {
+const CABLE: Record<string, string> = {
   claude: "#2447C6",
   codex: "#12805C",
   agent: "#7B3FA0",

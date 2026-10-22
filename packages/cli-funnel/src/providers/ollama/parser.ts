@@ -20,7 +20,7 @@ const LEVELS: EffortOption[] = [
  * Ollama's `think` is on or off for most models, so those get one level, `on`. The gpt-oss models take
  * `low`, `medium` and `high`. A model without the `thinking` capability gets none.
  */
-export function thinkingEfforts(model: Json): EffortOption[] {
+function thinkingEfforts(model: Json): EffortOption[] {
   if (!Array.isArray(model.capabilities) || !model.capabilities.includes("thinking")) return [];
   return /^gpt-oss/.test(String(model.name)) ? LEVELS : [{ id: "on", label: "On" }];
 }
@@ -31,7 +31,7 @@ export const thinkValue = (effort: string): boolean | string => (effort === "on"
 const CONTEXT_STEPS = [4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576];
 
 /** Context sizes to offer: doubling steps below the model's limit, then the limit. Empty when the server does not report it. */
-export function contextSizes(model: Json): number[] {
+function contextSizes(model: Json): number[] {
   const max = model.details?.context_length;
   if (typeof max !== "number" || !(max > 0)) return [];
   return [...CONTEXT_STEPS.filter((s) => s < max), max];
@@ -54,7 +54,7 @@ export function parseTags(body: unknown): ModelInfo[] {
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
-export function toUsage(line: Json): Usage | undefined {
+function toUsage(line: Json): Usage | undefined {
   if (line.prompt_eval_count === undefined && line.eval_count === undefined) return undefined;
   const inputTokens = line.prompt_eval_count ?? 0;
   const outputTokens = line.eval_count ?? 0;

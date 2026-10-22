@@ -1,8 +1,8 @@
-import { parseArguments, pendingMessages, runMessages, stringifyArguments } from "../messages.js";
+import { parseArguments, pendingMessages, runMessages } from "../messages.js";
 import { readSSE } from "../util/sse.js";
-import { fetchRetrying, mergeHeaders, type RetryOptions } from "./http.js";
-import { parseHttpLimit } from "./limits.js";
-import type { ContentPart, FinishReason, FunnelEvent, Message, RunInput, ToolChoice, ToolDefinition, Usage } from "../types.js";
+import { fetchRetrying, httpError, jsonHeaders, truncated, type RetryOptions } from "./http.js";
+import { responsesInput, responsesToolChoice, responsesTools } from "./wire.js";
+import type { FinishReason, FunnelEvent, RunInput, Usage } from "../types.js";
 import { joinUrl } from "../util/url.js";
 
 /**
@@ -21,37 +21,6 @@ export interface ResponsesOptions {
   label: string;
   /** Send `strict: true` with the JSON schema. */
   strictSchema?: boolean;
-}
-
-const NO_PARAMETERS = { type: "object", properties: {} };
-
-export const responsesTools = (tools: ToolDefinition[]) =>
-  tools.map((t) => ({ type: "function", name: t.name, ...(t.description ? { description: t.description } : {}), parameters: t.parameters ?? NO_PARAMETERS }));
-
-export const responsesToolChoice = (c: ToolChoice) => (typeof c === "string" ? c : { type: "function", name: c.name });
-
-const userPart = (p: ContentPart) =>
-  p.type === "image" ? { type: "input_image", image_url: `data:${p.mediaType};base64,${p.data}` } : { type: "input_text", text: p.type === "text" ? p.text : "" };
-
-/** Typed messages as Responses input items. Tool calls and their results are items of their own, not message content. */
-export function responsesInput(messages: Message[]): Record<string, unknown>[] {
-  return messages.flatMap((m) => {
-    if (typeof m.content === "string") return [{ role: m.role, content: m.content }];
-    const items: Record<string, unknown>[] = [];
-    const rest: ContentPart[] = [];
-    for (const p of m.content) {
-      if (p.type === "tool_call") items.push({ type: "function_call", call_id: p.id, name: p.name, arguments: stringifyArguments(p.input) });
-      else if (p.type === "tool_result") items.push({ type: "function_call_output", call_id: p.toolCallId, output: p.isError ? `Error: ${p.output}` : p.output });
-      else rest.push(p);
-    }
-    if (!rest.length) return items;
-    const message =
-      m.role === "assistant"
-        ? { role: "assistant", content: rest.map((p) => (p.type === "text" ? p.text : "")).join("") }
-        : { role: "user", content: rest.map(userPart) };
-    // A tool result answers the call before it, so results go first; an assistant's text comes before its calls.
-    return m.role === "assistant" ? [message, ...items] : [...items, message];
-  });
 }
 
 /** The request body. With a session only the new messages go, since the server holds the rest. */
@@ -162,7 +131,7 @@ export async function* streamResponses(opts: ResponsesOptions, input: RunInput):
       {
         method: "POST",
         signal: input.signal,
-        headers: mergeHeaders({ ...(opts.key ? { authorization: `Bearer ${opts.key}` } : {}), "content-type": "application/json" }, opts.headers),
+        headers: jsonHeaders(opts.key, opts.headers),
         body: JSON.stringify(responsesBody(input, opts.strictSchema)),
       },
       opts.retry,
@@ -175,10 +144,7 @@ export async function* streamResponses(opts: ResponsesOptions, input: RunInput):
   try {
     if (!res.ok) {
       // A 429 comes with a `limit` event first, as on the other API providers.
-      const text = await res.text();
-      const limit = parseHttpLimit(res.status, res.headers, text);
-      if (limit) yield limit;
-      return yield { type: "error", message: `${opts.label} ${res.status}: ${text}`, code: "cli-failed" };
+      return yield* httpError(opts.label, res);
     }
     for await (const { data } of readSSE(res)) {
       if (data === "[DONE]") break;
@@ -189,5 +155,5 @@ export async function* streamResponses(opts: ResponsesOptions, input: RunInput):
     if (input.signal?.aborted) return yield cancelled;
     throw err;
   }
-  yield { type: "error", message: `${opts.label} closed the stream before the answer finished.`, code: "stream-truncated" };
+  yield truncated(opts.label);
 }

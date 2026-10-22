@@ -1,8 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
-import { realpathSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { Funnel } from "../funnel.js";
 import {
   FunnelError,
@@ -14,10 +13,12 @@ import {
   type Selection,
 } from "../types.js";
 import { BodyError, DEFAULT_MAX_BODY_BYTES, readJson } from "./body.js";
-import { errorBody, fail, handleOpenAI, resolveOptionDirs, type OpenAIDefaults, type TrackedRun } from "./openai.js";
+import { handleOpenAI, resolveOptionDirs, type OpenAIDefaults } from "./openai.js";
 import { handleResponses } from "./responses.js";
+import { errorBody, fail, statusOfError, tooBusy, type TrackedRun } from "./shared.js";
 import { json, sse, sseHeaders } from "./sse.js";
-import { BUSY_RETRY_AFTER_SEC, RunQueue, waitForSlot, type RunLimits } from "../queue.js";
+import { createCwdGuard, insideRoots, real } from "../util/fs-roots.js";
+import { RunQueue, waitForSlot, type RunLimits } from "../queue.js";
 
 /** `maxConcurrentRuns`, `maxQueuedRuns` and `queueTimeoutMs` limit the runs on `/run`, `/v1/chat/completions` and `/v1/responses`. */
 export interface HandlerOptions extends RunLimits {
@@ -75,15 +76,6 @@ interface PendingApproval {
   resolve: (d: ApprovalDecision) => void;
 }
 
-/** The path with symlinks resolved, or undefined when it does not exist. */
-function real(p: string): string | undefined {
-  try {
-    return realpathSync(p);
-  } catch {
-    return undefined;
-  }
-}
-
 /** The host name of a URL, or undefined when it does not parse. */
 function hostnameOf(url: string): string | undefined {
   try {
@@ -128,14 +120,10 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
   const maxBody = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
   const readBody = (req: Request) => readJson(req, maxBody);
 
-  const insideRoots = (p: string) => roots.some((r) => p === r || p.startsWith(r + sep));
   // Checks the real path, so a symlink inside a root cannot point a run or the picker outside it.
-  const cwdAllowed = (cwd: string) => {
-    const p = isAbsolute(cwd) ? real(cwd) : undefined;
-    return !!p && insideRoots(p);
-  };
-  const openai = options.openai?.cwd ? { ...options.openai, cwd: resolve(options.openai.cwd) } : options.openai;
-  if (openai?.cwd && !cwdAllowed(openai.cwd)) {
+  const cwdAllowed = createCwdGuard(roots);
+  const openai: OpenAIDefaults = options.openai?.cwd ? { ...options.openai, cwd: resolve(options.openai.cwd) } : (options.openai ?? {});
+  if (openai.cwd && !cwdAllowed(openai.cwd)) {
     throw new Error(`openai.cwd ${openai.cwd} does not exist or is outside fsRoots. Add it to fsRoots or choose another folder.`);
   }
   // A Host that is a domain name we do not know means DNS rebinding. An Origin on another host means another website.
@@ -178,7 +166,7 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
       return json({ error: "An addDirs entry in providerOptions does not exist or is outside the allowed roots. Set fsRoots on the handler." }, 403);
     }
     if (queue?.full(body.selection.provider)) {
-      return Response.json({ error: "Too many runs are waiting. Try again later.", code: "busy" }, { status: 429, headers: { "retry-after": String(BUSY_RETRY_AFTER_SEC) } });
+      return tooBusy({ error: "Too many runs are waiting. Try again later.", code: "busy" });
     }
     const tracked = startRun(req.signal);
     const runId = tracked.id;
@@ -241,8 +229,6 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
         } finally {
           release();
         }
-      } catch (err) {
-        yield { type: "error", message: err instanceof Error ? err.message : String(err), code: (err as FunnelError).code };
       } finally {
         settleAll();
         tracked.signal.removeEventListener("abort", settleAll);
@@ -279,8 +265,8 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
     const asked = resolve(isAbsolute(raw) ? raw : join(roots[0]!, raw));
     const path = real(asked);
     // A missing path answers like an outside one unless it is inside, so the picker cannot probe the disk.
-    if (!path || !insideRoots(path)) {
-      return path || !insideRoots(asked) ? json({ error: "Path is outside the allowed roots." }, 403) : json({ error: "Cannot read directory." }, 404);
+    if (!path || !insideRoots(roots, path)) {
+      return path || !insideRoots(roots, asked) ? json({ error: "Path is outside the allowed roots." }, 403) : json({ error: "Cannot read directory." }, 404);
     }
     const entries = await readdir(path, { withFileTypes: true }).catch(() => undefined);
     if (!entries) return json({ error: "Cannot read directory." }, 404);
@@ -289,7 +275,7 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
       .map((e) => e.name)
       .sort((a, b) => a.localeCompare(b));
     const parent = dirname(path);
-    return json({ path, name: basename(path), parent: insideRoots(parent) && parent !== path ? parent : null, dirs });
+    return json({ path, name: basename(path), parent: insideRoots(roots, parent) && parent !== path ? parent : null, dirs });
   }
 
   async function handleRequest(req: Request): Promise<Response> {
@@ -383,8 +369,8 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
         const answer: ApprovalDecision = decision === "allow" ? "allow" : "deny";
         const pending = approvals.get(key);
         if (pending) pending.resolve(answer);
-        else {
-          // The client can answer before the provider awaits. Keep the answer briefly.
+        else if (runs.has(seg[1])) {
+          // The client can answer before the provider awaits. Keep the answer briefly. An unknown run never asks.
           earlyDecisions.set(key, answer);
           setTimeout(() => earlyDecisions.delete(key), 60_000).unref();
         }
@@ -394,7 +380,7 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
       return json({ error: "Not found" }, 404);
     } catch (err) {
       if (err instanceof BodyError) return oai ? fail(err.status, err.message, { code: err.status === 413 ? "request_too_large" : "invalid_json" }) : json({ error: err.message }, err.status);
-      const status = err instanceof FunnelError ? (err.code === "invalid-selection" ? 400 : 409) : 500;
+      const status = statusOfError(err);
       const message = err instanceof Error ? err.message : String(err);
       if (oai) return json(errorBody(message, { type: "cli_funnel_error", code: (err as FunnelError).code }), status);
       return json({ error: message, code: (err as FunnelError).code }, status);

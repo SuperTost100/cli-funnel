@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createFunnel } from "../src/funnel.js";
-import { jsonlRunLog, redact } from "../src/run-log.js";
+import { jsonlRunLog } from "../src/run-log.js";
+import { redact } from "../src/util/redact.js";
 import { createHandler } from "../src/server/handler.js";
 import type { FunnelEvent, Provider, RunEventRecord, RunInput } from "../src/types.js";
 
@@ -195,7 +196,7 @@ describe("jsonlRunLog", () => {
 
 describe("redact", () => {
   it("masks given secrets and common key shapes, and ignores short secrets", () => {
-    expect(redact("a Bearer abcdefghijklmnopqrstuv b")).toBe("a [redacted] b");
+    expect(redact("a Bearer abcdefghijklmnopqrstuv b")).toBe("a Bearer [redacted] b");
     expect(redact("key AIzaSyA1234567890abcdefghijklmnopqrstuv")).toBe("key [redacted]");
     expect(redact("short abc here", ["abc"])).toBe("short abc here");
     expect(redact("one longsecret1 two", ["longsecret1", undefined])).toBe("one [redacted] two");

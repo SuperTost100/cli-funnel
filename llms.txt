@@ -6,15 +6,21 @@
 
 - [Quickstart](docs/quickstart.md): install, run, stream, approvals
 - [Integrating with an AI assistant](docs/ai-integration.md): ordered steps with a check for each
+- [Concepts](docs/concepts.md): what cli-funnel does and the terms the other docs use
 - [Selection](docs/selection.md): the settings object, model lists, validation
 - [Access levels](docs/access-levels.md): what each CLI can enforce
 - [Run options](docs/run-options.md): system prompt, images, JSON schema answers, output limit, and access `none`
+- [Live sessions](docs/sessions.md): keep CLI processes between turns, steer, close, fork, list threads
 - [Sign-in and updates](docs/auth-and-updates.md)
 - [UI components](docs/ui.md): React hooks, picker, login panel, approvals
 - [Run the server](docs/serve.md): config file, folders, CORS, run log, tailnet deploy
 - [OpenAI compatibility](docs/openai-compat.md)
 - [API keys](docs/api-keys.md)
 - [MCP server](docs/mcp.md): `cli-funnel mcp` on stdio, tools list_providers, list_models and run, access capped by `--max-access`
+- [Claude Code](docs/providers/claude.md): how the CLI runs, access mapping, options, models, login, known limits
+- [Codex](docs/providers/codex.md): how the CLI runs, access mapping, options, models, login, known limits
+- [Cursor Agent](docs/providers/agent.md): how the CLI runs, access mapping, options, models, login, known limits
+- [Antigravity](docs/providers/antigravity.md): how the CLI runs, access mapping, options, models, login, known limits
 - [Ollama](docs/providers/ollama.md): local models, no key, pull and delete
 - [OpenAI-compatible servers](docs/providers/openai-compatible.md): LM Studio, llama.cpp, vLLM, gateways
 - [Adding a provider](docs/adding-a-provider.md)
@@ -26,5 +32,5 @@
 - Model ids are concrete versioned names. Get them from `cli-funnel models <provider> --json`. Ollama and OpenAI-compatible ids are the server's own names, such as `llama3.2:3b`.
 - Provider ids: `claude`, `codex`, `agent`, `antigravity`, `anthropic-api`, `openai-api`, `gemini-api`, `ollama`, and `openai-compatible:<id>` for each configured server.
 - `access: "supervised"` needs an `onApproval` callback and is not available on every provider. Check `capabilities.access`.
-- `funnel.run()` returns `{ text, usage, sessionId, model, finishReason, toolCalls, deniedActions }`.
+- `funnel.run()` returns `{ text, provider, model, sessionId?, usage?, finishReason, retries?, toolCalls, pendingToolCalls?, deniedActions, structured?, structuredError?, timeout?, limit? }`. Fields marked `?` are absent when there is nothing to report.
 - Do not run `login`, `logout`, `update`, `pull` or `rm` without asking the user.

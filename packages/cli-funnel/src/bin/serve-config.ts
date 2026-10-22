@@ -4,6 +4,7 @@ import type { HandlerOptions } from "../server/handler.js";
 import type { OpenAICompatibleEndpoint } from "../providers/openai-compatible.js";
 import type { SessionOptions } from "../sessions.js";
 import { ACCESS_LEVELS, type AccessLevel } from "../types.js";
+import { isObject } from "../util/is-object.js";
 import { UsageError } from "./run-input.js";
 
 /** What `serve --config` reads. The handler options keep their names, so the file mirrors `createHandler`. */
@@ -32,7 +33,6 @@ const KEYS = [
 export const SERVE_TIMEOUT_SEC = 1800;
 
 const isStrings = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
-const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const isCount = (v: unknown, min: number): v is number => Number.isInteger(v) && (v as number) >= min;
 const SESSION_KEYS = ["keepAlive", "idleMs", "max"];
 
@@ -131,7 +131,6 @@ export interface ServeSettings {
   handler: HandlerOptions;
   /** Set when live sessions are on. Pass it to `createFunnel({ sessions })`. */
   sessions?: SessionOptions;
-  openaiCompatible?: OpenAICompatibleEndpoint[];
 }
 
 /** A number of seconds, 0 included. */
@@ -205,6 +204,5 @@ export function resolveServe(flags: ServeFlags, config: ServeConfig, env: NodeJS
       queueTimeoutMs,
     },
     sessions: keepAlive ? { keepAlive, idleMs, max: maxSessions } : undefined,
-    openaiCompatible: config.openaiCompatible,
   };
 }
