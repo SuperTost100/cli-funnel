@@ -12,7 +12,6 @@ function provider(script: (input: RunInput) => AsyncGenerator<FunnelEvent>): Pro
   return {
     id: "claude",
     displayName: "Fake",
-    binary: "fake",
     capabilities: { access: ["accept-edits", "full"], effort: true, contextWindow: false, fast: false, resume: true, approvals: false, images: false, system: "prompt", schema: "prompt" },
     detect: async () => ({ installed: true, testedRange: { min: "1.0.0" }, version: "1.0.0", withinTestedRange: true }),
     authStatus: async () => ({ loggedIn: true }),

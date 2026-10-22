@@ -12,7 +12,6 @@ const seen: { access?: AccessLevel; cwd?: string; system?: string; schema?: bool
 const fake: Provider = {
   id: "claude",
   displayName: "Fake",
-  binary: "fake",
   capabilities: { access: ["none", "supervised", "accept-edits", "full"], effort: true, contextWindow: false, fast: false, resume: true, approvals: true, images: false, system: "prompt", schema: "prompt" },
   detect: async () => ({ installed: true, testedRange: { min: "1.0.0" }, version: "1.0.0", withinTestedRange: true }),
   authStatus: async () => ({ loggedIn: true }),

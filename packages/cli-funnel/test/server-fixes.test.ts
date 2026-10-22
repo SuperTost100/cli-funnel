@@ -17,7 +17,6 @@ function scripted(
   return {
     id,
     displayName: id,
-    binary: id,
     capabilities: { access: ["none", "supervised", "accept-edits", "full"], effort: false, contextWindow: false, fast: false, resume: true, approvals: true, images: false, system: "prompt", schema: "prompt" },
     detect: async () => ({ installed: true, testedRange: { min: "1.0.0" }, version: "1.0.0", withinTestedRange: true }),
     authStatus: async () => ({ loggedIn: true }),

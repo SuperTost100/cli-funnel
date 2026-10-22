@@ -129,7 +129,6 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
 export const agentProvider: Provider = {
   id: "agent",
   displayName: "Cursor Agent",
-  binary: BINARY,
   capabilities: {
     access: ["none", "auto", "full"],
     effort: true,

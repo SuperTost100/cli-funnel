@@ -27,7 +27,6 @@ function fakeProvider(overrides: Partial<Provider> = {}): Provider {
   return {
     id: "claude",
     displayName: "Fake",
-    binary: "fake",
     capabilities: { access: ["accept-edits"], effort: false, contextWindow: false, fast: false, resume: false, approvals: false, images: false, system: "prompt", schema: "prompt" },
     detect: async () => installed,
     authStatus: async () => ({ loggedIn: true }),

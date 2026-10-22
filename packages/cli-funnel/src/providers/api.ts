@@ -569,7 +569,6 @@ function makeApiProvider(spec: ApiSpec, getKey: () => string | undefined, config
   return {
     id: spec.id,
     displayName: spec.displayName,
-    binary: "fetch",
     capabilities: httpCapabilities({ cache: spec.cache }),
     detect: async () => ({ installed: true, testedRange: { min: "0" }, withinTestedRange: true }),
     authStatus: async () => {

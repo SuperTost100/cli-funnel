@@ -16,7 +16,6 @@ const finishAll = () => finishers.splice(0).forEach((f) => f());
 const gated = (id: ProviderId): Provider => ({
   id,
   displayName: id,
-  binary: id,
   capabilities: { access: ["accept-edits", "full"], effort: false, contextWindow: false, fast: false, resume: false, approvals: false, images: false, system: "prompt", schema: "prompt" },
   detect: async () => ({ installed: true, testedRange: { min: "1.0.0" } }),
   authStatus: async () => ({ loggedIn: true }),
