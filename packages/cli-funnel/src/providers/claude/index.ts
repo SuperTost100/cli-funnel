@@ -1,7 +1,7 @@
 import { ACCESS_LEVELS, FunnelError, type AccessLevel, type ApprovalDecision, type ApprovalRequest, type AuthStatus, type Capabilities, type FunnelEvent, type Provider, type ProviderContext, type RunInput } from "../../types.js";
 import { askApproval, detectInstallation, exitedEarly, findBinary, runLogout, runUpdate, spawnLogin } from "../base.js";
 import { bool, dirList, flag, invalidOption, object, optionsFor, positive, requireAccess, str, stringList } from "../options.js";
-import { fromManifest, loadManifest } from "../../catalog/manifest.js";
+import { manifestModels } from "../../catalog/manifest.js";
 import { needsArgFile, writeArgFile, type ArgFile } from "../../util/argfile.js";
 import { exec, spawnStream, type Streamed } from "../../util/process.js";
 import { openClaudeSession } from "./live.js";
@@ -282,7 +282,6 @@ async function authStatus(): Promise<AuthStatus> {
 export const claudeProvider: Provider = {
   id: "claude",
   displayName: "Claude Code",
-  binary: BIN,
   capabilities,
   detect: () => detectInstallation(BIN, TESTED_RANGE),
   authStatus,
@@ -290,10 +289,7 @@ export const claudeProvider: Provider = {
   login: (options) => spawnLogin(BIN, ["auth", "login"], authStatus, { signal: options?.signal, opensBrowser: true }),
   logout: () => runLogout(BIN, ["auth", "logout"]),
   update: () => runUpdate(BIN, ["update"]),
-  async models(ctx?: ProviderContext) {
-    const [manifest, install] = await Promise.all([loadManifest(ctx?.manifestUrl), claudeProvider.detect()]);
-    return fromManifest(manifest, "claude", install.version);
-  },
+  models: (ctx?: ProviderContext) => manifestModels("claude", ctx?.manifestUrl, claudeProvider.detect().then((i) => i.version)),
   run,
   openSession: openClaudeSession,
 };

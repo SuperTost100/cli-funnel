@@ -150,7 +150,6 @@ describe("funnel and server", () => {
   const recorder = (id: ProviderId, messages: boolean): Provider => ({
     id,
     displayName: id,
-    binary: "fake",
     capabilities: { access: [], effort: false, contextWindow: false, fast: false, resume: true, approvals: false, images: true, messages, system: "native", schema: "native" },
     detect: async () => ({ installed: true, testedRange: { min: "0" } }),
     authStatus: async () => ({ loggedIn: true }),

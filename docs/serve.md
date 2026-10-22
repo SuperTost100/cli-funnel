@@ -25,7 +25,7 @@ By default it listens on `127.0.0.1:4747` and answers only requests that come fr
 | `--session-idle <seconds>` | `600` | Close a live session after this long without a turn. Needs `--keep-alive`. |
 | `--max-sessions <n>` | `8` | Most live sessions at once. Needs `--keep-alive`. |
 | `--max-concurrent <n>` | no limit | Most runs at the same time. Runs over it wait in a queue. See [Limit concurrent runs](#limit-concurrent-runs). |
-| `--max-queued <n>` | no limit | Most runs that may wait. One more gets 429. `0` means no waiting. Needs `--max-concurrent`. |
+| `--max-queued <n>` | 100 | Most runs that may wait. One more gets 429. `0` means no waiting. Needs `--max-concurrent`. |
 | `--queue-timeout <seconds>` | no limit | How long a run may wait for a slot. Needs `--max-concurrent`. |
 | `--cors <origin>` | off | One web origin that may call the API from a browser. See [CORS](#cors). |
 | `--log-jsonl <file>` | off | Append one JSON line per run to the file. See [Log runs](#log-runs). |
@@ -136,6 +136,8 @@ With 4 runs going, the next 20 wait. The 25th gets 429 with `retry-after`, and a
 npx cli-funnel serve --log-jsonl ~/.local/state/cli-funnel/runs.jsonl
 ```
 
+Lines are written in the background. When you stop the server with Ctrl-C or `SIGTERM`, it writes the last lines first, then exits.
+
 ```json
 {"time":"2026-10-15T20:10:03.412Z","runId":"run_3_mgq1x8","provider":"claude","model":"claude-sonnet-5","effort":"high","access":"accept-edits","cwd":"/home/you/code","sessionId":"9f3c...","startedAt":"2026-10-15T20:09:58.101Z","durationMs":5311,"finishReason":"stop","usage":{"inputTokens":1210,"outputTokens":284,"totalTokens":1494},"toolCalls":3,"tools":{"Read":2,"Bash":1},"deniedActions":[]}
 ```
@@ -169,8 +171,11 @@ const funnel = createFunnel({
 });
 
 // or the same file log the server writes:
-const logged = createFunnel({ onEvent: jsonlRunLog("runs.jsonl", { content: false }) });
+const log = jsonlRunLog("runs.jsonl", { content: false });
+const logged = createFunnel({ onEvent: log });
 ```
+
+`jsonlRunLog` writes in the background, in the order the runs ended. Before you read the file or exit a script, `await log.flush()`.
 
 | `record` field | Meaning |
 |---|---|

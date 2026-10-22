@@ -94,7 +94,6 @@ export function createOpenAICompatibleProvider(endpoint: OpenAICompatibleEndpoin
   return {
     id,
     displayName: endpoint.name,
-    binary: "http",
     capabilities: httpCapabilities({ effort: efforts.length > 0 }),
     detect,
     authStatus,

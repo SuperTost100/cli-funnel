@@ -550,8 +550,6 @@ export interface ProviderContext {
 export interface Provider {
   readonly id: ProviderId;
   readonly displayName: string;
-  /** Executable name looked up on PATH. */
-  readonly binary: string;
   readonly capabilities: Capabilities;
   detect(): Promise<Installation>;
   authStatus(): Promise<AuthStatus>;

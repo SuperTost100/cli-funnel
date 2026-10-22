@@ -51,7 +51,7 @@ const HELP = `cli-funnel <command>
                                --session-idle closes a live session after that many seconds idle (default 600).
                                --max-sessions caps live sessions (default 8). Both need --keep-alive.
                                --max-concurrent caps runs at the same time. Runs over it wait in a queue.
-                               --max-queued caps the waiting runs (more get 429). --queue-timeout stops a wait after that many seconds.
+                               --max-queued caps the waiting runs (default 100, more get 429). --queue-timeout stops a wait after that many seconds.
                                Both need --max-concurrent. Per-provider caps go in the config file.
   mcp [--max-access ${ACCESS_LEVELS.join("|")}] [--fs-root dir]... [--cwd dir]
                                MCP server on stdio. Tools: list_providers, list_models, run.
@@ -146,11 +146,12 @@ const sessions = join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "s
 const serveSettings = positionals[0] === "serve" ? resolveServeOrExit() : undefined;
 // Keys and the server token never reach the log.
 const logSecrets = [serveSettings?.token, ...(serveConfig.openaiCompatible ?? []).map((e) => e.apiKey), process.env.ANTHROPIC_API_KEY, process.env.OPENAI_API_KEY, process.env.GEMINI_API_KEY];
+const runLog = serveSettings?.log && jsonlRunLog(serveSettings.log.file, { content: serveSettings.log.content, secrets: logSecrets });
 const funnel = createFunnel({
   openaiCompatible: openaiCompatible(),
   sessions: serveSettings?.sessions,
   history: fileHistory(sessions),
-  onEvent: serveSettings?.log && jsonlRunLog(serveSettings.log.file, { content: serveSettings.log.content, secrets: logSecrets }),
+  onEvent: runLog,
 });
 const [command, providerArg, ...rest] = positionals;
 const out = (s: string) => process.stdout.write(s + "\n");
@@ -376,6 +377,13 @@ async function main() {
       return usage(err instanceof Error ? err.message : String(err));
     }
     const { url } = await serveNode(handler, { port, host });
+    if (runLog) {
+      // The run log writes in the background. Ctrl-C or a service stop waits for the last lines, then exits with the
+      // usual code for that signal. A second signal kills the process at once.
+      for (const [signal, code] of [["SIGINT", 130], ["SIGTERM", 143]] as const) {
+        process.once(signal, () => void runLog.flush().finally(() => process.exit(code)));
+      }
+    }
     out(`cli-funnel listening on ${url}`);
     out(`OpenAI-compatible base URL: ${url}/v1   (model ids look like claude/claude-sonnet-5)`);
     return;

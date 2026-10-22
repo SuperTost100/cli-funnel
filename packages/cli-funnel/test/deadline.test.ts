@@ -13,7 +13,6 @@ const seen: { signal?: AbortSignal; closed: boolean } = { closed: false };
 const fake: Provider = {
   id: "claude",
   displayName: "Fake",
-  binary: "fake",
   capabilities: { access: ["accept-edits", "full"], effort: false, contextWindow: false, fast: false, resume: false, approvals: false, images: false, system: "prompt", schema: "prompt" },
   detect: async () => ({ installed: true, testedRange: { min: "1.0.0" } }),
   authStatus: async () => ({ loggedIn: true }),

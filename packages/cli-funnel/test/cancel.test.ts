@@ -14,7 +14,6 @@ const untilAborted = (signal: AbortSignal) =>
 const slow: Provider = {
   id: "claude",
   displayName: "Slow",
-  binary: "slow",
   capabilities: { access: ["supervised", "accept-edits", "full"], effort: false, contextWindow: false, fast: false, resume: false, approvals: true, images: false, system: "prompt", schema: "prompt" },
   detect: async () => ({ installed: true, testedRange: { min: "1.0.0" } }),
   authStatus: async () => ({ loggedIn: true }),

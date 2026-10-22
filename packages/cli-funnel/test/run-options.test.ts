@@ -188,7 +188,6 @@ describe("funnel and server", () => {
   const fake: Provider = {
     id: "claude",
     displayName: "Fake",
-    binary: "fake",
     capabilities: { access: ["none", "full"], effort: false, contextWindow: false, fast: false, resume: false, approvals: false, images: false, system: "native", schema: "native" },
     detect: async () => ({ installed: true, testedRange: { min: "0" } }),
     authStatus: async () => ({ loggedIn: true }),

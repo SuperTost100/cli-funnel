@@ -63,7 +63,6 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
 export const codexProvider: Provider = {
   id: "codex",
   displayName: "Codex",
-  binary: BINARY,
   capabilities: {
     access: ["none", "supervised", "accept-edits", "auto", "full"],
     effort: true,

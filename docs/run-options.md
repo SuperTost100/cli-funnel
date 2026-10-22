@@ -270,7 +270,7 @@ const handler = createHandler(funnel, {
 | Option | What it does | Default |
 |---|---|---|
 | `maxConcurrentRuns` | A number caps all runs together. `{ total, perProvider }` adds a cap per provider, as one number for every provider or one per provider id. | no limit |
-| `maxQueuedRuns` | Runs that may wait. One more is refused with code `busy`. | no limit |
+| `maxQueuedRuns` | Runs that may wait. One more is refused with code `busy`. | 100 |
 | `queueTimeoutMs` | How long a run may wait before it fails with code `busy`. | no limit |
 
 Runs over the limit wait in a first-in, first-out queue. A waiting run that cannot start because its own provider is full does not hold up runs for other providers. `queueTimeoutMs` and `timeoutMs` are separate: the deadline starts when the run leaves the queue.

@@ -12,7 +12,6 @@ const seen: (string | undefined)[] = [];
 const noAccess: Provider = {
   id: "ollama",
   displayName: "Fake",
-  binary: "fake",
   capabilities: { access: [], effort: false, contextWindow: false, fast: false, resume: false, approvals: false, images: false, system: "prompt", schema: "prompt" },
   detect: async () => ({ installed: true, testedRange: { min: "1.0.0" }, version: "1.0.0", withinTestedRange: true }),
   authStatus: async () => ({ loggedIn: true }),

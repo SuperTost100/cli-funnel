@@ -217,7 +217,6 @@ describe("providerOptions through the server", () => {
   const fake: Provider = {
     id: "claude",
     displayName: "Fake",
-    binary: "fake",
     capabilities: { access: ["accept-edits", "full"], effort: false, contextWindow: false, fast: false, resume: true, approvals: false, images: false, system: "prompt", schema: "prompt" },
     detect: async () => ({ installed: true, testedRange: { min: "1.0.0" } }),
     authStatus: async () => ({ loggedIn: true }),

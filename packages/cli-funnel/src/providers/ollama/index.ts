@@ -152,7 +152,6 @@ export function createOllamaProvider(options: OllamaOptions = {}): Provider {
   return {
     id: "ollama",
     displayName: "Ollama",
-    binary: "http",
     capabilities: httpCapabilities({ contextWindow: true, manageModels: true }),
     detect,
     authStatus,

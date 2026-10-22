@@ -213,7 +213,6 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
 export const antigravityProvider: Provider = {
   id: "antigravity",
   displayName: "Antigravity",
-  binary: "agy",
   capabilities: {
     access: ["none", "accept-edits", "full"],
     effort: true,

@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "node server.mjs & vite --host 127.0.0.1",
-    "build": "vite build"
+    "build": "vite build",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "cli-funnel-react": "*",
