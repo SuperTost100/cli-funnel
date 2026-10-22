@@ -7,19 +7,21 @@ export class UsageError extends Error {}
 const USAGE = "Usage: cli-funnel run <provider> <model> [prompt | -]";
 
 /** Reads the whole stream as UTF-8. */
-export async function readAll(input: AsyncIterable<string | Uint8Array>): Promise<string> {
+async function readAll(input: AsyncIterable<string | Uint8Array>): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const c of input) chunks.push(typeof c === "string" ? Buffer.from(c) : Buffer.from(c));
   return Buffer.concat(chunks).toString("utf8");
 }
+
+/** True when the prompt comes from stdin: no words after the model, or a single "-". */
+export const fromStdin = (words: string[]): boolean => words.length === 0 || (words.length === 1 && words[0] === "-");
 
 /**
  * The prompt is the words after the model, joined with spaces. With no words, or a single "-", it is read from stdin.
  * A terminal on stdin with nothing piped is an error instead of a hang.
  */
 export async function resolvePrompt(words: string[], stdin: AsyncIterable<string | Uint8Array> & { isTTY?: boolean }): Promise<string> {
-  const fromStdin = words.length === 0 || (words.length === 1 && words[0] === "-");
-  if (!fromStdin) return words.join(" ");
+  if (!fromStdin(words)) return words.join(" ");
   if (stdin.isTTY) throw new UsageError(`${USAGE}\nNo prompt. Pass it as an argument, or pipe it in.`);
   const text = (await readAll(stdin)).replace(/\r?\n$/, "");
   if (!text.trim()) throw new UsageError(`${USAGE}\nThe prompt from stdin is empty.`);
