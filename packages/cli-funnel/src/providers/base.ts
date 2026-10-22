@@ -1,8 +1,10 @@
+import type { ChildProcess } from "node:child_process";
 import { Channel } from "../util/channel.js";
-import { spawn, type ChildProcess } from "node:child_process";
-import { childEnv, cliCommand, compareVersions, exec, firstUrl, parseVersion, resolveBinary, type ExecResult } from "../util/process.js";
+import { compareVersions, exec, firstUrl, parseVersion, resolveBinary, start, terminate, type ExecResult, type Streamed } from "../util/process.js";
 import {
   FunnelError,
+  type ApprovalDecision,
+  type ApprovalRequest,
   type AuthStatus,
   type FinishReason,
   type FunnelEvent,
@@ -15,7 +17,7 @@ import {
 } from "../types.js";
 import { parseJsonAnswer } from "./prompt.js";
 
-export function binaryEnvVar(binary: string): string {
+function binaryEnvVar(binary: string): string {
   return `CLI_FUNNEL_${binary.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_BIN`;
 }
 
@@ -23,15 +25,16 @@ export function findBinary(binary: string): string | undefined {
   return resolveBinary(binary, binaryEnvVar(binary));
 }
 
-export async function detectInstallation(
-  binary: string,
-  testedRange: Installation["testedRange"],
-  versionArgs: string[] = ["--version"],
-): Promise<Installation> {
+/** The version `--version` prints, or undefined when the CLI does not answer. */
+async function readVersion(path: string): Promise<string | undefined> {
+  const res = await exec(path, ["--version"], { timeoutMs: 10_000 }).catch(() => undefined);
+  return res ? parseVersion(res.stdout + res.stderr) : undefined;
+}
+
+export async function detectInstallation(binary: string, testedRange: Installation["testedRange"]): Promise<Installation> {
   const path = findBinary(binary);
   if (!path) return { installed: false, testedRange };
-  const res = await exec(path, versionArgs, { timeoutMs: 10_000 }).catch(() => undefined);
-  const version = res ? parseVersion(res.stdout + res.stderr) : undefined;
+  const version = await readVersion(path);
   const withinTestedRange =
     version === undefined
       ? undefined
@@ -72,16 +75,10 @@ export function spawnLogin(
   if (!path) {
     finish({ type: "error", message: `${binary} is not installed.` });
   } else {
-    const command = cliCommand(path, args);
-    child = spawn(command.file, command.args, {
-      env: childEnv(opts.env),
-      signal: opts.signal,
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsVerbatimArguments: command.windowsVerbatimArguments,
-    });
-    child.stdin?.on("error", () => {});
+    const started = start(path, args, { env: opts.env, signal: opts.signal });
+    child = started.child;
     timer = setTimeout(() => {
-      child?.kill("SIGTERM");
+      if (child) terminate(child);
       finish({ type: "error", message: "Timed out waiting for sign-in." });
     }, opts.timeoutMs ?? LOGIN_TIMEOUT_MS);
     const seen = new Set<string>();
@@ -108,11 +105,16 @@ export function spawnLogin(
     child.stdout?.on("data", (d) => scan("stdout", String(d)));
     child.stderr?.on("data", (d) => scan("stderr", String(d)));
     // Without this listener a CLI that fails to start (missing file, permissions) throws in the host process.
-    child.on("error", (error) => finish({ type: "error", message: error.message }));
+    child.on("error", (error) => {
+      started.release();
+      finish({ type: "error", message: error.message });
+    });
     child.on("close", async (code) => {
+      started.release();
       scanLine(pending.stdout);
       scanLine(pending.stderr);
       if (finished) return;
+      if (opts.signal?.aborted) return finish({ type: "error", message: "The operation was aborted" });
       const status = await readStatus().catch((): AuthStatus => ({ loggedIn: false }));
       finish(status.loggedIn ? { type: "done", status } : { type: "error", message: `Login did not complete (exit ${code}).` });
     });
@@ -124,28 +126,30 @@ export function spawnLogin(
     // A cancelled login ends quietly: the caller asked for it, so it gets no error event.
     cancel: () => {
       cancelled = true;
-      child?.kill("SIGTERM");
+      if (child) terminate(child);
       finish();
     },
   };
 }
 
+/** Asks the caller's `onApproval`. No handler, or one that throws or rejects, means "deny". */
+export async function askApproval(input: RunInput, request: ApprovalRequest): Promise<ApprovalDecision> {
+  if (!input.onApproval) return "deny";
+  try {
+    return await input.onApproval(request);
+  } catch {
+    return "deny";
+  }
+}
+
 /** Runs the CLI's own updater and reports the version before and after. */
-export async function runUpdate(
-  binary: string,
-  updateArgs: string[],
-  versionArgs: string[] = ["--version"],
-): Promise<UpdateResult> {
+export async function runUpdate(binary: string, updateArgs: string[]): Promise<UpdateResult> {
   const path = findBinary(binary);
   if (!path) return { changed: false, output: `${binary} is not installed.` };
-  const read = async () => {
-    const r = await exec(path, versionArgs, { timeoutMs: 10_000 }).catch(() => undefined);
-    return r ? parseVersion(r.stdout + r.stderr) : undefined;
-  };
-  const from = await read();
+  const from = await readVersion(path);
   const res = await exec(path, updateArgs, { timeoutMs: 600_000 });
   if (res.code !== 0) throw cliFailure(binary, "update", res);
-  const to = await read();
+  const to = await readVersion(path);
   return { from, to, changed: !!from && !!to && from !== to, output: (res.stdout + res.stderr).trim() };
 }
 
@@ -160,6 +164,26 @@ export async function runLogout(binary: string, args: string[]): Promise<void> {
 function cliFailure(binary: string, action: string, res: ExecResult): FunnelError {
   const detail = (res.stderr.trim() || res.stdout.trim()).slice(0, 500);
   return new FunnelError(detail || `${binary} ${action} failed (exit ${res.code}).`, "cli-failed");
+}
+
+/** The last lines of a CLI's stderr, joined on one line for an error message. */
+export function stderrTail(stderr: string): string {
+  return stderr.trim().split("\n").slice(-3).join(" ");
+}
+
+/**
+ * The last event of a run whose CLI exited before its own terminal event: `cancelled` when `stopped()` says the caller
+ * stopped it, else an error with the end of stderr.
+ */
+export async function exitedEarly(proc: Streamed, name: string, stopped: () => boolean | undefined): Promise<FunnelEvent> {
+  const code = await proc.exited;
+  if (stopped()) return { type: "done", text: "", finishReason: "cancelled" };
+  const tail = stderrTail(proc.stderr());
+  return {
+    type: "error",
+    message: `${name} exited (${code}) without a result.${tail ? ` ${tail}` : ""}`,
+    code: /authentication required|not logged in/i.test(tail) ? "not-logged-in" : "cli-failed",
+  };
 }
 
 /** Folds events into an API-shaped result one at a time, so a caller never has to keep the events themselves. */
@@ -241,14 +265,4 @@ export function createRunFolder(input: RunInput): RunFolder {
       return result;
     },
   };
-}
-
-/** Folds an event stream into an API-shaped result. */
-export async function collect(
-  events: AsyncIterable<FunnelEvent>,
-  input: RunInput,
-): Promise<RunResult> {
-  const folder = createRunFolder(input);
-  for await (const e of events) folder.add(e);
-  return folder.finish();
 }

@@ -1,11 +1,65 @@
-import { FunnelError, type FunnelEvent, type LiveSession, type RunInput } from "../../types.js";
+import { FunnelError, type ApprovalDecision, type ApprovalRequest, type FunnelEvent, type LiveSession, type RunInput } from "../../types.js";
+import { requireMachine } from "../../selection.js";
 import { Channel } from "../../util/channel.js";
 import { spawnStream } from "../../util/process.js";
-import { findBinary } from "../base.js";
+import { askApproval, findBinary, stderrTail } from "../base.js";
+import { planAccess } from "./access.js";
 import { toApprovalRequest, toReply, type ServerRequest } from "./approvals.js";
 import { Translator } from "./events.js";
-import { BINARY, INITIALIZE_PARAMS, decideApproval, threadSettings, threadStartParams, turnParams } from "./index.js";
+import { BINARY, INITIALIZE_PARAMS } from "./index.js";
+import { threadOptions } from "./options.js";
 import { RpcClient } from "./rpc.js";
+import { noToolsConfig } from "./tools.js";
+
+/** Settings for `thread/start` and `thread/resume`, with `providerOptions.codex` applied. */
+async function threadSettings(path: string, input: RunInput) {
+  const sel = input.selection;
+  const machine = requireMachine(sel);
+  const plan = planAccess(machine.access);
+  const extra = threadOptions(input);
+  return {
+    model: sel.model,
+    cwd: sel.cwd,
+    approvalPolicy: extra.approvalPolicy ?? plan.approvalPolicy,
+    approvalsReviewer: plan.approvalsReviewer,
+    sandbox: plan.sandbox,
+    ...(sel.fast ? { serviceTier: "priority" } : {}),
+    ...(input.system ? { developerInstructions: input.system } : {}),
+    ...(sel.access === "none" ? { config: await noToolsConfig(path, machine.cwd, input.env) } : {}),
+    ...(sel.access !== "none" && Object.keys(extra.config).length ? { config: extra.config } : {}),
+  };
+}
+
+/** Params for `turn/start`: the prompt, its images, and the per-turn settings. */
+function turnParams(input: RunInput, threadId: string) {
+  return {
+    threadId,
+    input: [
+      ...(input.attachments ?? []).map((a) => ({ type: "image", url: `data:${a.mediaType};base64,${a.data}` })),
+      { type: "text", text: input.prompt, text_elements: [] },
+    ],
+    ...(input.selection.effort ? { effort: input.selection.effort } : {}),
+    ...(input.responseSchema ? { outputSchema: input.responseSchema.schema } : {}),
+  };
+}
+
+/**
+ * The answer to one approval request. Levels below `supervised` answer without asking. Otherwise `push` gets the
+ * `approval.request` event and the caller's `onApproval` decides.
+ */
+async function decideApproval(
+  req: ServerRequest,
+  request: ApprovalRequest,
+  input: RunInput,
+  push: (e: FunnelEvent) => void,
+): Promise<ApprovalDecision> {
+  const access = input.selection.access;
+  if (access === "none") return "deny";
+  if (req.method === "item/fileChange/requestApproval" && planAccess(requireMachine(input.selection).access).autoAllowFileChanges) return "allow";
+  if (access === "full") return "allow";
+  push({ type: "approval.request", request });
+  return askApproval(input, request);
+}
 
 interface Turn {
   input: RunInput;
@@ -46,8 +100,8 @@ async function acknowledged(interrupt: Promise<boolean> | undefined): Promise<bo
 export async function openCodexSession(first: RunInput): Promise<LiveSession> {
   const path = findBinary(BINARY);
   if (!path) throw new FunnelError("codex is not installed.", "not-installed");
-  // Refuses options that would widen access before a process starts.
-  const start = threadStartParams(first);
+  // Refuses options that would widen access before a process starts. `start` holds the params only `thread/start` takes.
+  const { start } = threadOptions(first);
   // No abort signal here: the process outlives the turn. Each turn handles its own signal.
   const proc = spawnStream(path, ["app-server"], { cwd: first.selection.cwd, env: first.env });
   proc.hold(false);
@@ -82,18 +136,19 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
     request(id, method, params) {
       const req: ServerRequest = { id, method, params: params ?? {} };
       const t = current;
+      const request = t && !t.finished ? toApprovalRequest(req, t.translator.items) : undefined;
       // Nobody can answer between turns.
-      if (!t || t.finished || !toApprovalRequest(req, t.translator.items)) {
+      if (!t || !request) {
         rpc.respond(id, toReply(req, "deny"));
         return;
       }
-      void decideApproval(req, t.input, t.translator.items, (e) => t.out.push(e)).then((d) => rpc.respond(id, toReply(req, d)));
+      void decideApproval(req, request, t.input, (e) => t.out.push(e)).then((d) => rpc.respond(id, toReply(req, d)));
     },
     closed() {
       exited = true;
       const t = current;
       if (!t) return;
-      const err = proc.stderr().trim().split("\n").slice(-3).join(" ");
+      const err = stderrTail(proc.stderr());
       finish(t, [closed ? { type: "done", text: "", finishReason: "cancelled" } : { type: "error", message: `Codex app-server exited early.${err ? ` ${err}` : ""}` }]);
     },
   });

@@ -1,9 +1,12 @@
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { collect, spawnLogin } from "../src/providers/base.js";
+import { spawnLogin } from "../src/providers/base.js";
+import { collect } from "./helpers.js";
 import { createApiProviders } from "../src/providers/api.js";
 import { parseClaudeMessage } from "../src/providers/claude/parser.js";
 import { Translator } from "../src/providers/codex/events.js";
@@ -338,5 +341,66 @@ describe.skipIf(process.platform === "win32")("sign-in process", () => {
     const events = [];
     for await (const e of spawnLogin("codex", ["login"], async () => ({ loggedIn: false }), { timeoutMs: 200 })) events.push(e);
     expect(events.at(-1)).toEqual({ type: "error", message: "Timed out waiting for sign-in." });
+  });
+
+  it.each(["cancel", "timeout"] as const)("stops the processes a login started on %s", async (how) => {
+    const pidFile = join(mkdtempSync(join(tmpdir(), "cf-login-grand-")), "pid");
+    fake(`sleep 30 &\necho $! > ${pidFile}\nwait`);
+    const session = spawnLogin("codex", ["login"], async () => ({ loggedIn: false }), { timeoutMs: how === "timeout" ? 500 : 60_000 });
+    const done = (async () => {
+      for await (const _ of session) {
+        /* drain */
+      }
+    })();
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const until = async (check: () => boolean) => {
+      const end = Date.now() + 3000;
+      while (!check() && Date.now() < end) await new Promise((r) => setTimeout(r, 25));
+      return check();
+    };
+    expect(await until(() => existsSync(pidFile) && readFileSync(pidFile, "utf8").trim() !== "")).toBe(true);
+    const grandchild = Number(readFileSync(pidFile, "utf8"));
+    if (how === "cancel") session.cancel();
+    await done;
+    const stopped = await until(() => !alive(grandchild));
+    if (!stopped) process.kill(grandchild, "SIGKILL");
+    expect(stopped).toBe(true);
+  });
+
+  it("stops a running login when the host process exits", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cf-login-host-"));
+    const pidFile = join(dir, "pid");
+    fake(`echo $$ > ${pidFile}; sleep 30`);
+    // The host is bundled from source so it runs on plain Node. It starts a login and exits once the CLI runs.
+    const { build } = await import("esbuild");
+    const host = join(dir, "host.mjs");
+    const base = fileURLToPath(new URL("../src/providers/base.ts", import.meta.url));
+    const contents = `import { existsSync } from "node:fs";
+import { spawnLogin } from ${JSON.stringify(base)};
+spawnLogin("codex", ["login"], async () => ({ loggedIn: false }));
+setInterval(() => existsSync(${JSON.stringify(pidFile)}) && process.exit(0), 20);`;
+    await build({ stdin: { contents, resolveDir: dir }, bundle: true, platform: "node", format: "esm", outfile: host, logLevel: "silent" });
+    execFileSync(process.execPath, [host], { timeout: 10_000 });
+    const pid = Number(readFileSync(pidFile, "utf8"));
+    const alive = () => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const end = Date.now() + 3000;
+    while (alive() && Date.now() < end) await new Promise((r) => setTimeout(r, 25));
+    const survived = alive();
+    if (survived) process.kill(pid, "SIGKILL");
+    expect(survived).toBe(false);
   });
 });

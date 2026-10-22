@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { collect } from "../src/providers/base.js";
+import { collect } from "./helpers.js";
 import { createApiProviders } from "../src/providers/api.js";
 import { parseClaudeMessage } from "../src/providers/claude/parser.js";
 import { Translator } from "../src/providers/codex/events.js";

@@ -1,4 +1,6 @@
-export type CliProviderId = "claude" | "codex" | "agent" | "antigravity";
+/** The CLI providers. Each takes `providerOptions` and has a bundled model list in `data/models/<id>.json`. */
+export const PROVIDER_OPTION_IDS = ["claude", "codex", "agent", "antigravity"] as const;
+export type CliProviderId = (typeof PROVIDER_OPTION_IDS)[number];
 export type ApiProviderId = "anthropic-api" | "openai-api" | "gemini-api";
 /** Model servers reached over HTTP. They need no binary. `openai-compatible:<id>` is one configured endpoint. */
 export type ServerProviderId = "ollama" | `openai-compatible:${string}`;
@@ -477,9 +479,6 @@ export interface ProviderOptions {
   agent?: AgentOptions;
   antigravity?: AntigravityOptions;
 }
-
-/** Provider ids that take `providerOptions`. */
-export const PROVIDER_OPTION_IDS: readonly (keyof ProviderOptions)[] = ["claude", "codex", "agent", "antigravity"];
 
 /**
  * What `funnel.run()` and `funnel.stream()` take: a `RunInput` with either `prompt` or `messages`. The funnel turns

@@ -1,8 +1,9 @@
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, accessSync, constants, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, dirname, join, win32 } from "node:path";
+import { delimiter, join, win32 } from "node:path";
 import { Channel } from "./channel.js";
+import { parseLine } from "./ndjson.js";
 
 const EXTRA_DIRS = [
   join(homedir(), ".local", "bin"),
@@ -44,7 +45,7 @@ export function loginShellPath(refresh = false): string[] {
 }
 
 /** Directories searched for CLIs, in order: the process PATH, the login shell PATH, then common install dirs. */
-export function searchPath(): string[] {
+function searchPath(): string[] {
   return [...new Set([...(process.env.PATH ?? "").split(delimiter).filter(Boolean), ...loginShellPath(), ...EXTRA_DIRS])];
 }
 
@@ -123,7 +124,7 @@ export function cliCommand(file: string, args: string[], platform: NodeJS.Platfo
 }
 
 /** How long a CLI gets to exit after SIGTERM before it gets SIGKILL. */
-export const KILL_GRACE_MS = 3000;
+const KILL_GRACE_MS = 3000;
 
 const live = new Set<ChildProcess>();
 let exitHook = false;
@@ -185,29 +186,43 @@ export interface ExecOptions {
   timeoutMs?: number;
 }
 
+/**
+ * Starts a CLI in its own process group and tracks it, so the exit hook stops it with the host. Aborting `signal`
+ * stops it with `terminate`. `release` removes the abort listener; call it once the process has exited.
+ */
+export function start(
+  file: string,
+  args: string[],
+  opts: Pick<ExecOptions, "cwd" | "env" | "signal"> = {},
+): { child: ChildProcessWithoutNullStreams; release(): void } {
+  const command = cliCommand(file, args);
+  const child = spawn(command.file, command.args, {
+    windowsVerbatimArguments: command.windowsVerbatimArguments,
+    cwd: opts.cwd,
+    env: childEnv(opts.env),
+    stdio: ["pipe", "pipe", "pipe"],
+    ...groupOptions(),
+  });
+  track(child);
+  child.stdin.on("error", () => {});
+  const onAbort = () => terminate(child);
+  if (opts.signal?.aborted) onAbort();
+  else opts.signal?.addEventListener("abort", onAbort, { once: true });
+  return { child, release: () => opts.signal?.removeEventListener("abort", onAbort) };
+}
+
 /** Runs a command to completion. Never throws on a non-zero exit. */
 export function exec(file: string, args: string[], opts: ExecOptions = {}): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
-    const command = cliCommand(file, args);
-    const child = spawn(command.file, command.args, {
-      windowsVerbatimArguments: command.windowsVerbatimArguments,
-      cwd: opts.cwd,
-      env: childEnv(opts.env),
-      stdio: ["pipe", "pipe", "pipe"],
-      ...groupOptions(),
-    });
-    track(child);
+    const { child, release } = start(file, args, opts);
     let stdout = "";
     let stderr = "";
     const timer = opts.timeoutMs ? setTimeout(() => terminate(child), opts.timeoutMs) : undefined;
-    const onAbort = () => terminate(child);
-    if (opts.signal?.aborted) onAbort();
-    else opts.signal?.addEventListener("abort", onAbort, { once: true });
     child.stdout.on("data", (d) => (stdout += d));
     child.stderr.on("data", (d) => (stderr += d));
     const cleanup = () => {
       clearTimeout(timer);
-      opts.signal?.removeEventListener("abort", onAbort);
+      release();
     };
     child.on("error", (e) => {
       cleanup();
@@ -217,7 +232,6 @@ export function exec(file: string, args: string[], opts: ExecOptions = {}): Prom
       cleanup();
       resolve({ stdout, stderr, code });
     });
-    child.stdin.on("error", () => {});
     child.stdin.end(opts.input ?? "");
   });
 }
@@ -226,7 +240,7 @@ export interface Streamed {
   child: ChildProcess;
   /** Parsed JSON objects from stdout, one per line. Non-JSON lines are yielded as `{ __raw: line }`. */
   lines: AsyncIterable<unknown>;
-  /** Collected stderr so far. */
+  /** The last STDERR_KEEP characters of stderr so far. */
   stderr(): string;
   /** Resolves when the process exits. */
   exited: Promise<number | null>;
@@ -241,33 +255,23 @@ export interface Streamed {
   hold(on: boolean): void;
 }
 
+/** How much stderr a streamed CLI keeps. Callers only show its end, and a live session can run for hours. */
+export const STDERR_KEEP = 16_384;
+
 /** Spawns a CLI and exposes stdout as an NDJSON stream. Aborting the signal stops it with `terminate`. */
 export function spawnStream(
   file: string,
   args: string[],
   opts: ExecOptions & { closeStdin?: boolean } = {},
 ): Streamed {
-  const command = cliCommand(file, args);
-  const child = spawn(command.file, command.args, {
-    windowsVerbatimArguments: command.windowsVerbatimArguments,
-    cwd: opts.cwd,
-    env: childEnv(opts.env),
-    stdio: ["pipe", "pipe", "pipe"],
-    ...groupOptions(),
-  });
-  track(child);
+  const { child, release } = start(file, args, opts);
   const channel = new Channel<unknown>();
   let buffer = "";
   let stderr = "";
 
   const flush = (line: string) => {
-    const trimmed = line.trim();
-    if (!trimmed) return;
-    try {
-      channel.push(JSON.parse(trimmed));
-    } catch {
-      channel.push({ __raw: trimmed });
-    }
+    const parsed = parseLine(line);
+    if (parsed !== undefined) channel.push(parsed);
   };
 
   child.stdout.setEncoding("utf8");
@@ -280,21 +284,16 @@ export function spawnStream(
     }
   });
   child.stderr.setEncoding("utf8");
-  child.stderr.on("data", (d: string) => (stderr += d));
-  child.stdin.on("error", () => {});
-
-  const onAbort = () => terminate(child);
-  if (opts.signal?.aborted) onAbort();
-  else opts.signal?.addEventListener("abort", onAbort, { once: true });
+  child.stderr.on("data", (d: string) => (stderr = (stderr + d).slice(-STDERR_KEEP)));
 
   const exited = new Promise<number | null>((resolve) => {
     child.on("error", (e) => {
-      opts.signal?.removeEventListener("abort", onAbort);
+      release();
       channel.fail(e);
       resolve(null);
     });
     child.on("close", (code) => {
-      opts.signal?.removeEventListener("abort", onAbort);
+      release();
       flush(buffer);
       buffer = "";
       channel.end();

@@ -1,10 +1,7 @@
 import { FunnelError, type FunnelEvent, type LiveSession, type RunInput } from "../../types.js";
 import { Channel } from "../../util/channel.js";
-import { needsArgFile, writeArgFile } from "../../util/argfile.js";
-import { spawnStream, type Streamed } from "../../util/process.js";
-import { findBinary } from "../base.js";
-import { BIN, answerControlRequest, buildArgs, forwardsSubagents, schemaInit, userContent } from "./index.js";
-import { parseClaudeMessage } from "./parser.js";
+import { exitedEarly } from "../base.js";
+import { claudeTurn, forwardsSubagents, launchClaude, userMessage } from "./index.js";
 
 /**
  * Claude Code with `--input-format stream-json` reads user messages from stdin until stdin closes, and answers each
@@ -14,26 +11,11 @@ import { parseClaudeMessage } from "./parser.js";
  * its own, with a second `result`. So this session has no `steer`.
  */
 export async function openClaudeSession(first: RunInput): Promise<LiveSession> {
-  const bin = findBinary(BIN);
-  if (!bin) throw new FunnelError("Claude Code is not installed.", "not-installed");
-  if (first.selection.access === "supervised" && !first.onApproval) {
-    throw new FunnelError('Access "supervised" needs an onApproval handler.', "invalid-selection");
-  }
-  // A long system prompt would hit the argv size limit, so it goes through a private temp file. The CLI reads it at
-  // startup; the file is removed when the first turn ends.
-  const systemFile = first.system && needsArgFile(first.system) ? await writeArgFile("system-prompt.txt", first.system) : undefined;
-  let proc: Streamed;
-  try {
-    // No abort signal here: the process outlives the turn. Each turn handles its own signal.
-    proc = spawnStream(bin, buildArgs(first, systemFile?.path), { cwd: first.selection.cwd, env: first.env, closeStdin: false });
-  } catch (err) {
-    await systemFile?.remove();
-    throw err;
-  }
+  // No abort signal here: the process outlives the turn. Each turn handles its own signal. The reply to a schema
+  // `initialize` request arrives before any turn reads, so it is dropped with the other lines between turns.
+  const { proc, systemFile } = await launchClaude(first);
   void proc.exited.then(() => systemFile?.remove());
-  // Its reply arrives before any turn reads, so it is dropped with the other lines between turns.
-  const init = schemaInit(first);
-  if (init) proc.write(init);
+  const forward = forwardsSubagents(first);
   proc.hold(false);
   let sessionId: string | undefined;
   let exited = false;
@@ -74,35 +56,22 @@ export async function openClaudeSession(first: RunInput): Promise<LiveSession> {
     if (signal?.aborted) onAbort();
     else signal?.addEventListener("abort", onAbort, { once: true });
 
-    let finished = false;
+    const state = { finished: false };
     try {
-      if (!closed) proc.write(JSON.stringify({ type: "user", message: { role: "user", content: userContent(input) } }));
-      for await (const raw of lines) {
-        const msg = raw as Record<string, any>;
-        if (msg.type === "control_request") {
-          yield* answerControlRequest(proc, msg, input);
-          continue;
-        }
-        for (const e of parseClaudeMessage(raw, forwardsSubagents(first))) {
-          if (e.type === "session") sessionId = e.sessionId;
-          // Set before yielding: a consumer that stops at `done` never comes back to this loop.
-          if (e.type === "done" || e.type === "error") finished = true;
-          yield e;
-        }
-        if (msg.type === "result") break;
+      if (!closed) proc.write(userMessage(input));
+      for await (const e of claudeTurn(proc, lines, input, forward, state)) {
+        if (e.type === "session") sessionId = e.sessionId;
+        yield e;
       }
     } finally {
       signal?.removeEventListener("abort", onAbort);
       if (current === lines) current = undefined;
       // A turn that did not reach its result leaves the process mid-answer. It cannot take another turn.
-      if (!finished) stop();
+      if (!state.finished) stop();
       proc.hold(false);
       await systemFile?.remove();
     }
-    if (finished) return;
-    await proc.exited;
-    if (aborted || closed) yield { type: "done", text: "", finishReason: "cancelled" };
-    else yield { type: "error", message: proc.stderr().trim() || "Claude Code exited without a result.", code: "cli-failed" };
+    if (!state.finished) yield await exitedEarly(proc, "Claude Code", () => aborted || closed);
   }
 
   return {

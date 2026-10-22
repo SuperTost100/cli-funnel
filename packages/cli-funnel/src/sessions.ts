@@ -1,4 +1,4 @@
-import { FunnelError, type AccessLevel, type FunnelEvent, type LiveSession, type Provider, type ProviderId, type RunInput } from "./types.js";
+import { FunnelError, type AccessLevel, type FunnelEvent, type LiveSession, type Provider, type ProviderId, type RunInput, type Selection } from "./types.js";
 
 export interface SessionOptions {
   /** Keep Claude Code and Codex processes alive between turns of a session. Default false: one process per turn. */
@@ -29,7 +29,8 @@ interface Entry {
   live: LiveSession;
   /** What the process was started with. A turn that asks for something else gets a new process. */
   fingerprint: string;
-  input: RunInput;
+  /** The selection the process was started with. The whole input is not kept: it can hold attachments and closures. */
+  selection: Selection;
   key?: string;
   busy: boolean;
   lastUsed: number;
@@ -105,7 +106,7 @@ export class SessionPool {
       entry = undefined;
     }
     if (!entry) {
-      entry = { provider: p.id, live: await p.openSession(input), fingerprint: fp, input, busy: false, lastUsed: Date.now() };
+      entry = { provider: p.id, live: await p.openSession(input), fingerprint: fp, selection: input.selection, busy: false, lastUsed: Date.now() };
       this.entries.add(entry);
     }
     entry.busy = true;
@@ -145,9 +146,9 @@ export class SessionPool {
             {
               provider: e.provider,
               sessionId: e.live.sessionId,
-              model: e.input.selection.model,
-              cwd: e.input.selection.cwd,
-              access: e.input.selection.access,
+              model: e.selection.model,
+              cwd: e.selection.cwd,
+              access: e.selection.access,
               busy: e.busy,
               steer: Boolean(e.live.steer),
               lastUsed: e.lastUsed,

@@ -1,6 +1,6 @@
-import { fromManifest, loadManifest } from "../../catalog/manifest.js";
-import { compareVersions, exec, spawnStream } from "../../util/process.js";
-import { detectInstallation, findBinary, runLogout, runUpdate, spawnLogin } from "../base.js";
+import { manifestModels } from "../../catalog/manifest.js";
+import { exec, spawnStream } from "../../util/process.js";
+import { detectInstallation, exitedEarly, findBinary, runLogout, runUpdate, spawnLogin } from "../base.js";
 import { FunnelError, type AuthStatus, type FunnelEvent, type ModelInfo, type Provider, type ProviderContext, type RunInput } from "../../types.js";
 import { requireMachine } from "../../selection.js";
 import { composePrompt } from "../prompt.js";
@@ -51,7 +51,7 @@ export function accessFlags(access: RunInput["selection"]["access"]): string[] {
 export const buildPrompt = (input: RunInput) => composePrompt(input, { system: true, schema: true });
 
 /** Flags for `providerOptions.agent`. Throws `invalid-selection` when an option would widen `selection.access`. */
-export function optionArgs(input: RunInput): string[] {
+function optionArgs(input: RunInput): string[] {
   const o = optionsFor(input, "agent", ["addDirs", "sandbox", "mode"]);
   const { access } = requireMachine(input.selection);
   const args: string[] = [];
@@ -96,10 +96,10 @@ async function authStatus(): Promise<AuthStatus> {
   if (!path) return { loggedIn: false, detail: "agent is not installed." };
   const status = await exec(path, ["status", "--format", "json"], { timeoutMs: 15_000 }).catch(() => undefined);
   if (!status) return { loggedIn: false };
-  const parsed = parseStatus(status.stdout || status.stderr);
-  if (!parsed.loggedIn) return { loggedIn: false };
+  const text = status.stdout || status.stderr;
+  if (!parseStatus(text).loggedIn) return { loggedIn: false };
   const about = await exec(path, ["about", "--format", "json"], { timeoutMs: 15_000 }).catch(() => undefined);
-  return parseStatus(status.stdout, about?.stdout);
+  return parseStatus(text, about?.stdout);
 }
 
 async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
@@ -123,17 +123,7 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
     // Runs too when the caller stops reading early. The CLI must not keep working unattended.
     proc.kill();
   }
-  const code = await proc.exited;
-  if (input.signal?.aborted) {
-    yield { type: "done", text: "", finishReason: "cancelled" };
-  } else if (!finished) {
-    const detail = proc.stderr().trim().slice(-500);
-    yield {
-      type: "error",
-      message: detail || `agent exited with code ${code} before finishing.`,
-      code: /authentication required|not logged in/i.test(detail) ? "not-logged-in" : "cli-failed",
-    };
-  }
+  if (!finished) yield await exitedEarly(proc, "agent", () => input.signal?.aborted);
 }
 
 export const agentProvider: Provider = {
@@ -167,7 +157,7 @@ export const agentProvider: Provider = {
       known = new Set(listed.map((m) => m.id));
       return groupModels(listed);
     }
-    return fromManifest(await loadManifest(ctx?.manifestUrl), "agent", undefined, compareVersions);
+    return manifestModels("agent", ctx?.manifestUrl);
   },
   run,
 };

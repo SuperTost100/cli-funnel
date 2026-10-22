@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { collect } from "../src/providers/base.js";
+import { collect } from "./helpers.js";
 import { createOllamaProvider } from "../src/providers/ollama/index.js";
 import { mapChatLine, mapPullLine, normalizeBaseUrl, parseTags } from "../src/providers/ollama/parser.js";
 import { createFunnel } from "../src/funnel.js";

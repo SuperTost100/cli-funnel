@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import type { CliProviderId, ModelInfo, ProviderId } from "../types.js";
+import { PROVIDER_OPTION_IDS, type CliProviderId, type ModelInfo, type ProviderId } from "../types.js";
+import { compareVersions } from "../util/process.js";
 
 /** A manifest entry. Same as ModelInfo minus fields the loader fills in. */
 export type ManifestModel = Omit<ModelInfo, "provider" | "source"> & {
@@ -19,14 +20,13 @@ export interface ModelManifest {
 const bundledDir = [new URL("../../data/models/", import.meta.url), new URL("../data/models/", import.meta.url)].find((u) =>
   existsSync(fileURLToPath(u)),
 ) ?? new URL("../../data/models/", import.meta.url);
-const PROVIDER_IDS: CliProviderId[] = ["claude", "codex", "agent", "antigravity"];
 let bundled: ModelManifest | undefined;
 let remote: { url: string; at: number; data: ModelManifest } | undefined;
 
-export async function loadBundledManifest(): Promise<ModelManifest> {
+async function loadBundledManifest(): Promise<ModelManifest> {
   if (bundled) return bundled;
   const providers = {} as ModelManifest["providers"];
-  for (const id of PROVIDER_IDS) {
+  for (const id of PROVIDER_OPTION_IDS) {
     providers[id] = JSON.parse(await readFile(fileURLToPath(new URL(`${id}.json`, bundledDir)), "utf8"));
   }
   bundled = { schemaVersion: 1, updated: "bundled", providers };
@@ -55,15 +55,16 @@ export async function loadManifest(url?: string): Promise<ModelManifest> {
   return loadBundledManifest();
 }
 
-export function fromManifest(
-  manifest: ModelManifest,
-  provider: ProviderId,
-  cliVersion?: string,
-  compare?: (a: string, b: string) => number,
-): ModelInfo[] {
+/** One provider's models from a manifest. With `cliVersion` set, models that need a newer CLI are left out. */
+export function fromManifest(manifest: ModelManifest, provider: ProviderId, cliVersion?: string): ModelInfo[] {
   return ((manifest.providers as Partial<Record<ProviderId, ManifestModel[]>>)[provider] ?? [])
-    .filter((m) => !m.minCliVersion || !cliVersion || !compare || compare(cliVersion, m.minCliVersion) >= 0)
+    .filter((m) => !m.minCliVersion || !cliVersion || compareVersions(cliVersion, m.minCliVersion) >= 0)
     .map(({ minCliVersion: _min, ...m }) => ({ ...m, provider, source: "manifest" as const }));
+}
+
+/** One provider's models from the manifest at `url`, or from the bundled one. */
+export async function manifestModels(provider: ProviderId, url?: string): Promise<ModelInfo[]> {
+  return fromManifest(await loadManifest(url), provider);
 }
 
 /**

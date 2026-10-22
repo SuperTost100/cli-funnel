@@ -29,7 +29,6 @@ export function parseModelList(text: string): ListedModel[] {
 
 interface Parts {
   base: string;
-  thinking: boolean;
   effort?: string;
   fast: boolean;
   bare: boolean;
@@ -62,7 +61,7 @@ function splitId(id: string): Parts {
   }
   dropThinking();
   const stem = tokens.join("-");
-  return { base: thinking ? `${stem}-thinking` : stem, thinking, effort, fast, bare: effort === undefined };
+  return { base: thinking ? `${stem}-thinking` : stem, effort, fast, bare: effort === undefined };
 }
 
 /** Groups the flat variant list into base models with efforts and a fast flag. */
@@ -180,7 +179,7 @@ function output(result: Record<string, unknown> | undefined): string | undefined
   return undefined;
 }
 
-export function toUsage(u: Record<string, number> | undefined): Usage | undefined {
+function toUsage(u: Record<string, number> | undefined): Usage | undefined {
   if (!u) return undefined;
   const cached = u.cacheReadTokens ?? 0;
   const inputTokens = (u.inputTokens ?? 0) + cached + (u.cacheWriteTokens ?? 0);
@@ -193,7 +192,6 @@ export class StreamMapper {
   private sawPartial = false;
   private text = "";
   private denied = false;
-  private started = new Map<string, string>();
 
   map(line: unknown): FunnelEvent[] {
     const m = line as Record<string, any>;
@@ -220,7 +218,6 @@ export class StreamMapper {
         const name = toolName(key);
         const id = String(m.call_id ?? call.toolCallId ?? name);
         if (m.subtype === "started") {
-          this.started.set(id, name);
           return [{ type: "tool.start", id, name, input: toolInput(name, call.args) }];
         }
         if (m.subtype === "completed") {

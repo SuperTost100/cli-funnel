@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { claudeProvider } from "../src/providers/claude/index.js";
 import { Channel } from "../src/util/channel.js";
 import { readNDJSON } from "../src/util/ndjson.js";
-import { spawnStream, terminate } from "../src/util/process.js";
+import { spawnStream, STDERR_KEEP, terminate } from "../src/util/process.js";
 import { readSSE } from "../src/util/sse.js";
 import type { FunnelEvent, RunInput } from "../src/types.js";
 
@@ -82,6 +82,13 @@ describe("child processes", () => {
       await proc.exited;
     }
     expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+  });
+
+  it("keeps only the end of stderr", async () => {
+    const proc = spawnStream(script(`i=0; while [ $i -lt 2000 ]; do echo "line $i of stderr noise" >&2; i=$((i+1)); done; echo last >&2`), []);
+    await proc.exited;
+    expect(proc.stderr()).toHaveLength(STDERR_KEEP);
+    expect(proc.stderr().endsWith("line 1999 of stderr noise\nlast\n")).toBe(true);
   });
 });
 

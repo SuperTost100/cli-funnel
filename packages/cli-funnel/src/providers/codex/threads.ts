@@ -1,6 +1,6 @@
 import { FunnelError, type Limit, type ListThreadsOptions, type ProcessOptions, type RateLimits, type ThreadInfo, type ThreadPage, type UsageWindow } from "../../types.js";
 import { spawnStream } from "../../util/process.js";
-import { findBinary } from "../base.js";
+import { findBinary, stderrTail } from "../base.js";
 import { snapshotLimit } from "./events.js";
 import { BINARY, INITIALIZE_PARAMS } from "./index.js";
 import { RpcClient } from "./rpc.js";
@@ -77,7 +77,7 @@ async function call(method: string, params: unknown, options: ProcessOptions = {
     return await Promise.race([answer, timeout]);
   } catch (e) {
     if (options.signal?.aborted) throw new FunnelError("The request was aborted.", "aborted");
-    const err = proc.stderr().trim().split("\n").slice(-2).join(" ");
+    const err = stderrTail(proc.stderr());
     throw new FunnelError(`${method} failed: ${e instanceof Error ? e.message : String(e)}${err ? ` ${err}` : ""}`, "cli-failed");
   } finally {
     clearTimeout(timer);

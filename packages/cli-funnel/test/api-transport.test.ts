@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFunnel } from "../src/funnel.js";
 import { anthropicBody, createApiProviders, type ApiConfig } from "../src/providers/api.js";
-import { collect } from "../src/providers/base.js";
+import { collect } from "./helpers.js";
 import { retryAfterMs } from "../src/providers/limits.js";
 import { createOpenAICompatibleProvider } from "../src/providers/openai-compatible.js";
 import type { FunnelEvent, ProviderId, RunInput } from "../src/types.js";
