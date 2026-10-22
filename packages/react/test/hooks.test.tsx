@@ -250,6 +250,15 @@ describe("useSelection", () => {
     expect(result.current.value).toBe(value);
   });
 
+  it("keeps a field locked when locked holds it as undefined", async () => {
+    const client = fakeClient();
+    const { result } = renderHook(() => useSelection(client, { locked: { provider: "claude", cwd: undefined } }));
+    await waitFor(() => expect(result.current.selection.model).toBe("claude-1"));
+    act(() => result.current.set({ cwd: "/elsewhere" }));
+    expect(result.current.selection.cwd).toBeUndefined();
+    expect("cwd" in result.current.selection).toBe(true);
+  });
+
   it("never pairs a locked provider with another provider's model", async () => {
     const client = fakeClient();
     const { result } = renderHook(() => useSelection(client, { locked: { provider: "claude" } }));

@@ -12,6 +12,14 @@ import type {
 } from "cli-funnel/client";
 import { applyEvent, endTurn, startTurn, type Turn } from "./transcript.js";
 
+const NOTHING_LOCKED: Partial<Selection> = {};
+
+/** True when both objects have the same keys, undefined ones included, with the same values. */
+function sameFields(a: Partial<Selection>, b: Partial<Selection>): boolean {
+  const keys = Object.keys(a) as (keyof Selection)[];
+  return keys.length === Object.keys(b).length && keys.every((k) => k in b && Object.is(a[k], b[k]));
+}
+
 /** Extra fields for one `useRun().send` call. */
 export type RunOptions = Pick<RunInput, "system" | "attachments" | "responseSchema" | "maxOutputTokens">;
 
@@ -64,14 +72,14 @@ export function useSelection(
   const [loaded, setLoaded] = useState<{ provider: string; models: ModelInfo[]; error?: string }>();
   const [retry, setRetry] = useState(0);
   const [draft, setDraft] = useState<Partial<Selection>>({ ...opts.defaults, ...opts.locked });
-  // Callers often pass `locked` and `pick` inline. Keying `locked` on its content and reading `pick` through a ref keeps
-  // `selection` and `value` the same objects until something in them changes.
-  const lockedKey = JSON.stringify(opts.locked ?? {});
-  const locked = useMemo(() => JSON.parse(lockedKey) as Partial<Selection>, [lockedKey]);
+  // Callers often pass `locked` and `pick` inline. Keeping the previous `locked` while its fields are the same, and
+  // reading `pick` through a ref, keeps `selection` and `value` the same objects until something in them changes.
+  // A field set to undefined still counts as locked, as `in` checks it.
+  const lockedRef = useRef<Partial<Selection>>(opts.locked ?? NOTHING_LOCKED);
+  if (!sameFields(lockedRef.current, opts.locked ?? NOTHING_LOCKED)) lockedRef.current = opts.locked ?? NOTHING_LOCKED;
+  const locked = lockedRef.current;
   const pickRef = useRef(opts.pick);
   pickRef.current = opts.pick;
-  const lockedRef = useRef(locked);
-  lockedRef.current = locked;
 
   const providerId = locked.provider ?? draft.provider ?? providers.find((p) => p.installation.installed && p.auth?.loggedIn)?.id ?? providers.find((p) => p.installation.installed)?.id;
   const overview = providers.find((p) => p.id === providerId);
