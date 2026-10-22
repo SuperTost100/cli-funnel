@@ -52,9 +52,12 @@ export function openaiEfforts(id: string): EffortOption[] {
   return levels("low", "medium", "high");
 }
 
+/** Gemini 3 and later. */
+export const GEMINI_3_OR_LATER = /^gemini-([3-9]|\d{2,})/;
+
 /** Gemini 3 and later take `thinkingLevel`. Gemini 2.5 uses a token budget, which this package does not expose. */
 export function geminiEfforts(id: string): EffortOption[] {
-  if (!/^gemini-([3-9]|\d{2,})/.test(id)) return [];
+  if (!GEMINI_3_OR_LATER.test(id)) return [];
   // Gemini 3 Pro has no medium level. Some Flash models also take `minimal`, which still works through `allowUnlistedModels`.
   if (/pro/.test(id)) return levels(...(id.startsWith("gemini-3-pro") ? ["low", "high"] : ["low", "medium", "high"]));
   return levels("low", "medium", "high");

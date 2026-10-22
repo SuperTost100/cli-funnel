@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { parseArguments, partsOf, stringifyArguments, textOf } from "../messages.js";
 import { FunnelError, type ContentPart, type FunnelEvent, type Message, type ToolCall, type ToolChoice, type ToolDefinition } from "../types.js";
+import { isObject } from "../util/is-object.js";
+import { GEMINI_3_OR_LATER } from "./efforts.js";
 
 /** One message in a vendor's own format. Stored in session history as it is. */
 export interface Msg {
@@ -16,8 +18,6 @@ export const newCallId = (): string => `call_${randomUUID().replace(/-/g, "").sl
 
 /** Parameters for a tool that declares none. */
 const NO_PARAMETERS = { type: "object", properties: {} };
-
-const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 
 /** Arguments as an object, for vendors that take only objects. Arguments that were not JSON become `{}`. */
 const argsObject = (input: unknown): Record<string, unknown> => (isObject(input) ? input : {});
@@ -65,8 +65,9 @@ export const chatTools = (tools: ToolDefinition[]) =>
 
 export const chatToolChoice = (c: ToolChoice) => (typeof c === "string" ? c : { type: "function", function: { name: c.name } });
 
-const chatPart = (p: ContentPart) =>
-  p.type === "image" ? { type: "image_url", image_url: { url: `data:${p.mediaType};base64,${p.data}` } } : { type: "text", text: p.type === "text" ? p.text : "" };
+const dataUrl = (p: { mediaType: string; data: string }) => `data:${p.mediaType};base64,${p.data}`;
+
+const chatPart = (p: ContentPart) => (p.type === "image" ? { type: "image_url", image_url: { url: dataUrl(p) } } : { type: "text", text: p.type === "text" ? p.text : "" });
 
 /**
  * Typed messages in Chat Completions format. Assistant turns are plain text plus `tool_calls`, which every server
@@ -75,13 +76,7 @@ const chatPart = (p: ContentPart) =>
 export function chatMessages(messages: Message[]): Msg[] {
   return messages.flatMap((m): Msg[] => {
     const parts = partsOf(m);
-    if (m.role === "assistant") {
-      const calls = parts.filter((p) => p.type === "tool_call");
-      const text = textOf(m);
-      if (!calls.length) return [{ role: "assistant", content: text }];
-      const tool_calls = calls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: stringifyArguments(c.input) } }));
-      return [{ role: "assistant", content: text || null, tool_calls }];
-    }
+    if (m.role === "assistant") return [chatAssistant(textOf(m), parts.filter((p) => p.type === "tool_call"))];
     if (typeof m.content === "string") return [{ role: "user", content: m.content }];
     const results: Msg[] = parts.flatMap((p) => (p.type === "tool_result" ? [{ role: "tool" as const, tool_call_id: p.toolCallId, content: resultText(p.output, p.isError) }] : []));
     const rest = parts.filter((p) => p.type === "text" || p.type === "image");
@@ -124,6 +119,36 @@ export const chatAssistant = (text: string, calls: ToolCall[]): Msg =>
       }
     : { role: "assistant", content: text };
 
+// OpenAI Responses
+
+export const responsesTools = (tools: ToolDefinition[]) =>
+  tools.map((t) => ({ type: "function", name: t.name, ...(t.description ? { description: t.description } : {}), parameters: t.parameters ?? NO_PARAMETERS }));
+
+export const responsesToolChoice = (c: ToolChoice) => (typeof c === "string" ? c : { type: "function", name: c.name });
+
+const responsesPart = (p: ContentPart) => (p.type === "image" ? { type: "input_image", image_url: dataUrl(p) } : { type: "input_text", text: p.type === "text" ? p.text : "" });
+
+/** Typed messages as Responses input items. Tool calls and their results are items of their own, not message content. */
+export function responsesInput(messages: Message[]): Record<string, unknown>[] {
+  return messages.flatMap((m) => {
+    if (typeof m.content === "string") return [{ role: m.role, content: m.content }];
+    const items: Record<string, unknown>[] = [];
+    const rest: ContentPart[] = [];
+    for (const p of m.content) {
+      if (p.type === "tool_call") items.push({ type: "function_call", call_id: p.id, name: p.name, arguments: stringifyArguments(p.input) });
+      else if (p.type === "tool_result") items.push({ type: "function_call_output", call_id: p.toolCallId, output: resultText(p.output, p.isError) });
+      else rest.push(p);
+    }
+    if (!rest.length) return items;
+    const message =
+      m.role === "assistant"
+        ? { role: "assistant", content: rest.map((p) => (p.type === "text" ? p.text : "")).join("") }
+        : { role: "user", content: rest.map(responsesPart) };
+    // A tool result answers the call before it, so results go first; an assistant's text comes before its calls.
+    return m.role === "assistant" ? [message, ...items] : [...items, message];
+  });
+}
+
 // Gemini generateContent
 
 export const geminiTools = (tools: ToolDefinition[]) => [
@@ -140,7 +165,7 @@ export const geminiToolConfig = (c: ToolChoice) => ({
  * caller and not from stored history has none, so it gets the value Google documents for history from elsewhere.
  */
 const SKIP_SIGNATURE = "skip_thought_signature_validator";
-const signsCalls = (model: string) => /^gemini-([3-9]|\d{2,})/.test(model);
+const signsCalls = (model: string) => GEMINI_3_OR_LATER.test(model);
 
 /** Tool call names by id, from typed messages and from stored history in either vendor format. */
 function callNames(messages: Message[], earlier: Msg[]): Map<string, string> {
@@ -185,8 +210,6 @@ export function geminiMessages(messages: Message[], model: string, earlier: Msg[
 }
 
 // Ollama /api/chat
-
-export const ollamaTools = chatTools;
 
 /** Typed messages in Ollama's format: text in `content`, images as base64 in `images`, tool results as `tool` messages. */
 export function ollamaMessages(messages: Message[], earlier: Msg[] = []): Msg[] {

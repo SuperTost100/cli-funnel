@@ -3,8 +3,7 @@ import { redactErrors } from "../util/redact.js";
 import { anthropicAdaptive, anthropicEfforts, geminiEfforts, openaiEfforts } from "./efforts.js";
 import { parseArguments } from "../messages.js";
 import { runWithHistory } from "./history.js";
-import { fetchRetrying, mergeHeaders, type RetryOptions } from "./http.js";
-import { parseHttpLimit } from "./limits.js";
+import { bearer, fetchRetrying, httpAccount, httpCapabilities, httpError, jsonHeaders, mergeHeaders, truncated, type RetryOptions } from "./http.js";
 import {
   anthropicMessages,
   anthropicToolChoice,
@@ -33,8 +32,6 @@ import {
 } from "../types.js";
 import { streamResponses } from "./responses.js";
 import { joinUrl } from "../util/url.js";
-
-export { chatMessages, type Msg } from "./wire.js";
 
 /** What a stream hands back besides events. */
 export interface Turn {
@@ -98,14 +95,6 @@ interface ApiSpec {
   toMessages(messages: Message[], input: RunInput, earlier: Msg[]): Msg[];
   /** A run whose conversation the vendor keeps, without local history. Undefined runs the usual way. */
   ownRun?(input: RunInput, config: ApiVendorConfig): ((ctx: ApiContext) => AsyncIterable<FunnelEvent>) | undefined;
-}
-
-/** A failed response as events: a `limit` first when the API answered 429, then the error. */
-async function* httpError(label: string, res: Response): AsyncGenerator<FunnelEvent> {
-  const body = await res.text();
-  const limit = parseHttpLimit(res.status, res.headers, body);
-  if (limit) yield limit;
-  yield { type: "error", message: `${label} ${res.status}: ${body}`, code: "cli-failed" };
 }
 
 const MODEL_BASE = { contextWindows: [], fast: false, source: "cli" as const };
@@ -253,9 +242,6 @@ export interface ChatCompletionsOptions {
   strictSchema?: boolean;
 }
 
-/** The stream ended without the vendor's own end marker, so the answer may be cut off. */
-const truncated = (label: string): FunnelEvent => ({ type: "error", message: `${label} closed the stream before the answer finished.`, code: "stream-truncated" });
-
 /**
  * Streams one Chat Completions turn. Shared by `openai-api` and the OpenAI-compatible endpoints. `turn.assistant` gets
  * the answer with its tool calls, for the session history.
@@ -268,7 +254,7 @@ export async function* streamChatCompletions(opts: ChatCompletionsOptions, input
       {
         method: "POST",
         signal: input.signal,
-        headers: mergeHeaders({ ...(opts.key ? { authorization: `Bearer ${opts.key}` } : {}), "content-type": "application/json" }, opts.headers),
+        headers: jsonHeaders(opts.key, opts.headers),
         body: JSON.stringify({
           model: input.selection.model,
           // The system message is sent on every call and never stored in the session history.
@@ -403,7 +389,7 @@ const openai: ApiSpec = {
   keyHint: "platform.openai.com",
   defaultBaseUrl: "https://api.openai.com/v1",
   cache: false,
-  authHeaders: (key) => ({ authorization: `Bearer ${key}` }),
+  authHeaders: (key) => bearer(key),
   async listModels(ctx) {
     const res = await fetch(joinUrl(ctx.baseUrl, "/models"), { headers: ctx.headers });
     if (!res.ok) throw new FunnelError(`OpenAI API returned ${res.status}.`, "cli-failed");
@@ -584,39 +570,17 @@ function makeApiProvider(spec: ApiSpec, getKey: () => string | undefined, config
     id: spec.id,
     displayName: spec.displayName,
     binary: "fetch",
-    capabilities: {
-      access: [],
-      effort: true,
-      contextWindow: false,
-      fast: false,
-      resume: true,
-      approvals: false,
-      images: true,
-      messages: true,
-      tools: true,
-      system: "native",
-      schema: "native",
-      sampling: true,
-      cache: spec.cache,
-    },
+    capabilities: httpCapabilities({ cache: spec.cache }),
     detect: async () => ({ installed: true, testedRange: { min: "0" }, withinTestedRange: true }),
     authStatus: async () => {
       const hasKey = !!(getKey() ?? process.env[spec.envVar]);
       return { loggedIn: hasKey || hasHeaders, method: hasKey ? "API key" : "Headers" };
     },
-    login() {
-      return {
-        async *[Symbol.asyncIterator]() {
-          yield { type: "error" as const, message: `${spec.displayName} uses an API key. Set ${spec.envVar}.` };
-        },
-        sendCode() {},
-        cancel() {},
-      };
-    },
-    logout: async () => {
-      throw new FunnelError(`Remove ${spec.envVar} from your environment to sign out.`, "unsupported");
-    },
-    update: async () => ({ changed: false, output: "API providers have nothing to update." }),
+    ...httpAccount({
+      login: `${spec.displayName} uses an API key. Set ${spec.envVar}.`,
+      logout: `Remove ${spec.envVar} from your environment to sign out.`,
+      update: "API providers have nothing to update.",
+    }),
     models: async () => spec.listModels(context()),
     run(input) {
       const secrets = [getKey() ?? process.env[spec.envVar], ...Object.values(config.headers ?? {})];

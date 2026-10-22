@@ -45,7 +45,7 @@ export function runMessages(input: RunInput): Message[] {
 const invalid = (message: string) => new FunnelError(message, "invalid-selection");
 
 /** Throws `invalid-selection` when `messages` is not a conversation a provider can take. */
-export function checkMessages(messages: unknown): asserts messages is Message[] {
+function checkMessages(messages: unknown): asserts messages is Message[] {
   if (!Array.isArray(messages) || messages.length === 0) throw invalid("messages must be a non-empty array.");
   for (const [i, m] of messages.entries()) {
     if (!m || typeof m !== "object") throw invalid(`messages[${i}] must be an object.`);
