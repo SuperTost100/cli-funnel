@@ -172,6 +172,17 @@ describe("jsonlRunLog", () => {
     expect(lines(file).map((r) => r.runId)).toEqual(ids);
   });
 
+  it("flush() also waits for lines handed over while it waits", async () => {
+    const file = tmp();
+    const log = jsonlRunLog(file);
+    const done = (runId: string) => log({ runId, provider: "claude", model: "m", selection, prompt: "p", startedAt: 0, time: 1, event: { type: "done", text: "", finishReason: "stop" } });
+    done("run_a");
+    const flushed = log.flush();
+    done("run_b");
+    await flushed;
+    expect(lines(file).map((r) => r.runId)).toEqual(["run_a", "run_b"]);
+  });
+
   it("keeps interleaved runs apart", async () => {
     const file = tmp();
     const log = jsonlRunLog(file);

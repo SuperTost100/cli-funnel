@@ -134,6 +134,16 @@ export function jsonlRunLog(file: string, options: JsonlRunLogOptions = {}): Run
       });
     }
   };
-  /** Resolves once every line handed over so far is on disk. Await it before reading the file or exiting. */
-  return Object.assign(handler, { flush: () => pending });
+  /**
+   * Resolves once no line is waiting, including lines handed over while it waits. Await it before reading the file or
+   * exiting.
+   */
+  const flush = async () => {
+    let seen: Promise<void>;
+    do {
+      seen = pending;
+      await seen;
+    } while (seen !== pending);
+  };
+  return Object.assign(handler, { flush });
 }
