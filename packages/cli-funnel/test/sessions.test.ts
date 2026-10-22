@@ -367,6 +367,31 @@ describe("approvals on a live session", () => {
   });
 });
 
+describe("an onApproval that fails", () => {
+  const throws = () => {
+    throw new Error("handler broke");
+  };
+  const rejects = async () => {
+    throw new Error("handler broke");
+  };
+
+  it.each([
+    ["throws", false, throws],
+    ["rejects", false, rejects],
+    ["throws on a live session", true, throws],
+  ] as const)("denies when the handler %s (claude)", async (_, keepAlive, onApproval) => {
+    const f = make({ keepAlive });
+    const r = await f.run(claude("ask", { selection: { provider: "claude", model: "m", cwd: tmpdir(), access: "supervised" }, onApproval }));
+    expect(r.text).toBe("approval:deny#1");
+  });
+
+  it("denies when the handler throws (codex)", async () => {
+    const f = make();
+    const r = await f.run(codex("ask", { selection: { provider: "codex", model: "m", cwd: tmpdir(), access: "supervised" }, onApproval: throws }));
+    expect(r.text).toBe("approval:decline");
+  });
+});
+
 describe("codex live sessions", () => {
   it("runs the next turn on the same app-server and thread", async () => {
     const f = make({ keepAlive: true });

@@ -1,7 +1,7 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { agentProvider, buildArgs, NONE_PERMISSIONS, noneWorkspace } from "../src/providers/agent/index.js";
 import { groupModels, parseModelList, parseStatus, StreamMapper, toCliModel } from "../src/providers/agent/parser.js";
 import { collect } from "../src/providers/base.js";
@@ -190,6 +190,23 @@ describe("status and versions", () => {
     expect(parseVersion("2026.09.26-dd393fe\n")).toBe("2026.09.26-dd393fe");
     expect(compareVersions("2026.09.26-dd393fe", "2026.09.01")).toBeGreaterThan(0);
     expect(compareVersions("2026.08.30", "2026.09.01")).toBeLessThan(0);
+  });
+});
+
+describe.skipIf(process.platform === "win32")("auth status", () => {
+  afterEach(() => {
+    delete process.env.CLI_FUNNEL_AGENT_BIN;
+  });
+
+  it("reads status json from stderr when stdout is empty", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cf-agent-auth-"));
+    const status = join(dir, "status.json");
+    writeFileSync(status, fixture("status.json"));
+    const bin = join(dir, "agent");
+    writeFileSync(bin, `#!/bin/sh\n[ "$1" = "status" ] && cat ${status} >&2\nexit 0\n`);
+    chmodSync(bin, 0o755);
+    process.env.CLI_FUNNEL_AGENT_BIN = bin;
+    expect(await agentProvider.authStatus()).toMatchObject({ loggedIn: true, account: "user@example.com" });
   });
 });
 

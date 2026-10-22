@@ -1,5 +1,5 @@
 import { ACCESS_LEVELS, FunnelError, type AccessLevel, type ApprovalDecision, type ApprovalRequest, type AuthStatus, type Capabilities, type FunnelEvent, type Provider, type ProviderContext, type RunInput } from "../../types.js";
-import { detectInstallation, findBinary, runLogout, runUpdate, spawnLogin } from "../base.js";
+import { askApproval, detectInstallation, findBinary, runLogout, runUpdate, spawnLogin } from "../base.js";
 import { bool, dirList, flag, invalidOption, object, optionsFor, positive, requireAccess, str, stringList } from "../options.js";
 import { fromManifest, loadManifest, mergeModels } from "../../catalog/manifest.js";
 import { needsArgFile, writeArgFile, type ArgFile } from "../../util/argfile.js";
@@ -234,7 +234,7 @@ async function awaitApproval(input: RunInput, request: ApprovalRequest, exited: 
     signal?.addEventListener("abort", onAbort, { once: true });
   });
   try {
-    return await Promise.race([Promise.resolve(input.onApproval!(request)), aborted, exited.then(() => undefined)]);
+    return await Promise.race([askApproval(input, request), aborted, exited.then(() => undefined)]);
   } finally {
     signal?.removeEventListener("abort", onAbort);
   }

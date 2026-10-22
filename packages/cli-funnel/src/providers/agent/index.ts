@@ -96,10 +96,10 @@ async function authStatus(): Promise<AuthStatus> {
   if (!path) return { loggedIn: false, detail: "agent is not installed." };
   const status = await exec(path, ["status", "--format", "json"], { timeoutMs: 15_000 }).catch(() => undefined);
   if (!status) return { loggedIn: false };
-  const parsed = parseStatus(status.stdout || status.stderr);
-  if (!parsed.loggedIn) return { loggedIn: false };
+  const text = status.stdout || status.stderr;
+  if (!parseStatus(text).loggedIn) return { loggedIn: false };
   const about = await exec(path, ["about", "--format", "json"], { timeoutMs: 15_000 }).catch(() => undefined);
-  return parseStatus(status.stdout, about?.stdout);
+  return parseStatus(text, about?.stdout);
 }
 
 async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {

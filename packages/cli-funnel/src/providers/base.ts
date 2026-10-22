@@ -1,8 +1,10 @@
+import type { ChildProcess } from "node:child_process";
 import { Channel } from "../util/channel.js";
-import { spawn, type ChildProcess } from "node:child_process";
-import { childEnv, cliCommand, compareVersions, exec, firstUrl, parseVersion, resolveBinary, type ExecResult } from "../util/process.js";
+import { compareVersions, exec, firstUrl, parseVersion, resolveBinary, start, type ExecResult } from "../util/process.js";
 import {
   FunnelError,
+  type ApprovalDecision,
+  type ApprovalRequest,
   type AuthStatus,
   type FinishReason,
   type FunnelEvent,
@@ -72,14 +74,8 @@ export function spawnLogin(
   if (!path) {
     finish({ type: "error", message: `${binary} is not installed.` });
   } else {
-    const command = cliCommand(path, args);
-    child = spawn(command.file, command.args, {
-      env: childEnv(opts.env),
-      signal: opts.signal,
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsVerbatimArguments: command.windowsVerbatimArguments,
-    });
-    child.stdin?.on("error", () => {});
+    const started = start(path, args, { env: opts.env, signal: opts.signal });
+    child = started.child;
     timer = setTimeout(() => {
       child?.kill("SIGTERM");
       finish({ type: "error", message: "Timed out waiting for sign-in." });
@@ -108,11 +104,16 @@ export function spawnLogin(
     child.stdout?.on("data", (d) => scan("stdout", String(d)));
     child.stderr?.on("data", (d) => scan("stderr", String(d)));
     // Without this listener a CLI that fails to start (missing file, permissions) throws in the host process.
-    child.on("error", (error) => finish({ type: "error", message: error.message }));
+    child.on("error", (error) => {
+      started.release();
+      finish({ type: "error", message: error.message });
+    });
     child.on("close", async (code) => {
+      started.release();
       scanLine(pending.stdout);
       scanLine(pending.stderr);
       if (finished) return;
+      if (opts.signal?.aborted) return finish({ type: "error", message: "The operation was aborted" });
       const status = await readStatus().catch((): AuthStatus => ({ loggedIn: false }));
       finish(status.loggedIn ? { type: "done", status } : { type: "error", message: `Login did not complete (exit ${code}).` });
     });
@@ -128,6 +129,16 @@ export function spawnLogin(
       finish();
     },
   };
+}
+
+/** Asks the caller's `onApproval`. No handler, or one that throws or rejects, means "deny". */
+export async function askApproval(input: RunInput, request: ApprovalRequest): Promise<ApprovalDecision> {
+  if (!input.onApproval) return "deny";
+  try {
+    return await input.onApproval(request);
+  } catch {
+    return "deny";
+  }
 }
 
 /** Runs the CLI's own updater and reports the version before and after. */

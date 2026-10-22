@@ -2,7 +2,7 @@ import { fromManifest, loadManifest } from "../../catalog/manifest.js";
 import type { ApprovalDecision, AuthStatus, FunnelEvent, ModelInfo, Provider, ProviderContext, RunInput } from "../../types.js";
 import { Channel } from "../../util/channel.js";
 import { exec, spawnStream } from "../../util/process.js";
-import { detectInstallation, findBinary, runLogout, runUpdate, spawnLogin } from "../base.js";
+import { askApproval, detectInstallation, findBinary, runLogout, runUpdate, spawnLogin } from "../base.js";
 import { requireMachine } from "../../selection.js";
 import { planAccess } from "./access.js";
 import { toApprovalRequest, toReply, type ServerRequest } from "./approvals.js";
@@ -96,12 +96,7 @@ export async function decideApproval(
   const request = toApprovalRequest(req, items);
   if (!request) return "deny";
   push({ type: "approval.request", request });
-  if (!input.onApproval) return "deny";
-  try {
-    return await input.onApproval(request);
-  } catch {
-    return "deny";
-  }
+  return askApproval(input, request);
 }
 
 async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
