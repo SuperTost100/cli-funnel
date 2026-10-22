@@ -1,5 +1,4 @@
 import type { FunnelEvent, Limit } from "../types.js";
-import { retryAfterMs } from "./http.js";
 
 type LimitEvent = Extract<FunnelEvent, { type: "limit" }>;
 
@@ -11,8 +10,17 @@ export function parseDuration(text: string): number | undefined {
   return Math.round(parts.reduce((sum, p) => sum + Number(p[1]) * unit[p[2] as keyof typeof unit], 0));
 }
 
-/** `retry-after-ms` is milliseconds. `retry-after` is seconds or an HTTP date. */
-function retryAfter(headers: Headers, now: number): number | undefined {
+/** Reads `Retry-After` as delta-seconds or an HTTP date. Returns milliseconds, or undefined when absent or unreadable. */
+export function retryAfterMs(value: string | null, now = Date.now()): number | undefined {
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const date = Date.parse(value);
+  return Number.isNaN(date) ? undefined : Math.max(0, date - now);
+}
+
+/** The wait a response asks for. `retry-after-ms` is milliseconds and wins. `retry-after` is seconds or an HTTP date. */
+export function retryAfter(headers: Headers, now = Date.now()): number | undefined {
   const ms = Number(headers.get("retry-after-ms") ?? NaN);
   if (Number.isFinite(ms) && ms >= 0) return ms;
   return retryAfterMs(headers.get("retry-after"), now);
