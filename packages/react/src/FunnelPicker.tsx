@@ -27,7 +27,10 @@ export type SelectionState = ReturnType<typeof useSelection>;
 
 export function FunnelPicker({ client, defaults, locked, onChange, className }: FunnelPickerProps) {
   const s = useSelection(client, { defaults, locked });
-  useEffect(() => onChange?.(s.value), [s.value && JSON.stringify(s.value)]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Braces keep the callback's return value from becoming the effect's cleanup.
+  useEffect(() => {
+    onChange?.(s.value);
+  }, [s.value && JSON.stringify(s.value)]); // eslint-disable-line react-hooks/exhaustive-deps
   return <FunnelPickerView client={client} state={s} locked={locked} className={className} />;
 }
 

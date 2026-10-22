@@ -10,7 +10,6 @@
     "build": "npm run build -ws --if-present",
     "test": "npm run test -ws --if-present",
     "typecheck": "npm run typecheck -ws --if-present",
-    "fixtures": "node --experimental-strip-types scripts/record-fixtures.ts",
     "playground": "npm run build && npm run dev -w playground",
     "e2e": "npm run build && node scripts/e2e.mjs"
   },
