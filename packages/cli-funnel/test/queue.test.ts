@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createFunnel } from "../src/funnel.js";
-import { RunQueue } from "../src/queue.js";
+import { DEFAULT_MAX_QUEUED_RUNS, RunQueue } from "../src/queue.js";
 import { createHandler } from "../src/server/handler.js";
 import type { FunnelEvent, Provider, ProviderId, RunInput } from "../src/types.js";
 
@@ -81,6 +81,15 @@ describe("RunQueue", () => {
     const slow = new RunQueue({ maxConcurrentRuns: 1, queueTimeoutMs: 10 });
     await slow.acquire("claude");
     await expect(slow.acquire("claude")).rejects.toMatchObject({ code: "busy" });
+  });
+
+  it("lets at most 100 runs wait when maxQueuedRuns is not set", async () => {
+    const q = new RunQueue({ maxConcurrentRuns: 1 });
+    await q.acquire("claude");
+    for (let i = 0; i < DEFAULT_MAX_QUEUED_RUNS; i++) void q.acquire("claude");
+    expect(DEFAULT_MAX_QUEUED_RUNS).toBe(100);
+    expect(q.full("claude")).toBe(true);
+    await expect(q.acquire("claude")).rejects.toMatchObject({ code: "busy" });
   });
 
   it("drops a waiting run when its signal aborts", async () => {

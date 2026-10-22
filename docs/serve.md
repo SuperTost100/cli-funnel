@@ -25,7 +25,7 @@ By default it listens on `127.0.0.1:4747` and answers only requests that come fr
 | `--session-idle <seconds>` | `600` | Close a live session after this long without a turn. Needs `--keep-alive`. |
 | `--max-sessions <n>` | `8` | Most live sessions at once. Needs `--keep-alive`. |
 | `--max-concurrent <n>` | no limit | Most runs at the same time. Runs over it wait in a queue. See [Limit concurrent runs](#limit-concurrent-runs). |
-| `--max-queued <n>` | no limit | Most runs that may wait. One more gets 429. `0` means no waiting. Needs `--max-concurrent`. |
+| `--max-queued <n>` | 100 | Most runs that may wait. One more gets 429. `0` means no waiting. Needs `--max-concurrent`. |
 | `--queue-timeout <seconds>` | no limit | How long a run may wait for a slot. Needs `--max-concurrent`. |
 | `--cors <origin>` | off | One web origin that may call the API from a browser. See [CORS](#cors). |
 | `--log-jsonl <file>` | off | Append one JSON line per run to the file. See [Log runs](#log-runs). |

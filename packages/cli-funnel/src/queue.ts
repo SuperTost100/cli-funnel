@@ -8,11 +8,14 @@ export interface RunLimits {
    * provider, or a number per provider id. Default: no limit.
    */
   maxConcurrentRuns?: number | { total?: number; perProvider?: number | Partial<Record<ProviderId, number>> };
-  /** Runs that may wait for a slot. A run over this fails with code "busy". Default: no limit. */
+  /** Runs that may wait for a slot. A run over this fails with code "busy". Default: `DEFAULT_MAX_QUEUED_RUNS`. */
   maxQueuedRuns?: number;
   /** How long a run may wait for a slot before it fails with code "busy". Default: no limit. */
   queueTimeoutMs?: number;
 }
+
+/** Runs that may wait when `maxQueuedRuns` is not set. Each waiting HTTP request holds its body until it starts. */
+export const DEFAULT_MAX_QUEUED_RUNS = 100;
 
 /** What the HTTP handler sends in `retry-after` when it refuses a run because the queue is full. */
 export const BUSY_RETRY_AFTER_SEC = 5;
@@ -50,7 +53,7 @@ export class RunQueue {
 
   /** True when a run for `provider` would be refused right now because the queue is full. */
   full(provider: ProviderId): boolean {
-    return !this.fits(provider) && this.waiting.length >= (this.limits.maxQueuedRuns ?? Infinity);
+    return !this.fits(provider) && this.waiting.length >= (this.limits.maxQueuedRuns ?? DEFAULT_MAX_QUEUED_RUNS);
   }
 
   /**

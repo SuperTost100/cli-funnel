@@ -51,7 +51,7 @@ const HELP = `cli-funnel <command>
                                --session-idle closes a live session after that many seconds idle (default 600).
                                --max-sessions caps live sessions (default 8). Both need --keep-alive.
                                --max-concurrent caps runs at the same time. Runs over it wait in a queue.
-                               --max-queued caps the waiting runs (more get 429). --queue-timeout stops a wait after that many seconds.
+                               --max-queued caps the waiting runs (default 100, more get 429). --queue-timeout stops a wait after that many seconds.
                                Both need --max-concurrent. Per-provider caps go in the config file.
   mcp [--max-access ${ACCESS_LEVELS.join("|")}] [--fs-root dir]... [--cwd dir]
                                MCP server on stdio. Tools: list_providers, list_models, run.
