@@ -2,10 +2,11 @@ import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import type { Funnel } from "../funnel.js";
 import { createCwdGuard } from "../util/fs-roots.js";
+import { isObject } from "../util/is-object.js";
 import { ACCESS_LEVELS, type AccessLevel, type ProviderId, type RunInput, type RunResult } from "../types.js";
 
 /** Protocol revisions this server speaks, newest first. */
-export const MCP_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"] as const;
+const MCP_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"] as const;
 
 export interface McpServerOptions {
   funnel: Funnel;
@@ -124,7 +125,6 @@ class RpcError extends Error {
   }
 }
 
-const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 function textResult(value: string, isError = false) {
@@ -180,7 +180,9 @@ export function createMcpServer(options: McpServerOptions) {
       );
     }
     const cwd = selection.cwd ?? defaultCwd;
-    if (typeof cwd !== "string" || !cwdAllowed(cwd)) {
+    if (typeof cwd !== "string") throw new ToolFailure("selection.cwd must be a string.");
+    // Providers with no access levels (Ollama, API providers) have no machine to protect, so cwd means nothing to them.
+    if (funnel.providers[provider]!.capabilities.access.length > 0 && !cwdAllowed(cwd)) {
       throw new ToolFailure("cwd does not exist or is outside the allowed folders. Start the server with --fs-root to allow more.");
     }
 
