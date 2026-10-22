@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildArgs, claudeProvider } from "../src/providers/claude/index.js";
 import { parseClaudeMessage } from "../src/providers/claude/parser.js";
-import { collect } from "../src/providers/base.js";
+import { collect } from "./helpers.js";
 import type { FunnelEvent, RunInput, Selection } from "../src/types.js";
 
 const fixture = (name: string) =>

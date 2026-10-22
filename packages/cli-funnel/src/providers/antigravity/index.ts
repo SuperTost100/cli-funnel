@@ -1,4 +1,4 @@
-import { fromManifest, loadManifest, mergeModels } from "../../catalog/manifest.js";
+import { manifestModels, mergeModels } from "../../catalog/manifest.js";
 import { Channel } from "../../util/channel.js";
 import { needsArgFile, writeArgFile } from "../../util/argfile.js";
 import { exec, spawnStream } from "../../util/process.js";
@@ -14,7 +14,7 @@ import {
   type RunInput,
   type Selection,
 } from "../../types.js";
-import { detectInstallation, findBinary, runUpdate } from "../base.js";
+import { detectInstallation, exitedEarly, findBinary, LOGIN_TIMEOUT_MS, runUpdate } from "../base.js";
 import { createMapper, parseModels } from "./parser.js";
 import { composePrompt } from "../prompt.js";
 import { dirList, flag, optionsFor, positive, requireAccess } from "../options.js";
@@ -31,30 +31,39 @@ export function toCliModel(selection: Selection, models: ModelInfo[] = []): { mo
 }
 
 /** Linux refuses a single argument over 128 KiB. Longer prompts go on stdin. */
-export const MAX_ARG_PROMPT = 100_000;
+const MAX_ARG_PROMPT = 100_000;
 
 /** Windows limits the whole command line to 32,767 characters, so the prompt moves to stdin much sooner there. */
-export const MAX_ARG_PROMPT_WIN32 = 30_000;
+const MAX_ARG_PROMPT_WIN32 = 30_000;
 
-export function maxArgPrompt(platform: NodeJS.Platform = process.platform): number {
-  return platform === "win32" ? MAX_ARG_PROMPT_WIN32 : MAX_ARG_PROMPT;
-}
-
-/** The stdin line for a long prompt, or undefined when it fits in argv. The message shape is what agy 1.x decodes. */
-export function stdinPrompt(input: RunInput, platform: NodeJS.Platform = process.platform): string | undefined {
+/** Where the prompt goes: `--print=<prompt>` when it fits in argv, else one stdin line in the shape agy 1.x decodes. */
+function placePrompt(input: RunInput, platform: NodeJS.Platform): { print: string[]; stdin?: string } {
   const prompt = composePrompt(input, { system: true, schema: false });
-  if (Buffer.byteLength(prompt) <= maxArgPrompt(platform)) return undefined;
-  return `${JSON.stringify({ event: "user", message: { content: prompt } })}\n`;
+  if (Buffer.byteLength(prompt) <= (platform === "win32" ? MAX_ARG_PROMPT_WIN32 : MAX_ARG_PROMPT)) return { print: [`--print=${prompt}`] };
+  // An empty --print with stream-json input reads one turn per stdin line.
+  return { print: ["--print=", "--input-format", "stream-json"], stdin: `${JSON.stringify({ event: "user", message: { content: prompt } })}\n` };
 }
 
-/** `schemaFile` carries a long response schema (`--json-schema` takes a path). Without it the schema goes inline. */
-export function buildArgs(input: RunInput, models: ModelInfo[] = [], platform: NodeJS.Platform = process.platform, schemaFile?: string): string[] {
+/** The stdin line for a long prompt, or undefined when it fits in argv. */
+export function stdinPrompt(input: RunInput, platform: NodeJS.Platform = process.platform): string | undefined {
+  return placePrompt(input, platform).stdin;
+}
+
+/**
+ * `schemaArg` is the `--json-schema` value: a file path for a long schema, or the schema as inline JSON, the default.
+ * `placed` is the prompt from `placePrompt`.
+ */
+export function buildArgs(
+  input: RunInput,
+  models: ModelInfo[] = [],
+  platform: NodeJS.Platform = process.platform,
+  schemaArg?: string,
+  placed = placePrompt(input, platform),
+): string[] {
   const { selection } = input;
   const { model, effort } = toCliModel(selection, models);
-  // An empty --print with stream-json input reads one turn per stdin line.
-  const print = stdinPrompt(input, platform) ? ["--print=", "--input-format", "stream-json"] : ["--print=" + composePrompt(input, { system: true, schema: false })];
-  const args = [...print, "--output-format", "stream-json", "--model", model];
-  if (input.responseSchema) args.push("--json-schema", schemaFile ?? JSON.stringify(input.responseSchema.schema));
+  const args = [...placed.print, "--output-format", "stream-json", "--model", model];
+  if (input.responseSchema) args.push("--json-schema", schemaArg ?? JSON.stringify(input.responseSchema.schema));
   if (effort) args.push("--effort", effort);
   if (selection.access === "accept-edits") args.push("--mode", "accept-edits");
   if (selection.access === "full") args.push("--dangerously-skip-permissions");
@@ -64,7 +73,7 @@ export function buildArgs(input: RunInput, models: ModelInfo[] = [], platform: N
 }
 
 /** Flags for `providerOptions.antigravity`. Throws `invalid-selection` when an option would widen `selection.access`. */
-export function optionArgs(input: RunInput): string[] {
+function optionArgs(input: RunInput): string[] {
   const o = optionsFor(input, "antigravity", ["addDirs", "printTimeoutSec"]);
   const args: string[] = [];
   const dirs = dirList(o.addDirs, "addDirs");
@@ -100,10 +109,6 @@ export function noneHooks(platform: NodeJS.Platform = process.platform): Record<
 /** The empty folder `none` runs in. It holds only the deny hook. */
 export function noneWorkspace(): Promise<string> {
   return ownedWorkspace("antigravity-none", { ".agents/hooks.json": `${JSON.stringify(noneHooks(), null, 2)}\n` });
-}
-
-async function loadManifestModels(manifestUrl?: string): Promise<ModelInfo[]> {
-  return fromManifest(await loadManifest(manifestUrl), "antigravity");
 }
 
 /**
@@ -155,7 +160,7 @@ function login(options: { signal?: AbortSignal } = {}): LoginSession {
   options.signal?.addEventListener("abort", cancel, { once: true });
   channel.push({ type: "needs-terminal", command: ["agy"] });
   void (async () => {
-    const deadline = Date.now() + 10 * 60_000;
+    const deadline = Date.now() + LOGIN_TIMEOUT_MS;
     while (!cancelled && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, LOGIN_POLL_MS));
       if (cancelled) return;
@@ -174,18 +179,19 @@ function login(options: { signal?: AbortSignal } = {}): LoginSession {
 async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   const path = findBinary("agy");
   if (!path) throw new FunnelError("agy is not installed.", "not-installed");
-  const models = listed?.some((m) => m.id === input.selection.model) ? listed : await loadManifestModels();
+  const models = listed?.some((m) => m.id === input.selection.model) ? listed : await manifestModels("antigravity");
   const cwd = input.selection.access === "none" ? await noneWorkspace() : input.selection.cwd;
   // A long schema would count against the command-line limit, so it goes through a private temp file removed after the run.
   const schema = input.responseSchema ? JSON.stringify(input.responseSchema.schema) : undefined;
   const schemaFile = schema && needsArgFile(schema) ? await writeArgFile("schema.json", schema) : undefined;
+  const placed = placePrompt(input, process.platform);
   let stream: ReturnType<typeof spawnStream>;
   try {
-    stream = spawnStream(path, buildArgs(input, models, process.platform, schemaFile?.path), {
+    stream = spawnStream(path, buildArgs(input, models, process.platform, schemaFile?.path ?? schema, placed), {
       cwd,
       env: input.env,
       signal: input.signal,
-      input: stdinPrompt(input) ?? "",
+      input: placed.stdin ?? "",
     });
   } catch (err) {
     await schemaFile?.remove();
@@ -201,11 +207,7 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
     stream.kill();
     await schemaFile?.remove();
   }
-  const code = await stream.exited;
-  if (mapper.finished) return;
-  if (input.signal?.aborted) return void (yield { type: "done", text: "", finishReason: "cancelled" });
-  const detail = stream.stderr().trim().split("\n").slice(-3).join(" ");
-  yield { type: "error", message: `agy exited (${code}) without a result. ${detail}`.trim(), code: "cli-failed" };
+  if (!mapper.finished) yield await exitedEarly(stream, "agy", () => input.signal?.aborted);
 }
 
 export const antigravityProvider: Provider = {
@@ -234,7 +236,7 @@ export const antigravityProvider: Provider = {
   },
   update: () => runUpdate("agy", ["update"]),
   async models(ctx?: ProviderContext) {
-    const fallback = await loadManifestModels(ctx?.manifestUrl);
+    const fallback = await manifestModels("antigravity", ctx?.manifestUrl);
     const path = findBinary("agy");
     if (!path) return fallback;
     const res = await exec(path, ["models"], { timeoutMs: 20_000 }).catch(() => undefined);

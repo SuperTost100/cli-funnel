@@ -6,7 +6,7 @@ import { join } from "node:path";
  * Text over this many bytes goes to a file instead of argv. Linux refuses one argument over 128 KiB, and Windows
  * limits the whole command line to 32,767 characters, so the cut-off sits far below both.
  */
-export const ARG_FILE_OVER = 4_096;
+const ARG_FILE_OVER = 4_096;
 
 export function needsArgFile(text: string): boolean {
   return Buffer.byteLength(text) > ARG_FILE_OVER;

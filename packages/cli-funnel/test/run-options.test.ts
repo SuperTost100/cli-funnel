@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFunnel } from "../src/funnel.js";
-import { collect } from "../src/providers/base.js";
+import { collect } from "./helpers.js";
 import { buildPrompt as agentPrompt } from "../src/providers/agent/index.js";
 import { buildArgs as agyArgs, stdinPrompt } from "../src/providers/antigravity/index.js";
 import { createMapper } from "../src/providers/antigravity/parser.js";

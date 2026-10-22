@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFil
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { collect } from "../src/providers/base.js";
+import { collect } from "./helpers.js";
 import { antigravityProvider, buildArgs, NONE_MATCHER, noneHooks, noneWorkspace } from "../src/providers/antigravity/index.js";
 import { createMapper, parseModels } from "../src/providers/antigravity/parser.js";
 import type { FunnelEvent, RunInput } from "../src/types.js";

@@ -1,14 +1,14 @@
 import { ACCESS_LEVELS, FunnelError, type AccessLevel, type ApprovalDecision, type ApprovalRequest, type AuthStatus, type Capabilities, type FunnelEvent, type Provider, type ProviderContext, type RunInput } from "../../types.js";
-import { askApproval, detectInstallation, findBinary, runLogout, runUpdate, spawnLogin } from "../base.js";
+import { askApproval, detectInstallation, exitedEarly, findBinary, runLogout, runUpdate, spawnLogin } from "../base.js";
 import { bool, dirList, flag, invalidOption, object, optionsFor, positive, requireAccess, str, stringList } from "../options.js";
-import { fromManifest, loadManifest, mergeModels } from "../../catalog/manifest.js";
+import { fromManifest, loadManifest } from "../../catalog/manifest.js";
 import { needsArgFile, writeArgFile, type ArgFile } from "../../util/argfile.js";
-import { compareVersions, exec, spawnStream, type Streamed } from "../../util/process.js";
+import { exec, spawnStream, type Streamed } from "../../util/process.js";
 import { openClaudeSession } from "./live.js";
 import { requireMachine } from "../../selection.js";
 import { parseClaudeMessage } from "./parser.js";
 
-export const BIN = "claude";
+const BIN = "claude";
 const TESTED_RANGE = { min: "2.1.0" };
 
 const PERMISSION_MODE: Record<AccessLevel, string> = {
@@ -40,12 +40,15 @@ const capabilities: Capabilities = {
 const NO_TOOLS = ["--tools", "", "--strict-mcp-config", "--setting-sources", ""];
 
 /** Claude Code picks the 1M context variant of a model through the `[1m]` suffix on the model id. */
-export function cliModel(selection: RunInput["selection"]): string {
+function cliModel(selection: RunInput["selection"]): string {
   return selection.contextWindow === 1_000_000 && !selection.model.endsWith("[1m]") ? `${selection.model}[1m]` : selection.model;
 }
 
-/** `systemFile` carries a long system prompt. Without it the prompt goes inline. */
-export function buildArgs(input: RunInput, systemFile?: string): string[] {
+/**
+ * `systemFile` carries a long system prompt. Without it the prompt goes inline. `schemaOnStdin` leaves out
+ * `--json-schema` when the schema goes in the `initialize` request instead (see `schemaInit`).
+ */
+export function buildArgs(input: RunInput, systemFile?: string, schemaOnStdin = schemaInit(input) !== undefined): string[] {
   const { selection } = input;
   const args = [
     "-p",
@@ -63,7 +66,7 @@ export function buildArgs(input: RunInput, systemFile?: string): string[] {
     const flag = selection.access === "none" ? "--system-prompt" : "--append-system-prompt";
     args.push(systemFile ? `${flag}-file` : flag, systemFile ?? input.system);
   }
-  if (input.responseSchema && !schemaInit(input)) args.push("--json-schema", JSON.stringify(input.responseSchema.schema));
+  if (input.responseSchema && !schemaOnStdin) args.push("--json-schema", JSON.stringify(input.responseSchema.schema));
   // Without this flag the CLI denies anything that needs a prompt instead of asking.
   if (selection.access !== "full" && selection.access !== "none" && input.onApproval) args.push("--permission-prompt-tool", "stdio");
   if (input.sessionId) args.push("--resume", input.sessionId);
@@ -75,7 +78,7 @@ export function buildArgs(input: RunInput, systemFile?: string): string[] {
  * `--json-schema` takes only inline JSON, so a schema too long for argv goes in the stream-json `initialize` control
  * request instead, the way the Agent SDK sends it. Returns that stdin line, or undefined when the flag is enough.
  */
-export function schemaInit(input: RunInput): string | undefined {
+function schemaInit(input: RunInput): string | undefined {
   if (!input.responseSchema || !needsArgFile(JSON.stringify(input.responseSchema.schema))) return undefined;
   const request = { subtype: "initialize", jsonSchema: input.responseSchema.schema };
   return JSON.stringify({ type: "control_request", request_id: "cli-funnel-init", request });
@@ -104,7 +107,7 @@ function agentDefinition(name: string, value: unknown): Record<string, unknown> 
  * Flags for `providerOptions.claude`. Throws `invalid-selection` when an option would widen `selection.access`.
  * Values use the `--flag=value` form, so a value that starts with a dash is never read as a flag.
  */
-export function optionArgs(input: RunInput): string[] {
+function optionArgs(input: RunInput): string[] {
   const o = optionsFor(input, "claude", OPTION_KEYS);
   const { access } = requireMachine(input.selection);
   const args: string[] = [];
@@ -156,53 +159,77 @@ export function userContent(input: RunInput): string | unknown[] {
   ];
 }
 
-async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
+/** The stdin line that starts a turn. */
+export const userMessage = (input: RunInput): string =>
+  JSON.stringify({ type: "user", message: { role: "user", content: userContent(input) } });
+
+/**
+ * Checks the run and starts Claude Code. A long system prompt would hit the argv size limit, so it goes through a
+ * private temp file in `systemFile`; the CLI reads it at startup, and the caller removes it once the first turn ends.
+ * `signal` stops the process. A live session leaves it out: its process outlives the turn.
+ */
+export async function launchClaude(input: RunInput, signal?: AbortSignal): Promise<{ proc: Streamed; systemFile?: ArgFile }> {
   const bin = findBinary(BIN);
   if (!bin) throw new FunnelError("Claude Code is not installed.", "not-installed");
   if (input.selection.access === "supervised" && !input.onApproval) {
     throw new FunnelError('Access "supervised" needs an onApproval handler.', "invalid-selection");
   }
-  // A long system prompt would hit the argv size limit, so it goes through a private temp file removed after the run.
   const systemFile = input.system && needsArgFile(input.system) ? await writeArgFile("system-prompt.txt", input.system) : undefined;
-  let proc: ReturnType<typeof spawnStream>;
+  const init = schemaInit(input);
+  let proc: Streamed;
   try {
-    proc = spawnStream(bin, buildArgs(input, systemFile?.path), { cwd: input.selection.cwd, env: input.env, signal: input.signal, closeStdin: false });
+    proc = spawnStream(bin, buildArgs(input, systemFile?.path, init !== undefined), { cwd: input.selection.cwd, env: input.env, signal, closeStdin: false });
   } catch (err) {
     await systemFile?.remove();
     throw err;
   }
-  const init = schemaInit(input);
   if (init) proc.write(init);
-  proc.write(JSON.stringify({ type: "user", message: { role: "user", content: userContent(input) } }));
+  return { proc, systemFile };
+}
 
-  let finished = false;
-  try {
-    for await (const raw of proc.lines) {
-      const msg = raw as Record<string, any>;
-      if (msg.type === "control_request") {
-        yield* answerControlRequest(proc, msg, input);
-        continue;
-      }
-      // `result` is the last message of the turn. Close stdin before yielding it, since a consumer that stops at
-      // `done` never resumes this loop, and Claude Code waits on stdin for another turn until it closes.
-      if (msg.type === "result") proc.closeStdin();
-      for (const e of parseClaudeMessage(raw, forwardsSubagents(input))) {
-        if (e.type === "done" || e.type === "error") finished = true;
-        yield e;
-      }
+/**
+ * Reads one turn from `lines`: answers control requests and yields events up to and including `result`.
+ * `state.finished` is set before a terminal event is yielded, since a consumer that stops at `done` never comes back.
+ * `onResult` runs when `result` arrives, before its events are yielded.
+ */
+export async function* claudeTurn(
+  proc: Streamed,
+  lines: AsyncIterable<unknown>,
+  input: RunInput,
+  forward: boolean,
+  state: { finished: boolean },
+  onResult?: () => void,
+): AsyncGenerator<FunnelEvent> {
+  for await (const raw of lines) {
+    const msg = raw as Record<string, any>;
+    if (msg.type === "control_request") {
+      yield* answerControlRequest(proc, msg, input);
+      continue;
     }
+    if (msg.type === "result") onResult?.();
+    for (const e of parseClaudeMessage(raw, forward)) {
+      if (e.type === "done" || e.type === "error") state.finished = true;
+      yield e;
+    }
+    if (msg.type === "result") return;
+  }
+}
+
+async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
+  const { proc, systemFile } = await launchClaude(input, input.signal);
+  proc.write(userMessage(input));
+  const state = { finished: false };
+  try {
+    // Claude Code waits on stdin for another turn until it closes, so close it as soon as the result arrives.
+    yield* claudeTurn(proc, proc.lines, input, forwardsSubagents(input), state, () => proc.closeStdin());
   } finally {
     proc.closeStdin();
     // After a result Claude Code exits on its own once stdin closes. Give it a moment to save the session, then stop it.
-    if (finished) setTimeout(() => proc.kill(), 2000).unref();
+    if (state.finished) setTimeout(() => proc.kill(), 2000).unref();
     else proc.kill();
-    // The CLI reads the file at startup, before its first message.
     await systemFile?.remove();
   }
-  if (finished) return;
-  await proc.exited;
-  if (input.signal?.aborted) yield { type: "done", text: "", finishReason: "cancelled" };
-  else yield { type: "error", message: proc.stderr().trim() || "Claude Code exited without a result.", code: "cli-failed" };
+  if (!state.finished) yield await exitedEarly(proc, "Claude Code", () => input.signal?.aborted);
 }
 
 /**
@@ -210,7 +237,7 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
  * caller's decision. When the run is cancelled or the CLI exits while waiting, nothing is answered: the caller's loop
  * ends with the process and reports why.
  */
-export async function* answerControlRequest(proc: Streamed, msg: Record<string, any>, input: RunInput): AsyncGenerator<FunnelEvent> {
+async function* answerControlRequest(proc: Streamed, msg: Record<string, any>, input: RunInput): AsyncGenerator<FunnelEvent> {
   const req = msg.request ?? {};
   if (req.subtype !== "can_use_tool") {
     proc.write(JSON.stringify({ type: "control_response", response: { subtype: "error", request_id: msg.request_id, error: "unsupported request" } }));
@@ -265,7 +292,7 @@ export const claudeProvider: Provider = {
   update: () => runUpdate(BIN, ["update"]),
   async models(ctx?: ProviderContext) {
     const [manifest, install] = await Promise.all([loadManifest(ctx?.manifestUrl), claudeProvider.detect()]);
-    return mergeModels([], fromManifest(manifest, "claude", install.version, compareVersions));
+    return fromManifest(manifest, "claude", install.version);
   },
   run,
   openSession: openClaudeSession,

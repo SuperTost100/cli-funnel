@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFunnel } from "../src/funnel.js";
-import { collect } from "../src/providers/base.js";
+import { collect } from "./helpers.js";
 import { createOpenAICompatibleProvider, createOpenAICompatibleProviders, parseModelList } from "../src/providers/openai-compatible.js";
 import { createHandler } from "../src/server/handler.js";
 import type { FunnelEvent, RunInput } from "../src/types.js";

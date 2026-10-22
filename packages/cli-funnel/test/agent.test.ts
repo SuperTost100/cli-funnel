@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { agentProvider, buildArgs, NONE_PERMISSIONS, noneWorkspace } from "../src/providers/agent/index.js";
 import { groupModels, parseModelList, parseStatus, StreamMapper, toCliModel } from "../src/providers/agent/parser.js";
-import { collect } from "../src/providers/base.js";
+import { collect } from "./helpers.js";
 import { compareVersions, parseVersion } from "../src/util/process.js";
 import type { FunnelEvent, RunInput } from "../src/types.js";
 

@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { Channel } from "../util/channel.js";
-import { compareVersions, exec, firstUrl, parseVersion, resolveBinary, start, type ExecResult } from "../util/process.js";
+import { compareVersions, exec, firstUrl, parseVersion, resolveBinary, start, type ExecResult, type Streamed } from "../util/process.js";
 import {
   FunnelError,
   type ApprovalDecision,
@@ -17,7 +17,7 @@ import {
 } from "../types.js";
 import { parseJsonAnswer } from "./prompt.js";
 
-export function binaryEnvVar(binary: string): string {
+function binaryEnvVar(binary: string): string {
   return `CLI_FUNNEL_${binary.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_BIN`;
 }
 
@@ -25,15 +25,16 @@ export function findBinary(binary: string): string | undefined {
   return resolveBinary(binary, binaryEnvVar(binary));
 }
 
-export async function detectInstallation(
-  binary: string,
-  testedRange: Installation["testedRange"],
-  versionArgs: string[] = ["--version"],
-): Promise<Installation> {
+/** The version `--version` prints, or undefined when the CLI does not answer. */
+async function readVersion(path: string): Promise<string | undefined> {
+  const res = await exec(path, ["--version"], { timeoutMs: 10_000 }).catch(() => undefined);
+  return res ? parseVersion(res.stdout + res.stderr) : undefined;
+}
+
+export async function detectInstallation(binary: string, testedRange: Installation["testedRange"]): Promise<Installation> {
   const path = findBinary(binary);
   if (!path) return { installed: false, testedRange };
-  const res = await exec(path, versionArgs, { timeoutMs: 10_000 }).catch(() => undefined);
-  const version = res ? parseVersion(res.stdout + res.stderr) : undefined;
+  const version = await readVersion(path);
   const withinTestedRange =
     version === undefined
       ? undefined
@@ -142,21 +143,13 @@ export async function askApproval(input: RunInput, request: ApprovalRequest): Pr
 }
 
 /** Runs the CLI's own updater and reports the version before and after. */
-export async function runUpdate(
-  binary: string,
-  updateArgs: string[],
-  versionArgs: string[] = ["--version"],
-): Promise<UpdateResult> {
+export async function runUpdate(binary: string, updateArgs: string[]): Promise<UpdateResult> {
   const path = findBinary(binary);
   if (!path) return { changed: false, output: `${binary} is not installed.` };
-  const read = async () => {
-    const r = await exec(path, versionArgs, { timeoutMs: 10_000 }).catch(() => undefined);
-    return r ? parseVersion(r.stdout + r.stderr) : undefined;
-  };
-  const from = await read();
+  const from = await readVersion(path);
   const res = await exec(path, updateArgs, { timeoutMs: 600_000 });
   if (res.code !== 0) throw cliFailure(binary, "update", res);
-  const to = await read();
+  const to = await readVersion(path);
   return { from, to, changed: !!from && !!to && from !== to, output: (res.stdout + res.stderr).trim() };
 }
 
@@ -171,6 +164,26 @@ export async function runLogout(binary: string, args: string[]): Promise<void> {
 function cliFailure(binary: string, action: string, res: ExecResult): FunnelError {
   const detail = (res.stderr.trim() || res.stdout.trim()).slice(0, 500);
   return new FunnelError(detail || `${binary} ${action} failed (exit ${res.code}).`, "cli-failed");
+}
+
+/** The last lines of a CLI's stderr, joined on one line for an error message. */
+export function stderrTail(stderr: string): string {
+  return stderr.trim().split("\n").slice(-3).join(" ");
+}
+
+/**
+ * The last event of a run whose CLI exited before its own terminal event: `cancelled` when `stopped()` says the caller
+ * stopped it, else an error with the end of stderr.
+ */
+export async function exitedEarly(proc: Streamed, name: string, stopped: () => boolean | undefined): Promise<FunnelEvent> {
+  const code = await proc.exited;
+  if (stopped()) return { type: "done", text: "", finishReason: "cancelled" };
+  const tail = stderrTail(proc.stderr());
+  return {
+    type: "error",
+    message: `${name} exited (${code}) without a result.${tail ? ` ${tail}` : ""}`,
+    code: /authentication required|not logged in/i.test(tail) ? "not-logged-in" : "cli-failed",
+  };
 }
 
 /** Folds events into an API-shaped result one at a time, so a caller never has to keep the events themselves. */
@@ -252,14 +265,4 @@ export function createRunFolder(input: RunInput): RunFolder {
       return result;
     },
   };
-}
-
-/** Folds an event stream into an API-shaped result. */
-export async function collect(
-  events: AsyncIterable<FunnelEvent>,
-  input: RunInput,
-): Promise<RunResult> {
-  const folder = createRunFolder(input);
-  for await (const e of events) folder.add(e);
-  return folder.finish();
 }

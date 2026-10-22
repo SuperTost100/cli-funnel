@@ -6,10 +6,10 @@ import { planAccess } from "../src/providers/codex/access.js";
 import { toApprovalRequest, toReply } from "../src/providers/codex/approvals.js";
 import { parseLoginStatus } from "../src/providers/codex/auth.js";
 import { Translator } from "../src/providers/codex/events.js";
-import { codexProvider } from "../src/providers/codex/index.js";
+import { codexProvider, INITIALIZE_PARAMS } from "../src/providers/codex/index.js";
 import { parseCatalog } from "../src/providers/codex/models.js";
 import { declaredServers, noToolsConfig } from "../src/providers/codex/tools.js";
-import { collect } from "../src/providers/base.js";
+import { collect } from "./helpers.js";
 import type { FunnelEvent } from "../src/types.js";
 
 const fx = (name: string) => new URL(`./fixtures/codex/${name}`, import.meta.url);
@@ -133,6 +133,13 @@ describe("codex access plan", () => {
     expect(planAccess("accept-edits")).toMatchObject({ approvalPolicy: "untrusted", autoAllowFileChanges: true });
     expect(planAccess("auto")).toMatchObject({ approvalPolicy: "on-request", approvalsReviewer: "auto_review" });
     expect(planAccess("full")).toMatchObject({ approvalPolicy: "never", sandbox: "danger-full-access" });
+  });
+});
+
+describe("codex initialize", () => {
+  it("sends the package version as clientInfo.version", () => {
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+    expect(INITIALIZE_PARAMS.clientInfo.version).toBe(pkg.version);
   });
 });
 

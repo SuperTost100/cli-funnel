@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFunnel } from "../src/funnel.js";
 import { createHandler } from "../src/server/handler.js";
-import { collect, createRunFolder } from "../src/providers/base.js";
+import { createRunFolder } from "../src/providers/base.js";
+import { collect } from "./helpers.js";
 import { validateSelection } from "../src/selection.js";
 import { FunnelError, type FunnelEvent, type Installation, type ModelInfo, type Provider, type RunInput } from "../src/types.js";
 

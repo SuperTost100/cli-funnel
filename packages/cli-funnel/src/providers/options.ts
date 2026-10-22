@@ -1,6 +1,7 @@
 // Value checks for `providerOptions`. Each provider maps the checked values to its own flags.
 import { isAbsolute } from "node:path";
 import { FunnelError, type AccessLevel, type ProviderOptions, type RunInput } from "../types.js";
+import { isObject } from "../util/is-object.js";
 
 /** `--name=value` in one argument, so a value that starts with a dash is never read as a flag. */
 export const flag = (name: string, value: string | number): string => `${name}=${value}`;
@@ -9,7 +10,6 @@ function bad(message: string): never {
   throw new FunnelError(message, "invalid-selection");
 }
 
-const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 /** The entry for `id`, or `{}`. Unknown keys fail, so a typo never turns into a silently ignored option. */
 export function optionsFor<K extends keyof ProviderOptions>(input: RunInput, id: K, known: readonly string[]): NonNullable<ProviderOptions[K]> {

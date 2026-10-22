@@ -1,7 +1,7 @@
 import type { AccessLevel } from "../../types.js";
 
 export type ApprovalPolicy = "untrusted" | "on-request" | "never";
-export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access";
+type SandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 
 export interface AccessPlan {
   approvalPolicy: ApprovalPolicy;

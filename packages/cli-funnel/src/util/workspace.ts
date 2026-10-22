@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 /** Root for folders cli-funnel owns. Lives under the user's cache dir, never in a shared temp dir. */
-export function funnelCacheDir(): string {
+function funnelCacheDir(): string {
   return join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "cli-funnel");
 }
 
