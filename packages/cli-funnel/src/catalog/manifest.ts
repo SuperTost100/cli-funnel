@@ -62,9 +62,13 @@ export function fromManifest(manifest: ModelManifest, provider: ProviderId, cliV
     .map(({ minCliVersion: _min, ...m }) => ({ ...m, provider, source: "manifest" as const }));
 }
 
-/** One provider's models from the manifest at `url`, or from the bundled one. */
-export async function manifestModels(provider: ProviderId, url?: string): Promise<ModelInfo[]> {
-  return fromManifest(await loadManifest(url), provider);
+/**
+ * One provider's models from the manifest at `url`, or from the bundled one. `cliVersion` drops models that need a
+ * newer CLI. Pass it as a promise to read the version while the manifest loads.
+ */
+export async function manifestModels(provider: ProviderId, url?: string, cliVersion?: Promise<string | undefined>): Promise<ModelInfo[]> {
+  const [manifest, version] = await Promise.all([loadManifest(url), cliVersion]);
+  return fromManifest(manifest, provider, version);
 }
 
 /**
