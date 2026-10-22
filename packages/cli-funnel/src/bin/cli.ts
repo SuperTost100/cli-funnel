@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
-import type { AddressInfo } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
@@ -13,7 +12,7 @@ import { serveNode } from "../server/node.js";
 import { fileHistory } from "../providers/history.js";
 import type { OpenAICompatibleEndpoint } from "../providers/openai-compatible.js";
 import { SERVE_TIMEOUT_SEC, readServeConfig, resolveServe, seconds } from "./serve-config.js";
-import { UsageError, loadImages, loadSchema, parseOpts, renderRun, resolvePrompt } from "./run-input.js";
+import { UsageError, fromStdin, loadImages, loadSchema, parseOpts, renderRun, resolvePrompt } from "./run-input.js";
 import { ACCESS_LEVELS, type AccessLevel, type ProviderId } from "../types.js";
 
 const HELP = `cli-funnel <command>
@@ -280,9 +279,8 @@ async function main() {
     const access = (values.access ?? "accept-edits") as AccessLevel;
     const contextWindow = wholeNumber("context", values.context);
     const maxOutputTokens = wholeNumber("max-tokens", values["max-tokens"]);
-    const promptFromStdin = words.length === 0 || (words.length === 1 && words[0] === "-");
     // Approvals are asked on the terminal, and stdin is the prompt here.
-    if (access === "supervised" && promptFromStdin) return usage("--access supervised asks for approvals on the terminal. Pass the prompt as an argument instead of stdin.");
+    if (access === "supervised" && fromStdin(words)) return usage("--access supervised asks for approvals on the terminal. Pass the prompt as an argument instead of stdin.");
     let prompt: string, attachments, responseSchema, providerOptions;
     try {
       providerOptions = parseOpts(provider(), values.opt);
@@ -347,8 +345,7 @@ async function main() {
   if (command === "mcp") {
     const maxAccess = (values["max-access"] ?? "none") as AccessLevel;
     if (!ACCESS_LEVELS.includes(maxAccess)) {
-      process.stderr.write(`--max-access must be one of ${ACCESS_LEVELS.join(", ")}.\n`);
-      process.exit(2);
+      return usage(`--max-access must be one of ${ACCESS_LEVELS.join(", ")}.`);
     }
     const cwd = values.cwd ?? process.cwd();
     const server = createMcpServer({
@@ -378,8 +375,7 @@ async function main() {
     } catch (err) {
       return usage(err instanceof Error ? err.message : String(err));
     }
-    const { server } = await serveNode(handler, { port, host });
-    const url = `http://${host.includes(":") ? `[${host}]` : host}:${(server.address() as AddressInfo).port}`;
+    const { url } = await serveNode(handler, { port, host });
     out(`cli-funnel listening on ${url}`);
     out(`OpenAI-compatible base URL: ${url}/v1   (model ids look like claude/claude-sonnet-5)`);
     return;

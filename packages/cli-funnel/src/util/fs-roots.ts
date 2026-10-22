@@ -3,13 +3,16 @@ import { homedir } from "node:os";
 import { isAbsolute, resolve, sep } from "node:path";
 
 /** The path with symlinks resolved, or undefined when it does not exist. */
-function real(p: string): string | undefined {
+export function real(p: string): string | undefined {
   try {
     return realpathSync(p);
   } catch {
     return undefined;
   }
 }
+
+/** True when `p` is one of `roots` or sits below one. Both must be resolved already, see `real`. */
+export const insideRoots = (roots: string[], p: string): boolean => roots.some((r) => p === r || p.startsWith(r + sep));
 
 /**
  * Decides whether a run may use a folder as its project folder. The folder must be absolute, must exist and must sit
@@ -20,6 +23,6 @@ export function createCwdGuard(roots: string[] = [homedir()]): (cwd: string) => 
   const resolved = roots.map((r) => real(r) ?? resolve(r));
   return (cwd) => {
     const p = isAbsolute(cwd) ? real(cwd) : undefined;
-    return !!p && resolved.some((r) => p === r || p.startsWith(r + sep));
+    return !!p && insideRoots(resolved, p);
   };
 }

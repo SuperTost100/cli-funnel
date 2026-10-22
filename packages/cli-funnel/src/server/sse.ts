@@ -27,7 +27,8 @@ export function sse(
         const name = opts.event?.(value);
         controller.enqueue(enc.encode(`${name ? `event: ${name}\n` : ""}data: ${JSON.stringify(value)}\n\n`));
       } catch (err) {
-        controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: "error", message: String(err) })}\n\n`));
+        const message = err instanceof Error ? err.message : String(err);
+        controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: "error", message, code: (err as { code?: string }).code })}\n\n`));
         controller.close();
       }
     },
