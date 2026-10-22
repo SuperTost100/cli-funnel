@@ -64,7 +64,12 @@ export function useSelection(
   const [loaded, setLoaded] = useState<{ provider: string; models: ModelInfo[]; error?: string }>();
   const [retry, setRetry] = useState(0);
   const [draft, setDraft] = useState<Partial<Selection>>({ ...opts.defaults, ...opts.locked });
-  const locked = opts.locked ?? {};
+  // Callers often pass `locked` and `pick` inline. Keying `locked` on its content and reading `pick` through a ref keeps
+  // `selection` and `value` the same objects until something in them changes.
+  const lockedKey = JSON.stringify(opts.locked ?? {});
+  const locked = useMemo(() => JSON.parse(lockedKey) as Partial<Selection>, [lockedKey]);
+  const pickRef = useRef(opts.pick);
+  pickRef.current = opts.pick;
   const lockedRef = useRef(locked);
   lockedRef.current = locked;
 
@@ -85,7 +90,7 @@ export function useSelection(
     return () => ctl.abort();
   }, [client, providerId, retry]);
 
-  const picked = useMemo(() => (providerId ? opts.pick?.(providerId, models) : undefined), [providerId, models, opts.pick]);
+  const picked = useMemo(() => (providerId ? pickRef.current?.(providerId, models) : undefined), [providerId, models]);
   // A locked model that the provider does not list stays unresolved, so `problem` can report it.
   const lockedModel = locked.model;
   const model = useMemo(
@@ -143,6 +148,10 @@ export function useSelection(
   // Providers without access levels (Ollama, API keys) have no machine, so they need no folder and no access level.
   const machine = (overview?.capabilities.access.length ?? 0) > 0;
   const complete = !!(overview && modelsReady && !problem && selection.provider && selection.model && (!machine || (selection.cwd && selection.access)));
+  const value = useMemo(
+    () => (complete ? ({ ...selection, cwd: selection.cwd ?? "", access: selection.access ?? "none" } as Selection) : undefined),
+    [complete, selection],
+  );
   const refresh = useCallback(async () => {
     setRetry((n) => n + 1);
     await refreshProviders();
@@ -158,7 +167,7 @@ export function useSelection(
      * A full Selection once provider and model are set, plus folder and access level for providers that have them.
      * Providers without access levels get `access: "none"` and an empty `cwd`, which they ignore.
      */
-    value: complete ? ({ ...selection, cwd: selection.cwd ?? "", access: selection.access ?? "none" } as Selection) : undefined,
+    value,
     set,
     loading: loadingProviders,
     error,
