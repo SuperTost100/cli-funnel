@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createRunFolder, type RunFolder } from "./providers/base.js";
 import type { FunnelEvent, RunEventRecord, RunInput } from "./types.js";
@@ -63,9 +63,10 @@ const MAX_OPEN_RUNS = 1000;
  * A line has: `time`, `runId`, `provider`, `model`, `effort`, `fast`, `contextWindow`, `access`, `cwd`, `sessionId`,
  * `startedAt`, `durationMs`, `finishReason`, `usage`, `toolCalls`, `tools` (calls per tool name), `deniedActions`
  * and, for a failed run, `error` with `message` and `code`. Tool inputs and outputs are never logged.
- * `prompt` and `text` are added only with `content: true`.
+ * `prompt` and `text` are added only with `content: true`. Lines are written in the background, in the order the runs
+ * ended. `flush()` resolves once they are on disk.
  */
-export function jsonlRunLog(file: string, options: JsonlRunLogOptions = {}): RunEventHandler {
+export function jsonlRunLog(file: string, options: JsonlRunLogOptions = {}): RunEventHandler & { flush(): Promise<void> } {
   const runs = new Map<string, RunFolder>();
   const reported = new Set<string>();
   let ready = false;
@@ -75,19 +76,23 @@ export function jsonlRunLog(file: string, options: JsonlRunLogOptions = {}): Run
     reported.add(err.message);
     process.stderr.write(`cli-funnel run log: ${err.message}\n`);
   };
+  // Lines are written one after another on a promise chain, so they keep the order the runs ended in and the
+  // event loop never waits on the disk.
+  let pending: Promise<void> = Promise.resolve();
   const write = (line: Record<string, unknown>) => {
-    try {
-      if (!ready) {
-        mkdirSync(dirname(file), { recursive: true });
-        ready = true;
-      }
-      appendFileSync(file, JSON.stringify(line) + "\n", { mode: 0o600 });
-    } catch (err) {
-      report(err instanceof Error ? err : new Error(String(err)));
-    }
+    const text = JSON.stringify(line) + "\n";
+    pending = pending
+      .then(async () => {
+        if (!ready) {
+          await mkdir(dirname(file), { recursive: true });
+          ready = true;
+        }
+        await appendFile(file, text, { mode: 0o600 });
+      })
+      .catch((err) => report(err instanceof Error ? err : new Error(String(err))));
   };
 
-  return (r) => {
+  const handler = (r: RunEventRecord) => {
     const e = r.event;
     let folder = runs.get(r.runId);
     if (!folder) {
@@ -129,4 +134,6 @@ export function jsonlRunLog(file: string, options: JsonlRunLogOptions = {}): Run
       });
     }
   };
+  /** Resolves once every line handed over so far is on disk. Await it before reading the file or exiting. */
+  return Object.assign(handler, { flush: () => pending });
 }

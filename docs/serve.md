@@ -169,8 +169,11 @@ const funnel = createFunnel({
 });
 
 // or the same file log the server writes:
-const logged = createFunnel({ onEvent: jsonlRunLog("runs.jsonl", { content: false }) });
+const log = jsonlRunLog("runs.jsonl", { content: false });
+const logged = createFunnel({ onEvent: log });
 ```
+
+`jsonlRunLog` writes in the background, in the order the runs ended. Before you read the file or exit a script, `await log.flush()`.
 
 | `record` field | Meaning |
 |---|---|

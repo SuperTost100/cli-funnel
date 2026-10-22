@@ -103,7 +103,9 @@ describe("onEvent", () => {
 describe("jsonlRunLog", () => {
   const run = async (opts: Parameters<typeof jsonlRunLog>[1], p = happy, prompt = "hi there") => {
     const file = tmp();
-    await createFunnel({ providers: { claude: p }, onEvent: jsonlRunLog(file, opts) }).run({ selection, prompt }).catch(() => {});
+    const log = jsonlRunLog(file, opts);
+    await createFunnel({ providers: { claude: p }, onEvent: log }).run({ selection, prompt }).catch(() => {});
+    await log.flush();
     return { file, line: lines(file)[0] };
   };
 
@@ -160,10 +162,22 @@ describe("jsonlRunLog", () => {
     expect(line.text).toBe("your token is [redacted]");
   });
 
+  it("writes in the background, in the order the runs ended", async () => {
+    const file = tmp();
+    const log = jsonlRunLog(file);
+    const ids = Array.from({ length: 20 }, (_, i) => `run_${i}`);
+    for (const runId of ids) log({ runId, provider: "claude", model: "m", selection, prompt: "p", startedAt: 0, time: 1, event: { type: "done", text: "", finishReason: "stop" } });
+    expect(() => statSync(file)).toThrow();
+    await log.flush();
+    expect(lines(file).map((r) => r.runId)).toEqual(ids);
+  });
+
   it("keeps interleaved runs apart", async () => {
     const file = tmp();
-    const funnel = createFunnel({ providers: { claude: happy }, onEvent: jsonlRunLog(file) });
+    const log = jsonlRunLog(file);
+    const funnel = createFunnel({ providers: { claude: happy }, onEvent: log });
     await Promise.all([funnel.run({ selection, prompt: "a" }), funnel.run({ selection, prompt: "b" })]);
+    await log.flush();
     const rows = lines(file);
     expect(rows).toHaveLength(2);
     expect(new Set(rows.map((r) => r.runId)).size).toBe(2);
@@ -172,23 +186,29 @@ describe("jsonlRunLog", () => {
 
   it("creates the folder, restricts the file to its owner and survives a path it cannot write", async () => {
     const file = join(mkdtempSync(join(tmpdir(), "cf-log-")), "a", "b", "runs.jsonl");
-    await createFunnel({ providers: { claude: happy }, onEvent: jsonlRunLog(file) }).run({ selection, prompt: "hi" });
+    const log = jsonlRunLog(file);
+    await createFunnel({ providers: { claude: happy }, onEvent: log }).run({ selection, prompt: "hi" });
+    await log.flush();
     expect(statSync(file).mode & 0o777).toBe(0o600);
     const blocker = tmp();
     writeFileSync(blocker, "");
     const errors: Error[] = [];
-    const result = await createFunnel({ providers: { claude: happy }, onEvent: jsonlRunLog(join(blocker, "x.jsonl"), { onError: (e) => errors.push(e) }) }).run({ selection, prompt: "hi" });
+    const blocked = jsonlRunLog(join(blocker, "x.jsonl"), { onError: (e) => errors.push(e) });
+    const result = await createFunnel({ providers: { claude: happy }, onEvent: blocked }).run({ selection, prompt: "hi" });
+    await blocked.flush();
     expect(result.text).toBe("hello");
     expect(errors).toHaveLength(1);
   });
 
   it("uses the id the server sends to the client", async () => {
     const file = tmp();
-    const funnel = createFunnel({ providers: { claude: happy }, onEvent: jsonlRunLog(file) });
+    const log = jsonlRunLog(file);
+    const funnel = createFunnel({ providers: { claude: happy }, onEvent: log });
     const handler = createHandler(funnel, { fsRoots: [tmpdir()] });
     const res = await handler(new Request("http://127.0.0.1/run", { method: "POST", headers: { host: "127.0.0.1" }, body: JSON.stringify({ selection: { ...selection, cwd: tmpdir() }, prompt: "go" }) }));
     const body = await res.text();
     const runId = /"runId":"([^"]+)"/.exec(body)![1];
+    await log.flush();
     expect(lines(file)[0].runId).toBe(runId);
   });
 });
