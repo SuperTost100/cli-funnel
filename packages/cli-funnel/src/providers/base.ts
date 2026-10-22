@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { Channel } from "../util/channel.js";
-import { compareVersions, exec, firstUrl, parseVersion, resolveBinary, start, type ExecResult, type Streamed } from "../util/process.js";
+import { compareVersions, exec, firstUrl, parseVersion, resolveBinary, start, terminate, type ExecResult, type Streamed } from "../util/process.js";
 import {
   FunnelError,
   type ApprovalDecision,
@@ -78,7 +78,7 @@ export function spawnLogin(
     const started = start(path, args, { env: opts.env, signal: opts.signal });
     child = started.child;
     timer = setTimeout(() => {
-      child?.kill("SIGTERM");
+      if (child) terminate(child);
       finish({ type: "error", message: "Timed out waiting for sign-in." });
     }, opts.timeoutMs ?? LOGIN_TIMEOUT_MS);
     const seen = new Set<string>();
@@ -126,7 +126,7 @@ export function spawnLogin(
     // A cancelled login ends quietly: the caller asked for it, so it gets no error event.
     cancel: () => {
       cancelled = true;
-      child?.kill("SIGTERM");
+      if (child) terminate(child);
       finish();
     },
   };
