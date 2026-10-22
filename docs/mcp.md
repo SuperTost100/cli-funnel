@@ -63,7 +63,7 @@ npx cli-funnel mcp --max-access accept-edits
 
 The levels are in [Access levels](access-levels.md). `supervised` is always refused. It needs the server to ask you for each approval, and that needs MCP elicitation, which this version does not have. Use `none` for a read-only helper, or a higher level you trust.
 
-A run also needs a project folder inside the allowed folders. The default is the home directory plus the folder the server started in. `--fs-root <dir>` replaces that list and can repeat. A folder outside the list, a relative path, a path that does not exist and a symlink that leads out are all refused. This is the same check as `fsRoots` on the [HTTP server](ui.md).
+A run on a CLI provider also needs a project folder inside the allowed folders. The default is the home directory plus the folder the server started in. `--fs-root <dir>` replaces that list and can repeat. A folder outside the list, a relative path, a path that does not exist and a symlink that leads out are all refused. Ollama, the API providers and OpenAI-compatible servers ignore the folder, so it is not checked for them. This is the same check as `fsRoots` on the [HTTP server](ui.md).
 
 ```bash
 npx cli-funnel mcp --fs-root ~/code --fs-root ~/notes
