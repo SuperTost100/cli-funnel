@@ -39,7 +39,7 @@ So you need two more things:
 
 ## Install
 
-You need React 18 or newer and `cli-funnel` 0.5 or newer, which the package takes as peer dependencies.
+You need React 18 or newer and `cli-funnel` 0.5.1 or newer, which the package takes as peer dependencies.
 
 ```bash
 npm install cli-funnel-react cli-funnel
