@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import type { FunnelEvent, RunEventRecord, RunInput, Usage } from "./types.js";
+import { createRunFolder, type RunFolder } from "./providers/base.js";
+import type { FunnelEvent, RunEventRecord, RunInput } from "./types.js";
+import { redact } from "./util/redact.js";
 
 export type RunEventHandler = (record: RunEventRecord) => unknown;
 
@@ -52,28 +54,6 @@ export interface JsonlRunLogOptions {
   onError?: (err: Error) => void;
 }
 
-// Shapes of common credentials, so a key an API echoes in an error message does not reach the log.
-const KEY_SHAPES = /\b(?:sk-[A-Za-z0-9_-]{16,}|AIza[A-Za-z0-9_-]{30,}|gh[pousr]_[A-Za-z0-9]{30,}|xox[abprs]-[A-Za-z0-9-]{20,})|Bearer\s+[A-Za-z0-9._~+/=-]{16,}/g;
-
-/** Masks credentials in a string: the given secrets exactly, and common key shapes. */
-export function redact(text: string, secrets: (string | undefined)[] = []): string {
-  let out = text;
-  for (const s of secrets) if (s && s.length >= 8) out = out.split(s).join("[redacted]");
-  return out.replace(KEY_SHAPES, "[redacted]");
-}
-
-interface Pending {
-  sessionId?: string;
-  model?: string;
-  usage?: Usage;
-  tools: Record<string, number>;
-  toolCalls: number;
-  denied: string[];
-  text: string;
-  /** Tool names by call id, so a denied call can be named. */
-  calls: Map<string, string>;
-}
-
 /** Runs that never end, such as a consumer that stopped reading, would pile up. The oldest go first. */
 const MAX_OPEN_RUNS = 1000;
 
@@ -86,7 +66,7 @@ const MAX_OPEN_RUNS = 1000;
  * `prompt` and `text` are added only with `content: true`.
  */
 export function jsonlRunLog(file: string, options: JsonlRunLogOptions = {}): RunEventHandler {
-  const runs = new Map<string, Pending>();
+  const runs = new Map<string, RunFolder>();
   const reported = new Set<string>();
   let ready = false;
   const report = (err: Error) => {
@@ -109,33 +89,26 @@ export function jsonlRunLog(file: string, options: JsonlRunLogOptions = {}): Run
 
   return (r) => {
     const e = r.event;
-    let run = runs.get(r.runId);
-    if (!run) {
-      run = { tools: {}, toolCalls: 0, denied: [], text: "", calls: new Map() };
-      runs.set(r.runId, run);
+    let folder = runs.get(r.runId);
+    if (!folder) {
+      // The folder reads only the selection and the response schema, which a log record does not carry.
+      folder = createRunFolder({ selection: r.selection, prompt: r.prompt });
+      runs.set(r.runId, folder);
       if (runs.size > MAX_OPEN_RUNS) runs.delete(runs.keys().next().value!);
     }
-    if (e.type === "session") {
-      run.sessionId = e.sessionId;
-      run.model = e.model ?? run.model;
-    } else if (e.type === "text.delta") {
-      if (options.content) run.text += e.text;
-    } else if (e.type === "tool.start") {
-      run.toolCalls++;
-      run.tools[e.name] = (run.tools[e.name] ?? 0) + 1;
-      run.calls.set(e.id, e.name);
-    } else if (e.type === "tool.end") {
-      if (e.error?.startsWith("denied:")) run.denied.push(run.calls.get(e.id) ?? redact(e.error.slice(7).trim(), options.secrets));
-    } else if (e.type === "usage") {
-      run.usage = e.usage;
-    } else if (e.type === "done" || e.type === "error") {
+    // `add` throws on an error event. The log wants a line for it instead.
+    if (e.type !== "error" && (e.type !== "text.delta" || options.content)) folder.add(e);
+    if (e.type === "done" || e.type === "error") {
       runs.delete(r.runId);
+      const run = folder.finish();
+      const tools: Record<string, number> = {};
+      for (const call of run.toolCalls) tools[call.name] = (tools[call.name] ?? 0) + 1;
       const s = r.selection;
       write({
         time: new Date(r.time).toISOString(),
         runId: r.runId,
         provider: r.provider,
-        model: run.model ?? r.model,
+        model: run.model,
         effort: s.effort,
         fast: s.fast,
         contextWindow: s.contextWindow,
@@ -146,12 +119,12 @@ export function jsonlRunLog(file: string, options: JsonlRunLogOptions = {}): Run
         durationMs: r.time - r.startedAt,
         finishReason: e.type === "done" ? e.finishReason : "error",
         usage: run.usage,
-        toolCalls: run.toolCalls,
-        tools: run.toolCalls ? run.tools : undefined,
-        deniedActions: run.denied,
+        toolCalls: run.toolCalls.length,
+        tools: run.toolCalls.length ? tools : undefined,
+        deniedActions: run.deniedActions.map((a) => redact(a, options.secrets)),
         error: e.type === "error" ? { message: redact(e.message, options.secrets), code: e.code } : undefined,
         ...(options.content
-          ? { prompt: redact(r.prompt, options.secrets), text: redact(e.type === "done" && e.text ? e.text : run.text, options.secrets) }
+          ? { prompt: redact(r.prompt, options.secrets), text: redact(run.text, options.secrets) }
           : {}),
       });
     }

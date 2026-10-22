@@ -3,7 +3,8 @@ import { redactErrors } from "../../util/redact.js";
 import { compareVersions } from "../../util/process.js";
 import { FunnelError, type AuthStatus, type FunnelEvent, type Installation, type ModelInfo, type Provider, type PullEvent, type RunInput, type ToolCall } from "../../types.js";
 import { runWithHistory } from "../history.js";
-import { newCallId, ollamaCalls, ollamaMessages, ollamaTools, type Msg } from "../wire.js";
+import { bearer, httpAccount, httpCapabilities, jsonHeaders, truncated } from "../http.js";
+import { chatTools, newCallId, ollamaCalls, ollamaMessages, type Msg } from "../wire.js";
 import { mapChatLine, mapPullLine, normalizeBaseUrl, parseTags, thinkValue } from "./parser.js";
 import { joinUrl } from "../../util/url.js";
 
@@ -19,9 +20,6 @@ export interface OllamaOptions {
 const TESTED = { min: "0.35.0" };
 const PROBE_MS = 2000;
 
-/** A chat message: `content`, base64 `images`, `tool_calls` from the model, and `tool_name` on a tool result. */
-type ChatMessage = Msg;
-
 /** The `options` object of a chat request. Entries the caller passes in `ollama.options` come last and win. */
 function requestOptions(input: RunInput): Record<string, unknown> {
   const { sampling } = input;
@@ -36,7 +34,7 @@ function requestOptions(input: RunInput): Record<string, unknown> {
   };
 }
 
-export function chatBody(input: RunInput, messages: ChatMessage[], keepAlive?: string | number): Record<string, unknown> {
+export function chatBody(input: RunInput, messages: Msg[], keepAlive?: string | number): Record<string, unknown> {
   const options = requestOptions(input);
   const keep = input.ollama?.keepAlive ?? keepAlive;
   return {
@@ -46,7 +44,7 @@ export function chatBody(input: RunInput, messages: ChatMessage[], keepAlive?: s
     stream: true,
     ...(input.responseSchema ? { format: input.responseSchema.schema } : {}),
     // Ollama has no tool choice. `none` is honoured by not sending the tools; `required` and a named tool are refused before this.
-    ...(input.tools?.length && input.toolChoice !== "none" ? { tools: ollamaTools(input.tools) } : {}),
+    ...(input.tools?.length && input.toolChoice !== "none" ? { tools: chatTools(input.tools) } : {}),
     ...(input.selection.effort ? { think: thinkValue(input.selection.effort) } : {}),
     ...(keep !== undefined ? { keep_alive: keep } : {}),
     ...(Object.keys(options).length ? { options } : {}),
@@ -65,10 +63,7 @@ async function errorText(res: Response): Promise<string> {
 /** A local or remote Ollama server, reached over its native HTTP API. Nothing is spawned. */
 export function createOllamaProvider(options: OllamaOptions = {}): Provider {
   const base = () => normalizeBaseUrl(options.baseUrl ?? process.env.OLLAMA_HOST ?? "127.0.0.1:11434");
-  const headers = (json = false): Record<string, string> => ({
-    ...(options.apiKey ? { authorization: `Bearer ${options.apiKey}` } : {}),
-    ...(json ? { "content-type": "application/json" } : {}),
-  });
+  const headers = (json = false): Record<string, string> => (json ? jsonHeaders(options.apiKey) : bearer(options.apiKey));
   const get = (path: string, timeoutMs = PROBE_MS * 5) => fetch(joinUrl(base(), path), { headers: headers(), signal: AbortSignal.timeout(timeoutMs) });
   const notRunning = () => `Ollama is not running at ${base()}. Start it with \`ollama serve\`, or set OLLAMA_HOST.`;
 
@@ -96,7 +91,7 @@ export function createOllamaProvider(options: OllamaOptions = {}): Provider {
   }
 
   /** `calls` collects the tool calls of the turn, for the session history. */
-  async function* chat(input: RunInput, messages: ChatMessage[], calls: ToolCall[]): AsyncGenerator<FunnelEvent> {
+  async function* chat(input: RunInput, messages: Msg[], calls: ToolCall[]): AsyncGenerator<FunnelEvent> {
     const cancelled: FunnelEvent = { type: "done", text: "", finishReason: "cancelled" };
     if (input.toolChoice === "required" || typeof input.toolChoice === "object") {
       return yield { type: "error", message: "Ollama cannot force a tool call. Use toolChoice auto or none.", code: "unsupported" };
@@ -127,7 +122,7 @@ export function createOllamaProvider(options: OllamaOptions = {}): Provider {
       return yield { type: "error", message: finished ? String(err) : `${notRunning()} ${String(err)}`, code: "cli-failed" };
     }
     if (raw) yield { type: "error", message: `Ollama sent a line that is not JSON: ${raw}`, code: "cli-failed" };
-    else yield { type: "error", message: "Ollama closed the stream before the answer finished.", code: "stream-truncated" };
+    else yield truncated("Ollama");
   }
 
   async function* pullModel(name: string, opts: { signal?: AbortSignal } = {}): AsyncGenerator<PullEvent> {
@@ -158,43 +153,21 @@ export function createOllamaProvider(options: OllamaOptions = {}): Provider {
     id: "ollama",
     displayName: "Ollama",
     binary: "http",
-    capabilities: {
-      access: [],
-      effort: true,
-      contextWindow: true,
-      fast: false,
-      resume: true,
-      approvals: false,
-      images: true,
-      messages: true,
-      tools: true,
-      system: "native",
-      schema: "native",
-      sampling: true,
-      manageModels: true,
-    },
+    capabilities: httpCapabilities({ contextWindow: true, manageModels: true }),
     detect,
     authStatus,
-    login() {
-      return {
-        async *[Symbol.asyncIterator]() {
-          yield { type: "error" as const, message: "Ollama needs no sign-in. Start the server with `ollama serve`." };
-        },
-        sendCode() {},
-        cancel() {},
-      };
-    },
-    logout: async () => {
-      throw new FunnelError("Ollama has no sign-in, so there is nothing to sign out of.", "unsupported");
-    },
-    update: async () => ({ changed: false, output: "Update Ollama with its own installer or package manager." }),
+    ...httpAccount({
+      login: "Ollama needs no sign-in. Start the server with `ollama serve`.",
+      logout: "Ollama has no sign-in, so there is nothing to sign out of.",
+      update: "Update Ollama with its own installer or package manager.",
+    }),
     models,
     pullModel,
     deleteModel,
     run(input) {
       const calls: ToolCall[] = [];
       return redactErrors(
-        runWithHistory<ChatMessage>(
+        runWithHistory<Msg>(
           input,
           ollamaMessages,
           (text) => ({ role: "assistant", content: text, ...(calls.length ? { tool_calls: ollamaCalls(calls) } : {}) }),

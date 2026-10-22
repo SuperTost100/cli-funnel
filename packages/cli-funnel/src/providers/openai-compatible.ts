@@ -1,9 +1,10 @@
 import { FunnelError, type AuthStatus, type EffortOption, type Installation, type ModelInfo, type OpenAIApi, type Provider, type ProviderId } from "../types.js";
-import { chatMessages, streamChatCompletions, type Msg, type Turn } from "./api.js";
+import { streamChatCompletions, type Turn } from "./api.js";
 import { redact, redactErrors } from "../util/redact.js";
 import { runWithHistory } from "./history.js";
-import { mergeHeaders } from "./http.js";
+import { bearer, httpAccount, httpCapabilities, mergeHeaders } from "./http.js";
 import { streamResponses } from "./responses.js";
+import { chatMessages, type Msg } from "./wire.js";
 import { joinUrl } from "../util/url.js";
 
 /** One OpenAI-compatible server: LM Studio, llama.cpp server, vLLM, a hosted gateway. */
@@ -59,7 +60,7 @@ export function createOpenAICompatibleProvider(endpoint: OpenAICompatibleEndpoin
   // Gateways sometimes take the key in the query string, so the URL is not safe to show.
   const shown = redact(base, [endpoint.apiKey]);
   const efforts: EffortOption[] = (endpoint.efforts ?? []).map((e) => ({ id: e, label: e.charAt(0).toUpperCase() + e.slice(1) }));
-  const headers = (): Record<string, string> => mergeHeaders(endpoint.apiKey ? { authorization: `Bearer ${endpoint.apiKey}` } : {}, endpoint.headers);
+  const headers = (): Record<string, string> => mergeHeaders(bearer(endpoint.apiKey), endpoint.headers);
   const listing = (timeoutMs = PROBE_MS) => fetch(joinUrl(base, "/models"), { headers: headers(), signal: AbortSignal.timeout(timeoutMs) }).catch(() => undefined);
   const notReachable = () => `${endpoint.name} is not reachable at ${shown}.`;
   const configured = (): ModelInfo[] =>
@@ -94,35 +95,14 @@ export function createOpenAICompatibleProvider(endpoint: OpenAICompatibleEndpoin
     id,
     displayName: endpoint.name,
     binary: "http",
-    capabilities: {
-      access: [],
-      effort: efforts.length > 0,
-      contextWindow: false,
-      fast: false,
-      resume: true,
-      approvals: false,
-      images: true,
-      messages: true,
-      tools: true,
-      system: "native",
-      schema: "native",
-      sampling: true,
-    },
+    capabilities: httpCapabilities({ effort: efforts.length > 0 }),
     detect,
     authStatus,
-    login() {
-      return {
-        async *[Symbol.asyncIterator]() {
-          yield { type: "error" as const, message: `${endpoint.name} uses an API key from createFunnel({ openaiCompatible }), if it needs one.` };
-        },
-        sendCode() {},
-        cancel() {},
-      };
-    },
-    logout: async () => {
-      throw new FunnelError(`Remove the apiKey for ${endpoint.name} from createFunnel({ openaiCompatible }) to sign out.`, "unsupported");
-    },
-    update: async () => ({ changed: false, output: `Update ${endpoint.name} with its own installer.` }),
+    ...httpAccount({
+      login: `${endpoint.name} uses an API key from createFunnel({ openaiCompatible }), if it needs one.`,
+      logout: `Remove the apiKey for ${endpoint.name} from createFunnel({ openaiCompatible }) to sign out.`,
+      update: `Update ${endpoint.name} with its own installer.`,
+    }),
     models,
     run(input) {
       const secrets = [endpoint.apiKey, ...Object.values(endpoint.headers ?? {})];
