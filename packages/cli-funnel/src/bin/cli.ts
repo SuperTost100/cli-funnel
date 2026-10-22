@@ -146,11 +146,12 @@ const sessions = join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "s
 const serveSettings = positionals[0] === "serve" ? resolveServeOrExit() : undefined;
 // Keys and the server token never reach the log.
 const logSecrets = [serveSettings?.token, ...(serveConfig.openaiCompatible ?? []).map((e) => e.apiKey), process.env.ANTHROPIC_API_KEY, process.env.OPENAI_API_KEY, process.env.GEMINI_API_KEY];
+const runLog = serveSettings?.log && jsonlRunLog(serveSettings.log.file, { content: serveSettings.log.content, secrets: logSecrets });
 const funnel = createFunnel({
   openaiCompatible: openaiCompatible(),
   sessions: serveSettings?.sessions,
   history: fileHistory(sessions),
-  onEvent: serveSettings?.log && jsonlRunLog(serveSettings.log.file, { content: serveSettings.log.content, secrets: logSecrets }),
+  onEvent: runLog,
 });
 const [command, providerArg, ...rest] = positionals;
 const out = (s: string) => process.stdout.write(s + "\n");
@@ -376,6 +377,13 @@ async function main() {
       return usage(err instanceof Error ? err.message : String(err));
     }
     const { url } = await serveNode(handler, { port, host });
+    if (runLog) {
+      // The run log writes in the background. Ctrl-C or a service stop waits for the last lines, then exits with the
+      // usual code for that signal. A second signal kills the process at once.
+      for (const [signal, code] of [["SIGINT", 130], ["SIGTERM", 143]] as const) {
+        process.once(signal, () => void runLog.flush().finally(() => process.exit(code)));
+      }
+    }
     out(`cli-funnel listening on ${url}`);
     out(`OpenAI-compatible base URL: ${url}/v1   (model ids look like claude/claude-sonnet-5)`);
     return;

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "tsup";
@@ -189,6 +189,37 @@ describe("cli serve", () => {
       on.stop();
       off.stop();
     }
+  });
+
+  it("writes the run log before it exits on SIGTERM", async () => {
+    const log = join(work, "runs.jsonl");
+    const child = spawn(process.execPath, [cli, "serve", "--port", "0", "--log-jsonl", log], {
+      cwd: work,
+      env: { ...process.env, CLI_FUNNEL_CLAUDE_BIN: claude, XDG_STATE_HOME: join(work, "state"), FAKE: "ok" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const closed = new Promise<number | null>((resolve) => child.on("close", (code) => resolve(code)));
+    try {
+      const url = await new Promise<string>((resolve, reject) => {
+        let text = "";
+        const timer = setTimeout(() => reject(new Error(`no output: ${text}`)), 10_000);
+        child.stdout.on("data", (d) => {
+          text += d;
+          const m = /listening on (http:\/\/\S+)/.exec(text);
+          if (m?.[1]) (clearTimeout(timer), resolve(m[1]));
+        });
+        child.stderr.on("data", (d) => (text += d));
+      });
+      const res = await fetch(`${url}/run`, {
+        method: "POST",
+        body: JSON.stringify({ selection: { provider: "claude", model: MODEL, cwd: work, access: "full" }, prompt: "hi" }),
+      });
+      expect(await res.text()).toContain('"type":"done"');
+    } finally {
+      child.kill("SIGTERM");
+    }
+    expect(await closed).toBe(143);
+    expect(readFileSync(log, "utf8").trim().split("\n")).toHaveLength(1);
   });
 
   it.each(["::1", "[::1]"])("treats %s as local", async (host) => {

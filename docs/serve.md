@@ -136,6 +136,8 @@ With 4 runs going, the next 20 wait. The 25th gets 429 with `retry-after`, and a
 npx cli-funnel serve --log-jsonl ~/.local/state/cli-funnel/runs.jsonl
 ```
 
+Lines are written in the background. When you stop the server with Ctrl-C or `SIGTERM`, it writes the last lines first, then exits.
+
 ```json
 {"time":"2026-10-15T20:10:03.412Z","runId":"run_3_mgq1x8","provider":"claude","model":"claude-sonnet-5","effort":"high","access":"accept-edits","cwd":"/home/you/code","sessionId":"9f3c...","startedAt":"2026-10-15T20:09:58.101Z","durationMs":5311,"finishReason":"stop","usage":{"inputTokens":1210,"outputTokens":284,"totalTokens":1494},"toolCalls":3,"tools":{"Read":2,"Bash":1},"deniedActions":[]}
 ```
