@@ -3,3 +3,5 @@ dist
 *.tsbuildinfo
 .DS_Store
 .env*
+# Made from the root README by scripts/package-readme.mjs when npm packs the package.
+packages/cli-funnel/README.md
