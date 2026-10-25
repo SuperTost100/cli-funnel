@@ -101,7 +101,7 @@ Antigravity keeps its plan as artifacts in the conversation folder: `task.md`, a
 - Access: `full` only. At `accept-edits`, headless agy denies every MCP call (`permission check failed for mcp`, listed in `denied_actions`), and a `PreToolUse` hook that answers `allow` does not change that. Attaching a server there would only fail, so cli-funnel refuses with `invalid-selection`. `none` refuses MCP servers before this point. `autoApprove` has no effect, because agy never asks: it allows the call (`full`) or denies it.
 - The model sees each server as `funnel_<name>`, and agy calls its tools through `call_mcp_tool` with `ServerName` and `ToolName`. The step shows up as a normal tool call.
 - Servers from the user's own `~/.gemini/config/mcp_config.json` stay as they are.
-- The headers sit in a file inside the workspace, so the agent can read them with its file tools. agy also keeps a copy of each server's tool list under `~/.gemini/antigravity-cli/mcp/funnel_<name>/`. Do not put a secret in `headers` that the agent must never see.
+- The server settings sit in a file inside the workspace, so the agent can read them with its file tools: `url` and `headers` of `http` servers, and `command`, `args` and `env` of `stdio` servers. agy also keeps a copy of each server's tool list under `~/.gemini/antigravity-cli/mcp/funnel_<name>/`. Do not put a secret in any of these settings that the agent must never see.
 - Header values are written as given. agy does not expand `${VAR}` in them from the environment.
 - A resumed conversation (`sessionId`) needs `mcpServers` again, because the folder is new each run.
 
