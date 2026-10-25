@@ -74,7 +74,9 @@ function maskError(err: unknown, secrets: string[], depth = 0): unknown {
   if (depth > 3) return err;
   for (const key of Object.getOwnPropertyNames(err)) {
     const value = (err as unknown as Record<string, unknown>)[key];
-    const masked = value instanceof Error ? maskError(value, secrets, depth + 1) : mask(value, secrets);
+    // `AggregateError.errors` holds Errors, whose message and stack are not enumerable, so they go through here too.
+    const one = (v: unknown) => (v instanceof Error ? maskError(v, secrets, depth + 1) : mask(v, secrets));
+    const masked = Array.isArray(value) ? value.map(one) : one(value);
     if (masked !== value) Object.defineProperty(err, key, { value: masked, writable: true, configurable: true, enumerable: Object.prototype.propertyIsEnumerable.call(err, key) });
   }
   return err;

@@ -244,6 +244,25 @@ describe("run secrets", () => {
     expect(text).toContain('{"[redacted]":1,"token":"[redacted]"}');
   });
 
+  it("keeps the Errors inside an AggregateError, masked", async () => {
+    const failing: Provider = {
+      ...base,
+      capabilities: { ...base.capabilities, apiKey: true },
+      async *run(): AsyncGenerator<FunnelEvent> {
+        throw new AggregateError([new TypeError("bad key sk-aggregate-123")], "all failed");
+      },
+    };
+    const f = createFunnel({ providers: { claude: failing } });
+    const err = (await f.run({ selection: { provider: "claude", model: "m", cwd: root, access: "full" }, prompt: "go", apiKey: "sk-aggregate-123" }).then(
+      () => {
+        throw new Error("the run should fail");
+      },
+      (e: unknown) => e,
+    )) as AggregateError;
+    expect(err.errors[0]).toBeInstanceOf(TypeError);
+    expect((err.errors[0] as Error).message).toBe("bad key [redacted]");
+  });
+
   it("refuses the server name __proto__, which would vanish from a plain object", () => {
     const servers = JSON.parse('{"__proto__": {"type": "http", "url": "http://x"}}');
     expect(() => mcpServersFor(input("full", servers), ["http"])).toThrow(/reserved/);
