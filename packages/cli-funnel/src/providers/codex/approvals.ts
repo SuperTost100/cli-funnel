@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { ApprovalDecision, ApprovalReply, ApprovalRequest, Question, QuestionAnswers, QuestionRequest } from "../../types.js";
 import { approvalReply } from "../base.js";
 import type { McpCall } from "./events.js";
@@ -53,8 +54,7 @@ function mcpTool(call: McpCall | undefined): { tool: string; input?: unknown } {
 function elicitedCall(calls: Map<string, McpCall>, server: unknown, params: unknown): McpCall | undefined {
   const onServer = [...calls.values()].filter((c) => c.server === server);
   if (onServer.length <= 1) return onServer[0];
-  const wanted = JSON.stringify(params ?? null);
-  const matches = onServer.filter((c) => JSON.stringify(c.arguments ?? null) === wanted);
+  const matches = onServer.filter((c) => isDeepStrictEqual(c.arguments ?? null, params ?? null));
   return matches.length === 1 ? matches[0] : undefined;
 }
 

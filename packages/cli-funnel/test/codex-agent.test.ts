@@ -165,6 +165,8 @@ describe("codex MCP approvals with calls in flight", () => {
     const ctx = { items: new Map(), mcpCalls: new Map([call("a", "read", { q: 1 }), call("b", "write", { q: 2 })]) };
     expect(toApprovalRequest(elicit({ q: 1 }), ctx)).toMatchObject({ tool: "mcp:srv/read", input: { q: 1 } });
     expect(toApprovalRequest(elicit({ q: 2 }), ctx)).toMatchObject({ tool: "mcp:srv/write", input: { q: 2 } });
+    const keyed = { items: new Map(), mcpCalls: new Map([call("a", "read", { a: 1, b: 2 }), call("b", "write", { q: 2 })]) };
+    expect(toApprovalRequest(elicit({ b: 2, a: 1 }), keyed)).toMatchObject({ tool: "mcp:srv/read" });
   });
 
   it("falls back to the generic mcp tool when no single call matches", () => {
