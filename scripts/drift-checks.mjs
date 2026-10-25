@@ -30,6 +30,10 @@ export const CHECKS = {
   },
   antigravity: {
     bin: "agy",
-    help: [[["--help"], ["--output-format", "--model", "--effort", "--mode", "--conversation", "--dangerously-skip-permissions", "--print", "--input-format", "--json-schema", "path to a schema file", "--add-dir", "--print-timeout", "models"]]],
+    help: [
+      [["--help"], ["--output-format", "--model", "--effort", "--mode", "--conversation", "--dangerously-skip-permissions", "--print", "--input-format", "--json-schema", "path to a schema file", "--add-dir", "--print-timeout", "models", "plugin"]],
+      // MCP servers reach agy as a plugin in a folder added with --add-dir. `plugin validate` is the loader's own check of that layout.
+      [["plugin", "--help"], ["validate"]],
+    ],
   },
 };
