@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -21,7 +21,27 @@ export async function ownedWorkspace(name: string, files: Record<string, string>
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
     const tmp = `${path}.${randomUUID()}.tmp`;
     await writeFile(tmp, content, { mode: 0o600 });
-    await rename(tmp, path);
+    await renameOver(tmp, path);
   }
   return dir;
+}
+
+/**
+ * Renames over `to`. On Windows a rename onto a file that another run is replacing or reading at the same moment
+ * fails with EPERM, EACCES or EBUSY for a few milliseconds. Retry briefly, then drop the temp file.
+ */
+async function renameOver(from: string, to: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (process.platform !== "win32" || !(code === "EPERM" || code === "EACCES" || code === "EBUSY") || attempt >= 10) {
+        await rm(from, { force: true });
+        throw e;
+      }
+      await new Promise((r) => setTimeout(r, 10 * (attempt + 1)));
+    }
+  }
 }

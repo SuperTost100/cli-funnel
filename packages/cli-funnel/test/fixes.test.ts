@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { fakeNodeCli } from "./fake-cli.js";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,7 +12,7 @@ import { createApiProviders } from "../src/providers/api.js";
 import { parseClaudeMessage } from "../src/providers/claude/parser.js";
 import { Translator } from "../src/providers/codex/events.js";
 import { codexProvider } from "../src/providers/codex/index.js";
-import { cliCommand, cmdQuote, firstUrl, shimTarget } from "../src/util/process.js";
+import { cliCommand, cmdQuote, exec, firstUrl, loginShellPath, shimTarget } from "../src/util/process.js";
 import { agentProvider } from "../src/providers/agent/index.js";
 import { buildArgs as agyArgs, stdinPrompt } from "../src/providers/antigravity/index.js";
 import { MAX_SESSIONS } from "../src/providers/history.js";
@@ -151,14 +152,15 @@ describe("agent process", () => {
 
   it("stops the CLI when the caller stops reading", async () => {
     const dir = mkdtempSync(join(tmpdir(), "cf-agent-"));
-    const bin = join(dir, "agent");
     const pidFile = join(dir, "pid");
-    writeFileSync(
-      bin,
+    const bin = fakeNodeCli(
+      join(dir, "agent"),
       // The pid goes first: once the session line is out, the caller may stop the CLI before its next line runs.
-      `#!/bin/sh\n[ "$1" = "--list-models" ] && exit 0\necho $$ > ${pidFile}\necho '{"type":"system","subtype":"init","session_id":"s1"}'\nexec sleep 30\n`,
+      `if (process.argv[2] === "--list-models") process.exit(0);
+require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+console.log('{"type":"system","subtype":"init","session_id":"s1"}');
+setInterval(() => {}, 1000);`,
     );
-    chmodSync(bin, 0o755);
     process.env.CLI_FUNNEL_AGENT_BIN = bin;
     for await (const e of agentProvider.run({ selection: { provider: "agent", model: "m", cwd: dir, access: "full" }, prompt: "x" })) {
       if (e.type === "session") break;
@@ -178,13 +180,17 @@ describe("long prompts", () => {
 
   it("sends the agent prompt on stdin", async () => {
     const dir = mkdtempSync(join(tmpdir(), "cf-agent-"));
-    const bin = join(dir, "agent");
     // Reports the byte count it read from stdin as the answer.
-    writeFileSync(
-      bin,
-      `#!/bin/sh\n[ "$1" = "--list-models" ] && exit 0\nn=$(wc -c)\necho '{"type":"system","subtype":"init","session_id":"s1"}'\necho "{\\"type\\":\\"result\\",\\"subtype\\":\\"success\\",\\"result\\":\\"$n\\",\\"session_id\\":\\"s1\\"}"\n`,
+    const bin = fakeNodeCli(
+      join(dir, "agent"),
+      `if (process.argv[2] === "--list-models") process.exit(0);
+let n = 0;
+process.stdin.on("data", (d) => (n += d.length));
+process.stdin.on("end", () => {
+  console.log('{"type":"system","subtype":"init","session_id":"s1"}');
+  console.log(JSON.stringify({ type: "result", subtype: "success", result: String(n), session_id: "s1" }));
+});`,
     );
-    chmodSync(bin, 0o755);
     process.env.CLI_FUNNEL_AGENT_BIN = bin;
     const input: RunInput = { selection: { provider: "agent", model: "m", cwd: dir, access: "full" }, prompt };
     const r = await collect(agentProvider.run(input), input);
@@ -292,6 +298,35 @@ describe("windows commands", () => {
     expect(wrapped.windowsVerbatimArguments).toBe(true);
     expect(wrapped.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
     expect(wrapped.args[3]).toBe('"C:\\missing^ dir\\tool.bat ^"a^ b^""');
+  });
+
+  // The tests below start real processes, so they only run on a Windows runner.
+  const onWindows = it.runIf(process.platform === "win32");
+
+  onWindows("runs an npm-style .cmd shim with node and passes arguments through", async () => {
+    const shim = fakeNodeCli(join(mkdtempSync(join(tmpdir(), "cf-shim-")), "tool"), "console.log(JSON.stringify(process.argv.slice(2)));");
+    const command = cliCommand(shim, ["a b"]);
+    expect(command.windowsVerbatimArguments).toBeUndefined();
+    expect(command.args[0]).toMatch(/tool\.js$/);
+    const out = await exec(shim, ["a b", 'say "hi"', "x&y", "end\\"]);
+    expect(out.code).toBe(0);
+    expect(JSON.parse(out.stdout)).toEqual(["a b", 'say "hi"', "x&y", "end\\"]);
+  });
+
+  onWindows("runs any other .bat through cmd.exe with every argument quoted", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cf-bat dir-"));
+    writeFileSync(join(dir, "show.js"), "console.log(JSON.stringify(process.argv.slice(2)));");
+    const bat = join(dir, "tool.bat");
+    writeFileSync(bat, '@echo off\r\nnode "%~dp0show.js" %*\r\n');
+    expect(cliCommand(bat, []).file).toMatch(/cmd(\.exe)?$/i);
+    const args = ["a b", 'say "hi"', "x&y", "(p)", "a|b", "end\\"];
+    const out = await exec(bat, args);
+    expect(out.code).toBe(0);
+    expect(JSON.parse(out.stdout)).toEqual(args);
+  });
+
+  onWindows("has no login shell PATH to read", () => {
+    expect(loginShellPath(true)).toEqual([]);
   });
 });
 

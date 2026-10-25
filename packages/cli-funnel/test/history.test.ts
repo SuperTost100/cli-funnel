@@ -26,7 +26,8 @@ describe("fileHistory", () => {
     expect(await fileHistory(dir).get("s1")).toEqual([{ role: "user", content: "hi" }]);
     expect(await fileHistory(dir).get("other")).toBeUndefined();
     const [name] = readdirSync(dir);
-    expect(statSync(join(dir, name!)).mode & 0o777).toBe(0o600);
+    // Windows has no POSIX file modes.
+    if (process.platform !== "win32") expect(statSync(join(dir, name!)).mode & 0o777).toBe(0o600);
   });
 
   it("keeps a session id from naming a path outside the folder", async () => {

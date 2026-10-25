@@ -131,7 +131,7 @@ describe.skipIf(process.platform === "win32")("antigravity long schema", () => {
     // Records the --json-schema value, the file's size and the folder's mode, then answers.
     writeFileSync(
       bin,
-      `#!/bin/sh\nprev=""\nfor a in "$@"; do\n  if [ "$prev" = "--json-schema" ]; then echo "$a" > ${log}; wc -c < "$a" >> ${log}; stat -c %a "$(dirname "$a")" >> ${log}; fi\n  prev="$a"\ndone\necho '{"event":"result","result":{"status":"SUCCESS","response":"ok"}}'\n`,
+      `#!/bin/sh\nprev=""\nfor a in "$@"; do\n  if [ "$prev" = "--json-schema" ]; then echo "$a" > ${log}; wc -c < "$a" >> ${log}; { stat -c %a "$(dirname "$a")" || stat -f %Lp "$(dirname "$a")"; } >> ${log}; fi\n  prev="$a"\ndone\necho '{"event":"result","result":{"status":"SUCCESS","response":"ok"}}'\n`,
     );
     chmodSync(bin, 0o755);
     process.env.CLI_FUNNEL_AGY_BIN = bin;

@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -7,10 +7,11 @@ import { createFunnel, type Funnel } from "../src/funnel.js";
 import { createHandler } from "../src/server/handler.js";
 import { fingerprint, type SessionOptions } from "../src/sessions.js";
 import type { FunnelEvent, RunInput } from "../src/types.js";
+import { fakeNodeCli } from "./fake-cli.js";
 
 // A fake `claude -p --input-format stream-json`: answers each user message with init and result, and keeps reading
 // stdin until it closes. A prompt that starts with "slow" gets no answer. Each start is logged with its pid and args.
-const FAKE_CLAUDE = `#!/usr/bin/env node
+const FAKE_CLAUDE = `
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] === "--version") { console.log("2.1.300 (Claude Code)"); process.exit(0); }
@@ -51,7 +52,7 @@ process.stdin.on("end", () => process.exit(0));
 
 // A fake `codex app-server`: one thread, turns answered at once, except prompts that start with "slow", which wait
 // for turn/steer or turn/interrupt.
-const FAKE_CODEX = `#!/usr/bin/env node
+const FAKE_CODEX = `
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] === "--version") { console.log("codex-cli 0.160.0"); process.exit(0); }
@@ -129,10 +130,7 @@ process.stdin.on("data", (d) => {
 
 function fake(name: string, body: string): string {
   const dir = mkdtempSync(join(tmpdir(), "cf-sessions-"));
-  const file = join(dir, name);
-  writeFileSync(file, body);
-  chmodSync(file, 0o755);
-  return file;
+  return fakeNodeCli(join(dir, name), body);
 }
 
 const alive = (pid: number) => {

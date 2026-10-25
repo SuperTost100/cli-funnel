@@ -1,15 +1,13 @@
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { claudeProvider } from "../src/providers/claude/index.js";
+import { fakeShCli } from "./fake-cli.js";
 
 function script(body: string): string {
   const dir = mkdtempSync(join(tmpdir(), "cf-logout-"));
-  const file = join(dir, "claude");
-  writeFileSync(file, `#!/bin/sh\n${body}\n`);
-  chmodSync(file, 0o755);
-  return file;
+  return fakeShCli(join(dir, "claude"), body);
 }
 
 describe("logout and update report CLI failures", () => {

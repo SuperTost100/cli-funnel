@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFunnel } from "../src/funnel.js";
 import { collect } from "./helpers.js";
@@ -168,7 +169,7 @@ describe("openai-compatible provider", () => {
   it("works through the /v1 endpoint of the cli-funnel server", async () => {
     stubFetch((url) => (url.endsWith("/models") ? Response.json(JSON.parse(fx("models.json"))) : sse(fx("chat.sse"))));
     const funnel = createFunnel({ openaiCompatible: [{ id: "local", name: "Local", baseUrl: "http://box:1/v1" }] });
-    const handler = createHandler(funnel, { openai: { cwd: "/tmp", access: "full" }, fsRoots: ["/tmp"] });
+    const handler = createHandler(funnel, { openai: { cwd: tmpdir(), access: "full" }, fsRoots: [tmpdir()] });
     const res = await handler(
       new Request("http://funnel/v1/chat/completions", {
         method: "POST",

@@ -4,12 +4,23 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: test (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         node: [22, 24, 26]
+        include:
+          - os: macos-latest
+            node: 24
+          - os: windows-latest
+            node: 24
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
