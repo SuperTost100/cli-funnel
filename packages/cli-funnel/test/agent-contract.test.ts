@@ -212,6 +212,29 @@ describe("run secrets", () => {
     expect(JSON.stringify(events)).not.toMatch(/sk-test-key|Bearer-header-secret/);
   });
 
+  it("masks a thrown error, a short key, keys of objects, and a longer secret whole", async () => {
+    const throwing: Provider = {
+      ...base,
+      capabilities: { ...base.capabilities, apiKey: true, mcpServers: ["http"] },
+      async *run() {
+        yield { type: "tool.start", id: "t", name: "x", input: { "abc12": 1, token: "abc12-header-long" } };
+        throw new Error("401 for key abc12");
+      },
+    };
+    const records: FunnelEvent[] = [];
+    const f = createFunnel({ providers: { claude: throwing }, onEvent: (r) => void records.push(r.event) });
+    const req = {
+      selection: { provider: "claude" as const, model: "m", cwd: root, access: "full" as const },
+      prompt: "go",
+      apiKey: "abc12",
+      mcpServers: { a: { type: "http" as const, url: "http://x", headers: { "X-Token": "abc12-header-long" } } },
+    };
+    await expect(f.run(req)).rejects.toThrow("401 for key [redacted]");
+    const text = JSON.stringify(records);
+    expect(text).not.toMatch(/abc12/);
+    expect(text).toContain('{"[redacted]":1,"token":"[redacted]"}');
+  });
+
   it("refuses the server name __proto__, which would vanish from a plain object", () => {
     const servers = JSON.parse('{"__proto__": {"type": "http", "url": "http://x"}}');
     expect(() => mcpServersFor(input("full", servers), ["http"])).toThrow(/reserved/);
