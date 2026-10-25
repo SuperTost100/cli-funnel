@@ -1,4 +1,5 @@
-import { FunnelError, type AuthStatus, type EffortOption, type FunnelEvent, type ModelInfo, type Selection, type Usage } from "../../types.js";
+import { isAbsolute, join } from "node:path";
+import { FunnelError, type AuthStatus, type EffortOption, type FileChange, type FunnelEvent, type ModelInfo, type PlanStep, type Selection, type Usage } from "../../types.js";
 
 export interface ListedModel {
   id: string;
@@ -159,16 +160,23 @@ function toolInput(name: string, args: Record<string, unknown> | undefined): unk
 /** Result keys that mean a permission rule or the user refused the call. Edits refused by a `Read` deny rule use `readPermissionDenied`. */
 const DENIED_KEYS = ["rejected", "permissionDenied", "readPermissionDenied"];
 
+/** The Write rule message. The same result key also carries an operating system refusal, which ends in "Permission denied". */
+const POLICY_BLOCK = /permissions configuration/i;
+
+/** True when a rule, the access level or the user refused the call. A file the operating system would not write is a failure, not a refusal. */
 function isDenied(result: Record<string, unknown> | undefined): boolean {
-  return !!result && DENIED_KEYS.some((k) => k in result);
+  if (!result) return false;
+  if (DENIED_KEYS.some((k) => k in result)) return true;
+  const write = result.writePermissionDenied as Record<string, unknown> | undefined;
+  return typeof write?.error === "string" && POLICY_BLOCK.test(write.error);
 }
 
 function failure(result: Record<string, unknown> | undefined): string | undefined {
   if (!result || "success" in result) return undefined;
-  const e = (result.error ?? result.failure ?? result.rejected ?? result.permissionDenied) as Record<string, unknown> | undefined;
-  const msg = e && (e.errorMessage ?? e.message ?? e.reason ?? e.error);
+  const e = (result.error ?? result.failure ?? result.rejected ?? result.permissionDenied ?? result.writePermissionDenied) as Record<string, unknown> | undefined;
+  const msg = e && (e.errorMessage ?? e.message ?? e.reason ?? e.error ?? e.clientVisibleError);
   if (typeof msg === "string" && msg) return msg;
-  if ("readPermissionDenied" in result) return "Permission denied";
+  if ("readPermissionDenied" in result || "permissionDenied" in result || "writePermissionDenied" in result) return "Permission denied";
   return JSON.stringify(result).slice(0, 300);
 }
 
@@ -187,18 +195,57 @@ function toUsage(u: Record<string, number> | undefined): Usage | undefined {
   return { inputTokens, outputTokens, cachedInputTokens: cached, totalTokens: inputTokens + outputTokens };
 }
 
+const TODO_STATUS: Record<string, PlanStep["status"]> = {
+  TODO_STATUS_PENDING: "pending",
+  TODO_STATUS_IN_PROGRESS: "in_progress",
+  TODO_STATUS_COMPLETED: "done",
+};
+
+/** Todo items as plan steps. A cancelled item is no longer part of the plan, so it is left out. */
+function planSteps(todos: unknown): PlanStep[] | undefined {
+  if (!Array.isArray(todos)) return undefined;
+  const steps: PlanStep[] = [];
+  for (const t of todos as Record<string, unknown>[]) {
+    if (t?.status === "TODO_STATUS_CANCELLED" || typeof t?.content !== "string" || !t.content) continue;
+    steps.push({ text: t.content, status: TODO_STATUS[String(t.status)] ?? "pending" });
+  }
+  return steps;
+}
+
+/** One line per file in the message of a patch-style edit, for example `A /tmp/a.txt`. */
+const PATCH_LINE = /^([AMD]) (\S.*)$/gm;
+const PATCH_KIND = { A: "add", M: "update", D: "delete" } as const;
+
+export interface MapperOptions {
+  /**
+   * Tells whether a path exists. Called when an edit starts, before it runs, for results that do not say whether the
+   * file was new. The mapper itself touches no file.
+   */
+  exists?: (path: string) => boolean;
+}
+
 /** Turns stream-json lines into FunnelEvents. Feed each parsed line to `map`. */
 export class StreamMapper {
   private sawPartial = false;
   private text = "";
   private denied = false;
+  private cwd: string | undefined;
+  /** Whether the file of a running edit existed when it started, by call id. */
+  private existed = new Map<string, boolean>();
+
+  constructor(private readonly options: MapperOptions = {}) {}
 
   map(line: unknown): FunnelEvent[] {
     const m = line as Record<string, any>;
     if (!m || typeof m !== "object" || "__raw" in m) return [];
     switch (m.type) {
-      case "system":
-        return m.subtype === "init" && m.session_id ? [{ type: "session", sessionId: m.session_id }] : [];
+      case "system": {
+        if (m.subtype !== "init" || !m.session_id) return [];
+        if (typeof m.cwd === "string") this.cwd = m.cwd;
+        // `apiKeySource` is "login" for the saved account, and "env" or "flag" when a key was given.
+        const auth = m.apiKeySource === "login" ? "account" : m.apiKeySource === "env" || m.apiKeySource === "flag" ? "api-key" : undefined;
+        return [{ type: "session", sessionId: m.session_id, ...(auth ? { auth } : {}) }];
+      }
       case "thinking":
         return m.subtype === "delta" && m.text ? [{ type: "reasoning.delta", text: m.text }] : [];
       case "assistant": {
@@ -218,15 +265,26 @@ export class StreamMapper {
         const name = toolName(key);
         const id = String(m.call_id ?? call.toolCallId ?? name);
         if (m.subtype === "started") {
+          if (key === "editToolCall" && this.options.exists) {
+            const path = this.abs(call.args?.path);
+            if (path) this.existed.set(id, this.options.exists(path));
+          }
           return [{ type: "tool.start", id, name, input: toolInput(name, call.args) }];
         }
         if (m.subtype === "completed") {
           let error = failure(call.result);
-          if (error && isDenied(call.result)) {
+          const denied = !!error && isDenied(call.result);
+          // A skipped question is the CLI's headless answer, not a permission rule.
+          if (denied && key !== "askQuestionToolCall") {
             this.denied = true;
             error = `denied: ${error}`;
           }
-          return [{ type: "tool.end", id, ...(error ? { error } : { output: output(call.result) }) }];
+          const events: FunnelEvent[] = [{ type: "tool.end", id, ...(error ? { error } : { output: output(call.result) }) }];
+          const status = error ? (denied ? "declined" : "failed") : call.result?.success ? "done" : undefined;
+          if (status) for (const change of this.fileChanges(id, key, call, status)) events.push({ type: "file.change", ...change });
+          const plan = this.plan(key, call);
+          if (plan) events.push(plan);
+          return events;
         }
         return [];
       }
@@ -243,5 +301,50 @@ export class StreamMapper {
       default:
         return [];
     }
+  }
+
+  /** Relative paths are the agent's workspace. Without one the path stays as the CLI wrote it. */
+  private abs(path: unknown): string | undefined {
+    if (typeof path !== "string" || !path) return undefined;
+    return isAbsolute(path) || !this.cwd ? path : join(this.cwd, path);
+  }
+
+  /** The agent's todo list, or the todos of a plan it created. `updateTodos` answers with the whole merged list. */
+  private plan(key: string, call: Record<string, any>): FunnelEvent | undefined {
+    if (key === "updateTodosToolCall") {
+      const steps = planSteps(call.result?.success?.todos);
+      return steps && { type: "plan", steps };
+    }
+    if (key === "createPlanToolCall" && call.result?.success) {
+      const steps = planSteps(call.args?.todos);
+      const overview = call.args?.overview;
+      return steps && { type: "plan", steps, ...(typeof overview === "string" && overview ? { explanation: overview } : {}) };
+    }
+    return undefined;
+  }
+
+  private fileChanges(id: string, key: string, call: Record<string, any>, status: FileChange["status"]): FileChange[] {
+    const success = call.result?.success as Record<string, any> | undefined;
+    if (key === "deleteToolCall") {
+      const path = this.abs(call.args?.path ?? success?.path);
+      return path ? [{ id, path, kind: "delete", status }] : [];
+    }
+    if (key !== "editToolCall") return [];
+    const existed = this.existed.get(id);
+    this.existed.delete(id);
+    // A patch-style edit lists every file it touched, one letter and path per line.
+    const listed = [...String(success?.message ?? "").matchAll(PATCH_LINE)].flatMap(([, letter, path]) => {
+      const abs = this.abs(path);
+      return abs ? [{ id, path: abs, kind: PATCH_KIND[letter as keyof typeof PATCH_KIND], status } satisfies FileChange] : [];
+    });
+    if (listed.length) return listed;
+    const path = this.abs(success?.path ?? call.args?.path);
+    if (!path) return [];
+    // The result says it when the file was new: no `beforeFullFileContent`, and a diff from /dev/null. Otherwise the
+    // check made when the edit started decides.
+    const isNew = success
+      ? !("beforeFullFileContent" in success) && (typeof success.diffString === "string" ? success.diffString.startsWith("--- /dev/null") : existed === false)
+      : existed === false;
+    return [{ id, path, kind: isNew ? "add" : "update", status }];
   }
 }

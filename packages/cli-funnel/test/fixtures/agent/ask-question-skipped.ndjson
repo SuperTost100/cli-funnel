@@ -1,0 +1,92 @@
+{"type":"system","subtype":"init","apiKeySource":"login","cwd":"/home/user/project/q","session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","model":"Composer 2.5","permissionMode":"default"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Use your ask-question tool to ask me which color I prefer, with options red and blue. Then tell me what I answered."}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3"}
+{"type":"thinking","subtype":"delta","text":"I","session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947956711}
+{"type":"thinking","subtype":"delta","text":"'ll ask which color ","session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947956712}
+{"type":"thinking","subtype":"delta","text":"you","session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947956712}
+{"type":"thinking","subtype":"delta","text":" prefer, red or blue","session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947956725}
+{"type":"thinking","subtype":"delta","text":".","session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947956735}
+{"type":"thinking","subtype":"completed","session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947956735}
+{"type":"interaction_query","subtype":"request","query_type":"askQuestionInteractionQuery","query":{"id":0,"askQuestionInteractionQuery":{"args":{"title":"Color preference","questions":[{"id":"color","prompt":"Which color do you prefer?","options":[{"id":"red","label":"Red"},{"id":"blue","label":"Blue"}],"allowMultiple":false}],"runAsync":false,"asyncOriginalToolCallId":""},"toolCallId":"tool_64dc5b26-61d2-4732-abd6-f9fec3c6007"}},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947956987}
+{"type":"interaction_query","subtype":"response","query_type":"askQuestionInteractionQuery","response":{"id":0,"askQuestionInteractionResponse":{"result":{"rejected":{"reason":"Questions skipped by the user, continue with the information you already have"}}}},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947956988}
+{"type":"tool_call","subtype":"started","call_id":"tool_64dc5b26-61d2-4732-abd6-f9fec3c6007","tool_call":{"askQuestionToolCall":{"args":{"title":"Color preference","questions":[{"id":"color","prompt":"Which color do you prefer?","options":[{"id":"red","label":"Red"},{"id":"blue","label":"Blue"}],"allowMultiple":false}],"runAsync":false,"asyncOriginalToolCallId":""}},"hookAdditionalContexts":[],"toolCallId":"tool_64dc5b26-61d2-4732-abd6-f9fec3c6007","startedAtMs":"1792947956972"},"model_call_id":"41876a37-826d-430a-a26f-6816d9db03cd-0-cdp4","session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947957014}
+{"type":"tool_call","subtype":"completed","call_id":"tool_64dc5b26-61d2-4732-abd6-f9fec3c6007","tool_call":{"askQuestionToolCall":{"args":{"title":"Color preference","questions":[{"id":"color","prompt":"Which color do you prefer?","options":[{"id":"red","label":"Red"},{"id":"blue","label":"Blue"}],"allowMultiple":false}],"runAsync":false,"asyncOriginalToolCallId":""},"result":{"rejected":{"reason":"Questions skipped by the user, continue with the information you already have"}}},"hookAdditionalContexts":[],"toolCallId":"tool_64dc5b26-61d2-4732-abd6-f9fec3c6007","startedAtMs":"1792947956972","completedAtMs":"1792947957001"},"model_call_id":"41876a37-826d-430a-a26f-6816d9db03cd-0-cdp4","session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947957015}
+{"type":"thinking","subtype":"delta","text":"The","session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947957999}
+{"type":"thinking","subtype":"delta","text":" user skipped the question","session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947957999}
+{"type":"thinking","subtype":"delta","text":". No preference was ","session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947957999}
+{"type":"thinking","subtype":"delta","text":"recorded","session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947957999}
+{"type":"thinking","subtype":"delta","text":".","session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947957999}
+{"type":"thinking","subtype":"completed","session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947957999}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"You"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947957999}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" were"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958004}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" shown"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958007}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" a"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958020}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" preference"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958036}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" question"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958036}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" titled"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958036}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" **"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958050}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"“"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958050}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Color"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958050}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" preference"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958064}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"”"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958064}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"**:"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958064}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" “"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958077}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Which"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958093}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" color"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958093}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" do"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958093}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" you"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958093}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" prefer"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958108}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"?”"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958108}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" with"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958108}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" **"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958108}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Red"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958122}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"**"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958122}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" and"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958122}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" **"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958122}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Blue"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958135}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"**.\n\n"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958135}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"You"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958136}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" **"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958149}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"skipped"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958164}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"**"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958165}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" that"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958165}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" prompt"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958165}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":","}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958178}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" so"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958178}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" there"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958178}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"’s"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958178}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" no"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958193}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" recorded"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958193}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" answer"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958193}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"—I"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958194}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" can"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958205}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"’t"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958222}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" tell"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958222}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" you"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958222}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" whether"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958222}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" you"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958240}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" chose"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958240}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" red"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958264}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" or"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958264}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" blue"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958264}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":".\n\n"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958264}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"If"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958269}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" you"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958269}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" want"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958269}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" to"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958269}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" answer"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958295}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" now"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958295}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":","}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958307}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" say"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958307}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" red"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958307}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" or"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958320}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" blue"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958320}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" in"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958321}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" chat"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958321}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" and"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958336}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" I"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958336}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"’ll"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958336}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" use"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958336}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" that"}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958351}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"."}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","timestamp_ms":1792947958351}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"You were shown a preference question titled **“Color preference”**: “Which color do you prefer?” with **Red** and **Blue**.\n\nYou **skipped** that prompt, so there’s no recorded answer—I can’t tell you whether you chose red or blue.\n\nIf you want to answer now, say red or blue in chat and I’ll use that."}]},"session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3"}
+{"type":"result","subtype":"success","duration_ms":4363,"duration_api_ms":4363,"is_error":false,"result":"You were shown a preference question titled **“Color preference”**: “Which color do you prefer?” with **Red** and **Blue**.\n\nYou **skipped** that prompt, so there’s no recorded answer—I can’t tell you whether you chose red or blue.\n\nIf you want to answer now, say red or blue in chat and I’ll use that.","session_id":"547234bb-e304-4117-9bc3-b2cfc199a8c3","request_id":"41876a37-826d-430a-a26f-6816d9db03cd","usage":{"inputTokens":8751,"outputTokens":258,"cacheReadTokens":16655,"cacheWriteTokens":0}}

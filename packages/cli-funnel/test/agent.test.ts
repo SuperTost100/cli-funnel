@@ -33,7 +33,7 @@ const sel = (o: Partial<RunInput["selection"]> = {}): RunInput["selection"] => (
 describe("stream mapping", () => {
   it("maps a plain text run without duplicating the aggregated message", () => {
     const events = replay("text.ndjson");
-    expect(events[0]).toEqual({ type: "session", sessionId: "sess-0001" });
+    expect(events[0]).toEqual({ type: "session", sessionId: "sess-0001", auth: "account" });
     const deltas = events.filter((e) => e.type === "text.delta").map((e) => (e as { text: string }).text);
     expect(deltas.join("")).toBe("Hi! 👋");
     expect(events.at(-2)).toMatchObject({ type: "usage", usage: { inputTokens: 14170, outputTokens: 8, totalTokens: 14178 } });

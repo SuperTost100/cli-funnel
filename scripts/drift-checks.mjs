@@ -20,7 +20,7 @@ export const CHECKS = {
   agent: {
     bin: "agent",
     help: [
-      [["--help"], ["--output-format", "--stream-partial-output", "--model", "--list-models", "--force", "--auto-review", "--mode", "--workspace", "--trust", "--resume", "--add-dir", "--sandbox", '"plan"']],
+      [["--help"], ["--output-format", "--stream-partial-output", "--model", "--list-models", "--force", "--auto-review", "--mode", "--workspace", "--trust", "--resume", "--add-dir", "--plugin-dir", "--sandbox", '"plan"']],
       [["status", "--help"], ["--format"]],
       [["about", "--help"], ["--format"]],
     ],
