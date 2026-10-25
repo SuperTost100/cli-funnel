@@ -211,12 +211,13 @@ describe.skipIf(process.platform === "win32")("auth status", () => {
 });
 
 describe.skipIf(process.env.CLI_FUNNEL_LIVE !== "1")("live", () => {
-  it("runs a tiny prompt on the cheapest model", async () => {
+  // composer-2.5 is Cursor's own model, which subscriptions include. GPT models can fall outside the weekly usage.
+  it("runs a tiny prompt on a cheap model", async () => {
     const { mkdtempSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
     const cwd = mkdtempSync(join(tmpdir(), "cf-agent-live-"));
-    const selection = sel({ model: "gpt-5.4-nano", effort: "low", cwd });
+    const selection = sel({ model: "composer-2.5", cwd });
     const first = await collect(agentProvider.run({ selection, prompt: "say hi" }), { selection, prompt: "say hi" });
     expect(first.text.length).toBeGreaterThan(0);
     expect(first.sessionId).toBeTruthy();
@@ -227,7 +228,7 @@ describe.skipIf(process.env.CLI_FUNNEL_LIVE !== "1")("live", () => {
 
   it("none answers and blocks a shell write", async () => {
     const target = join(mkdtempSync(join(tmpdir(), "cf-agent-none-")), "out.txt");
-    const selection = sel({ model: "gpt-5.4-nano", effort: "low", cwd: tmpdir(), access: "none" });
+    const selection = sel({ model: "composer-2.5", cwd: tmpdir(), access: "none" });
     const prompt = `Run the shell command "touch ${target}", then reply "done".`;
     const res = await collect(agentProvider.run({ selection, prompt }), { selection, prompt });
     expect(existsSync(target)).toBe(false);

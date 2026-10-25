@@ -10,7 +10,11 @@ const script = fileURLToPath(new URL("../../../scripts/package-readme.mjs", impo
 function convert(markdown: string, env: Record<string, string> = {}, ref?: string): string {
   const dir = mkdtempSync(join(tmpdir(), "cf-readme-"));
   writeFileSync(join(dir, "in.md"), markdown);
-  execFileSync(process.execPath, [script, join(dir, "in.md"), join(dir, "out.md"), ...(ref ? [ref] : [])], { env: { ...process.env, ...env } });
+  // Windows reads environment names in any case, so the value npm set for this package could win over the override.
+  // Drop every name the override sets, in any case, before adding it.
+  const names = new Set(Object.keys(env).map((k) => k.toLowerCase()));
+  const base = Object.fromEntries(Object.entries(process.env).filter(([k]) => !names.has(k.toLowerCase())));
+  execFileSync(process.execPath, [script, join(dir, "in.md"), join(dir, "out.md"), ...(ref ? [ref] : [])], { env: { ...base, ...env } });
   return readFileSync(join(dir, "out.md"), "utf8");
 }
 

@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { collect } from "./helpers.js";
 import { antigravityProvider, buildArgs, NONE_MATCHER, noneHooks, noneWorkspace } from "../src/providers/antigravity/index.js";
 import { createMapper, parseModels } from "../src/providers/antigravity/parser.js";
@@ -14,6 +14,9 @@ vi.hoisted(() => {
   const { mkdtempSync } = process.getBuiltinModule("node:fs");
   const { tmpdir } = process.getBuiltinModule("node:os");
   const home = mkdtempSync(`${tmpdir()}/cf-agy-home-`);
+  // The live tests need the real home: agy reads its sign-in from it when the keyring is unavailable.
+  process.env.CF_TEST_REAL_HOME = process.env.HOME ?? "";
+  process.env.CF_TEST_REAL_USERPROFILE = process.env.USERPROFILE ?? "";
   process.env.HOME = home;
   process.env.USERPROFILE = home;
 });
@@ -209,6 +212,17 @@ describe.skipIf(process.platform === "win32")("antigravity sign-in", () => {
 });
 
 describe.skipIf(process.env.CLI_FUNNEL_LIVE !== "1")("antigravity live", () => {
+  let fake: { home?: string; profile?: string } = {};
+  beforeAll(() => {
+    fake = { home: process.env.HOME, profile: process.env.USERPROFILE };
+    process.env.HOME = process.env.CF_TEST_REAL_HOME;
+    process.env.USERPROFILE = process.env.CF_TEST_REAL_USERPROFILE;
+  });
+  afterAll(() => {
+    process.env.HOME = fake.home;
+    process.env.USERPROFILE = fake.profile;
+  });
+
   it("answers a tiny prompt", async () => {
     const r = await collect(
       antigravityProvider.run({ ...input({ cwd: "/tmp", model: "gemini-3.8-flash", effort: "low" }), prompt: "Reply with the word OK" }),
