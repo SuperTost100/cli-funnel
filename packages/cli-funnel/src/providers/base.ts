@@ -3,7 +3,7 @@ import { Channel } from "../util/channel.js";
 import { compareVersions, exec, firstUrl, parseVersion, resolveBinary, start, terminate, type ExecResult, type Streamed } from "../util/process.js";
 import {
   FunnelError,
-  type ApprovalDecision,
+  type ApprovalReply,
   type ApprovalRequest,
   type AuthStatus,
   type FinishReason,
@@ -11,6 +11,8 @@ import {
   type Installation,
   type LoginEvent,
   type LoginSession,
+  type QuestionAnswers,
+  type QuestionRequest,
   type RunResult,
   type RunInput,
   type UpdateResult,
@@ -132,14 +134,49 @@ export function spawnLogin(
   };
 }
 
-/** Asks the caller's `onApproval`. No handler, or one that throws or rejects, means "deny". */
-export async function askApproval(input: RunInput, request: ApprovalRequest): Promise<ApprovalDecision> {
-  if (!input.onApproval) return "deny";
+/**
+ * A decision in its object form. Anything that is not "allow", "deny" or an object with `decision: "allow"` is a deny,
+ * so a typo never allows a tool. A message that is not a non-empty string is dropped.
+ */
+export function approvalReply(decision: unknown): ApprovalReply {
+  if (decision === "allow") return { decision: "allow" };
+  if (typeof decision !== "object" || decision === null) return { decision: "deny" };
+  const d = decision as Record<string, unknown>;
+  const reply: ApprovalReply = { decision: d.decision === "allow" ? "allow" : "deny" };
+  if (typeof d.message === "string" && d.message) reply.message = d.message;
+  if (reply.decision === "allow" && d.updatedInput !== undefined) reply.updatedInput = d.updatedInput;
+  return reply;
+}
+
+/** Asks the caller's `onApproval` and returns the object form. No handler, or one that throws or rejects, means deny. */
+export async function askApproval(input: RunInput, request: ApprovalRequest): Promise<ApprovalReply> {
+  if (!input.onApproval) return { decision: "deny" };
   try {
-    return await input.onApproval(request);
+    return approvalReply(await input.onApproval(request));
   } catch {
-    return "deny";
+    return { decision: "deny" };
   }
+}
+
+/**
+ * Asks the caller's `onQuestion`. No handler, one that throws or rejects, or anything that is not an object of string
+ * lists means null: the user did not answer. Answers to question ids the request did not ask are dropped.
+ */
+export async function askQuestion(input: RunInput, request: QuestionRequest): Promise<QuestionAnswers | null> {
+  if (!input.onQuestion) return null;
+  let raw: unknown;
+  try {
+    raw = await input.onQuestion(request);
+  } catch {
+    return null;
+  }
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const answers: QuestionAnswers = {};
+  for (const q of request.questions) {
+    const a = (raw as Record<string, unknown>)[q.id];
+    if (Array.isArray(a) && a.every((s) => typeof s === "string")) answers[q.id] = a;
+  }
+  return answers;
 }
 
 /** Runs the CLI's own updater and reports the version before and after. */
@@ -210,7 +247,16 @@ export function createRunFolder(input: RunInput): RunFolder {
         case "session":
           result.sessionId = e.sessionId;
           if (e.model) result.model = e.model;
+          if (e.auth) result.auth = e.auth;
           break;
+        case "plan":
+          result.plan = e.steps;
+          break;
+        case "file.change": {
+          const { type: _, ...change } = e;
+          (result.fileChanges ??= []).push(change);
+          break;
+        }
         case "text.delta":
           result.text += e.text;
           break;

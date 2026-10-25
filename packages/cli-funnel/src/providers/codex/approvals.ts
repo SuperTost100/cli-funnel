@@ -1,4 +1,5 @@
 import type { ApprovalDecision, ApprovalRequest } from "../../types.js";
+import { approvalReply } from "../base.js";
 
 export interface ServerRequest {
   id: string | number;
@@ -34,7 +35,7 @@ export function toApprovalRequest(req: ServerRequest, items: Map<string, unknown
 }
 
 export function toReply(req: ServerRequest, decision: ApprovalDecision): Reply {
-  const allow = decision === "allow";
+  const allow = approvalReply(decision).decision === "allow";
   switch (req.method) {
     case "item/commandExecution/requestApproval":
     case "item/fileChange/requestApproval":

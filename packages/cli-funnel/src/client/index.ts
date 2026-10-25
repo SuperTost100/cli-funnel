@@ -1,5 +1,6 @@
 import type {
   ApprovalDecision,
+  QuestionAnswers,
   AuthStatus,
   FunnelEvent,
   LoginEvent,
@@ -98,12 +99,15 @@ export function createClient(options: ClientOptions) {
 
     /** Streams run events. The first event is `{ type: "run", runId }`, needed to answer approvals. */
     run: (
-      input: Pick<RunRequest, "prompt" | "messages" | "tools" | "toolChoice" | "sessionId" | "system" | "attachments" | "responseSchema" | "maxOutputTokens" | "providerOptions"> & { selection: Selection },
+      input: Pick<RunRequest, "prompt" | "messages" | "tools" | "toolChoice" | "sessionId" | "system" | "attachments" | "responseSchema" | "maxOutputTokens" | "providerOptions" | "mcpServers" | "apiKey"> & { selection: Selection },
       signal?: AbortSignal,
     ) =>
       events<RunEvent>("/run", input, signal),
+    /** Answers an approval. Pass an object to add a message for the agent or to change the tool input. */
     approve: (runId: string, approvalId: string, decision: ApprovalDecision) =>
-      post(`/approvals/${runId}/${approvalId}`, { decision }),
+      post(`/approvals/${runId}/${approvalId}`, typeof decision === "string" ? { decision } : decision),
+    /** Answers a `question.request`, with the answers keyed by question id. `null` declines. */
+    answer: (runId: string, questionId: string, answers: QuestionAnswers | null) => post(`/questions/${runId}/${questionId}`, { answers }),
     /** Stops a run on the server. The run's stream ends with `done` and `finishReason: "cancelled"`. */
     cancelRun: (runId: string) => post(`/runs/${encodeURIComponent(runId)}/cancel`),
 

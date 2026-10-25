@@ -1,6 +1,6 @@
 // Value checks for `providerOptions`. Each provider maps the checked values to its own flags.
 import { isAbsolute } from "node:path";
-import { FunnelError, type AccessLevel, type ProviderOptions, type RunInput } from "../types.js";
+import { FunnelError, type AccessLevel, type McpServer, type ProviderOptions, type RunInput } from "../types.js";
 import { isObject } from "../util/is-object.js";
 
 /** `--name=value` in one argument, so a value that starts with a dash is never read as a flag. */
@@ -70,6 +70,55 @@ export function object(value: unknown, name: string): Record<string, unknown> | 
   if (value === undefined) return undefined;
   if (!isObject(value)) bad(`${name} must be an object.`);
   return value;
+}
+
+const MCP_NAME = /^[A-Za-z0-9_-]{1,64}$/;
+const MCP_KEYS: Record<McpServer["type"], readonly string[]> = {
+  http: ["type", "url", "headers", "toolTimeoutSec", "autoApprove"],
+  stdio: ["type", "command", "args", "env", "toolTimeoutSec"],
+};
+
+function stringRecord(value: unknown, name: string): Record<string, string> | undefined {
+  const o = object(value, name);
+  if (o && !Object.values(o).every((v) => typeof v === "string")) bad(`${name} must map names to strings.`);
+  return o as Record<string, string> | undefined;
+}
+
+/**
+ * Checks `RunInput.mcpServers` and returns the servers as `[name, server]` pairs, empty when there are none. `kinds`
+ * are the types the provider can attach. HTTP servers start no process, so every level but `none` takes them. A stdio
+ * server runs a command before any permission check, so only `full` takes it.
+ */
+export function mcpServersFor(input: RunInput, kinds: readonly McpServer["type"][], provider: string = input.selection.provider): [string, McpServer][] {
+  const servers = object(input.mcpServers, "mcpServers");
+  if (!servers || !Object.keys(servers).length) return [];
+  const access = input.selection.access;
+  return Object.entries(servers).map(([name, raw]) => {
+    const where = `mcpServers.${name}`;
+    if (!MCP_NAME.test(name)) bad(`MCP server name "${name}" must be 1 to 64 letters, digits, _ or -.`);
+    const def = object(raw, where)!;
+    const type = oneOf(def.type, `${where}.type`, ["http", "stdio"] as const);
+    if (!type) bad(`${where}.type must be "http" or "stdio".`);
+    if (!kinds.includes(type)) {
+      throw new FunnelError(`${provider} cannot attach ${type} MCP servers.${kinds.length ? ` It takes: ${kinds.join(", ")}.` : ""}`, "unsupported");
+    }
+    const unknown = Object.keys(def).filter((k) => !MCP_KEYS[type].includes(k));
+    if (unknown.length) bad(`Unknown key ${unknown.join(", ")} in ${where}. Known: ${MCP_KEYS[type].join(", ")}.`);
+    positive(def.toolTimeoutSec, `${where}.toolTimeoutSec`);
+    if (type === "http") {
+      const url = str(def.url, `${where}.url`);
+      if (!url || !/^https?:\/\//i.test(url)) bad(`${where}.url must be an http or https URL.`);
+      stringRecord(def.headers, `${where}.headers`);
+      bool(def.autoApprove, `${where}.autoApprove`);
+      requireAccess(access ?? "none", ["supervised", "accept-edits", "auto", "full"], "An HTTP MCP server");
+    } else {
+      if (!str(def.command, `${where}.command`)) bad(`${where}.command is required.`);
+      if (def.args !== undefined && (!Array.isArray(def.args) || !def.args.every((a) => typeof a === "string"))) bad(`${where}.args must be a list of strings.`);
+      stringRecord(def.env, `${where}.env`);
+      requireAccess(access ?? "none", ["full"], "A stdio MCP server");
+    }
+    return [name, def as unknown as McpServer];
+  });
 }
 
 export { bad as invalidOption };

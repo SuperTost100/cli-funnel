@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ApprovalDecision,
   ApprovalRequest,
+  QuestionAnswers,
+  QuestionRequest,
   AuthStatus,
   FunnelClient,
   LoginEvent,
@@ -280,7 +282,7 @@ export function useAuth(client: FunnelClient, provider: Selection["provider"], o
 }
 
 /**
- * Runs prompts and exposes streaming text, tool calls and pending approvals.
+ * Runs prompts and exposes streaming text, tool calls, pending approvals and pending questions.
  * `keepTranscript` makes `turns` hold every prompt of the conversation. Without it, `turns` holds the latest run only.
  */
 export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } = {}) {
@@ -288,6 +290,7 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
   const [turns, setTurns] = useState<Turn[]>([]);
   const turnCount = useRef(0);
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
+  const [questions, setQuestions] = useState<QuestionRequest[]>([]);
   const [status, setStatus] = useState<"idle" | "running" | "done" | "error">("idle");
   const [error, setError] = useState<string>();
   const [session, setSession] = useState<{ id: string; provider: string; cwd?: string }>();
@@ -303,6 +306,7 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
       const chosen = { ...selection };
       runId.current = undefined;
       setApprovals([]);
+      setQuestions([]);
       setError(undefined);
       setStatus("running");
       const turnId = ++turnCount.current;
@@ -327,6 +331,7 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
           patch((t) => applyEvent(t, e));
           if (e.type === "session") setSession({ id: e.sessionId, provider: chosen.provider, cwd: chosen.cwd });
           else if (e.type === "approval.request") setApprovals((a) => [...a, e.request]);
+          else if (e.type === "question.request") setQuestions((q) => [...q, e.request]);
           else if (e.type === "error") {
             setError(e.message);
             setStatus("error");
@@ -373,6 +378,25 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
     [client],
   );
 
+  /** Answers a question request with answers keyed by question id. `null` declines. */
+  const answer = useCallback(
+    async (id: string, answers: QuestionAnswers | null) => {
+      const ctl = abort.current;
+      if (!runId.current) return;
+      try {
+        await client.answer(runId.current, id, answers);
+      } catch (e) {
+        // Keep the question on screen so the user can try again.
+        if (abort.current === ctl) setError(messageOf(e));
+        return;
+      }
+      if (abort.current !== ctl) return;
+      setQuestions((q) => q.filter((r) => r.id !== id));
+      setError(undefined);
+    },
+    [client],
+  );
+
   // The latest turn already folds every event, so the summary is a read of it, not a second fold.
   const last = turns[turns.length - 1];
   const result = useMemo(
@@ -405,6 +429,7 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
     abort.current?.abort();
     abort.current = undefined;
     setApprovals([]);
+    setQuestions([]);
     setStatus((s) => (s === "running" ? "done" : s));
     setSession(undefined);
     // Without a transcript the last turn stays on screen, but it no longer waits for a slot.
@@ -427,6 +452,8 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
     turns,
     result,
     approvals,
+    /** Questions the agent waits on. Answer each with `answer`. */
+    questions,
     status,
     error,
     /** While the run waits for a server slot: how many runs wait ahead of it. Undefined once it starts. */
@@ -437,6 +464,7 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
     sessionId: session?.id,
     send,
     approve,
+    answer,
     cancel,
     newConversation: reset,
   };
