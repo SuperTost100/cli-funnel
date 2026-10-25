@@ -32,7 +32,7 @@
     "react-dom": "^19.0.0"
   },
   "scripts": {
-    "build": "tsup && cp src/funnel.css dist/funnel.css",
+    "build": "tsup && node -e \"require('node:fs').copyFileSync('src/funnel.css', 'dist/funnel.css')\"",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "prepublishOnly": "npm run build"

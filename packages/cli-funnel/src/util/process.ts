@@ -157,7 +157,7 @@ function signal(child: ChildProcess, sig: NodeJS.Signals): void {
       // Windows has no process groups and child.kill() ends only the child itself. taskkill /T ends its descendants
       // too, so a wrapper (cmd.exe, a shell) cannot leave the real CLI running with stdout open.
       // It runs synchronously, so it also works from the exit hook, and before the wrapper is gone.
-      const killed = spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true, timeout: 5_000 });
+      const killed = spawnSync(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"), ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true, timeout: 5_000 });
       if (killed.status !== 0) child.kill(sig);
     }
   } catch {
