@@ -59,10 +59,13 @@ describe("plan events", () => {
   });
 });
 
+/** File changes with forward slashes. The mapper joins relative paths with the platform's separator. */
+const posix = <T extends { path: string }>(changes: T[]): T[] => changes.map((c) => ({ ...c, path: sh(c.path) }));
+
 describe("file changes", () => {
   it("maps add, update and delete from the results", () => {
     const changes = ofType(replay("todos-and-edits.ndjson"), "file.change");
-    expect(changes.map(({ id: _, type: __, ...c }) => c)).toEqual([
+    expect(posix(changes.map(({ id: _, type: __, ...c }) => c))).toEqual([
       { path: "/home/user/project/plan/a.txt", kind: "add", status: "done" },
       { path: "/home/user/project/plan/old.txt", kind: "update", status: "done" },
       { path: "/home/user/project/plan/a.txt", kind: "delete", status: "done" },
@@ -73,13 +76,13 @@ describe("file changes", () => {
 
   it("reads the files of a patch-style result", () => {
     const changes = ofType(replay("edit-read.ndjson"), "file.change");
-    expect(changes).toMatchObject([{ path: "/tmp/cf-agent-test/a.txt", kind: "add", status: "done" }]);
+    expect(posix(changes)).toMatchObject([{ path: "/tmp/cf-agent-test/a.txt", kind: "add", status: "done" }]);
 
     const mapper = new StreamMapper();
     mapper.map({ type: "system", subtype: "init", session_id: "s", cwd: "/w" });
     const message = "Success. Updated the following files:\nA /w/new.txt\nM src/old.ts\nD /w/gone.txt";
     const out = mapper.map({ type: "tool_call", subtype: "completed", call_id: "p", tool_call: { editToolCall: { args: {}, result: { success: { message } } } } });
-    expect(ofType(out, "file.change").map(({ path, kind }) => ({ path, kind }))).toEqual([
+    expect(posix(ofType(out, "file.change").map(({ path, kind }) => ({ path, kind })))).toEqual([
       { path: "/w/new.txt", kind: "add" },
       { path: "/w/src/old.ts", kind: "update" },
       { path: "/w/gone.txt", kind: "delete" },
@@ -97,15 +100,15 @@ describe("file changes", () => {
       const mapper = new StreamMapper({ exists: (p) => (seen.push(p), exists) });
       return ofType(edit("x.txt").flatMap((l) => mapper.map(l)), "file.change");
     };
-    expect(run(false)).toMatchObject([{ path: "/w/x.txt", kind: "add", status: "done" }]);
-    expect(run(true)).toMatchObject([{ path: "/w/x.txt", kind: "update", status: "done" }]);
-    expect(seen).toEqual(["/w/x.txt", "/w/x.txt"]);
+    expect(posix(run(false))).toMatchObject([{ path: "/w/x.txt", kind: "add", status: "done" }]);
+    expect(posix(run(true))).toMatchObject([{ path: "/w/x.txt", kind: "update", status: "done" }]);
+    expect(seen.map(sh)).toEqual(["/w/x.txt", "/w/x.txt"]);
   });
 
   it("marks changes a permission rule refused as declined, with a relative path made absolute", () => {
     const events = replay("edit-denied.ndjson", { exists: () => false });
     const changes = ofType(events, "file.change");
-    expect(changes.map(({ id: _, type: __, ...c }) => c)).toEqual([
+    expect(posix(changes.map(({ id: _, type: __, ...c }) => c))).toEqual([
       { path: "/home/user/project/deny/notes.txt", kind: "add", status: "declined" },
       { path: "/home/user/project/deny/old.txt", kind: "delete", status: "declined" },
       { path: "/home/user/project/deny/notes.txt", kind: "add", status: "declined" },
@@ -116,7 +119,7 @@ describe("file changes", () => {
   it("marks changes the operating system or the file refused as failed, not declined", () => {
     const events = replay("edit-failed.ndjson", { exists: () => false });
     const changes = ofType(events, "file.change");
-    expect(changes.map(({ id: _, type: __, ...c }) => c)).toEqual([
+    expect(posix(changes.map(({ id: _, type: __, ...c }) => c))).toEqual([
       { path: "/home/user/project/fail/ro/x.txt", kind: "add", status: "failed" },
       { path: "/home/user/project/fail/missing.txt", kind: "delete", status: "failed" },
     ]);
@@ -211,7 +214,7 @@ describe("MCP servers", () => {
       const a = await attachMcp(servers);
       const b = await attachMcp(mcpServersFor(input("auto", { app: { ...http, url: "http://other/mcp" } as McpServer }), ["http"]));
       expect(a.dir.startsWith(process.env.XDG_CACHE_HOME!)).toBe(true);
-      expect(a.dir.endsWith("/funnel")).toBe(true);
+      expect(sh(a.dir).endsWith("/funnel")).toBe(true);
       expect(a.dir).toBe(b.dir);
       expect(readdirSync(a.dir).sort()).toEqual([".cursor-plugin", ".mcp.json"]);
       expect(JSON.parse(readFileSync(join(a.dir, ".cursor-plugin", "plugin.json"), "utf8")).name).toBe("funnel");
