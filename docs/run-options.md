@@ -144,6 +144,60 @@ cli-funnel does not validate the answer against the schema. `schema: "native"` m
 
 Codex, the Anthropic API and the OpenAI API need `additionalProperties: false` on every object in the schema. The OpenAI API also needs every property in `required`, because it enforces the schema with `strict: true`.
 
+## Agent callbacks and events
+
+These fields are for the CLI agents. Each provider lists what it supports in `capabilities`, and its page under [providers](providers/) says how it maps them.
+
+### Approvals with a message
+
+`onApproval` can return an object instead of `"allow"` or `"deny"`:
+
+```ts
+onApproval: (request) => ({ decision: "deny", message: "Ask the user through the app before deleting files." }),
+```
+
+A deny with `message` tells the agent why, so it can change course instead of retrying. On an allow, `updatedInput` replaces the tool input. It needs `capabilities.approvalInput`, and a provider without it denies the call rather than run the original input. Plain strings keep working.
+
+### Questions
+
+When the agent asks the user something on a provider with `capabilities.questions`, the run emits `question.request` and awaits `onQuestion`:
+
+```ts
+onQuestion: async ({ questions }) => {
+  const q = questions[0]!;
+  return { [q.id]: [q.options[0]!.label] };
+},
+```
+
+Each question has an `id`, the `question` text, `options` with a `label` and an optional `description`, and the flags `multiSelect`, `allowOther` (free text is allowed) and `secret`. Answer with the chosen labels or the user's own text, keyed by question id. Return `null` to decline: the agent learns the user did not answer. Without `onQuestion` the agent cannot ask.
+
+### Plans and file changes
+
+Providers with `capabilities.plan` emit `{ type: "plan", steps, explanation? }` with the whole plan each time it changes. Each step has `text` and a `status` of `pending`, `in_progress` or `done`. `result.plan` holds the last one.
+
+Providers with `capabilities.fileChanges` emit one `file.change` event per file once the change is applied or refused: `id` (the tool call, the same id as its `tool.start`), the absolute `path`, `kind` (`add`, `update` or `delete`), `movedTo` for a rename, and `status` (`done`, `failed` or `declined`). `result.fileChanges` lists them in order.
+
+### MCP servers
+
+`mcpServers` attaches MCP servers to the agent, keyed by a name of letters, digits, `_` and `-`. Servers from the user's own CLI config stay as they are.
+
+```ts
+mcpServers: {
+  app: { type: "http", url: "http://127.0.0.1:7777/mcp", headers: { Authorization: `Bearer ${token}` }, toolTimeoutSec: 900, autoApprove: true },
+},
+```
+
+| Type | Fields | Access levels |
+|---|---|---|
+| `http` | `url`, `headers`, `toolTimeoutSec`, `autoApprove` | every level but `none`, because it starts no process |
+| `stdio` | `command`, `args`, `env`, `toolTimeoutSec` | `full` only, because the command runs before any permission check |
+
+`toolTimeoutSec` is how long a tool call may run. Raise it for tools that wait for the user. At `supervised` each call to the server's tools goes to `onApproval`, unless `autoApprove` is set: the server is the caller's, so skipping the approval gives the agent no new access to the machine. A type missing from `capabilities.mcpServers` fails the run with `unsupported`.
+
+### API key
+
+`apiKey` runs the CLI on a vendor API key instead of the saved login, for users without a subscription: an Anthropic key for Claude Code, an OpenAI key for Codex, a Cursor key for Cursor Agent, a Gemini key for Antigravity. The saved login stays as it was, and the key never appears in events, records or logs. It needs `capabilities.apiKey`. The `session` event and `result.auth` say whether a run used the account login (`account`) or a key (`api-key`), when the provider reports it.
+
 ## Provider options
 
 `providerOptions` passes settings that only one CLI has. It is keyed by provider id, and a run reads only the entry for `selection.provider`, so one object can hold settings for several CLIs.

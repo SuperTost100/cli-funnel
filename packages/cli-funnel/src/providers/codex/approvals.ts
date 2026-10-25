@@ -1,4 +1,5 @@
 import type { ApprovalDecision, ApprovalRequest } from "../../types.js";
+import { approvalReply } from "../base.js";
 
 export interface ServerRequest {
   id: string | number;
@@ -34,7 +35,9 @@ export function toApprovalRequest(req: ServerRequest, items: Map<string, unknown
 }
 
 export function toReply(req: ServerRequest, decision: ApprovalDecision): Reply {
-  const allow = decision === "allow";
+  const reply = approvalReply(decision);
+  // Codex cannot run a changed input, so an allow that changes it is a deny rather than a run of the original.
+  const allow = reply.decision === "allow" && reply.updatedInput === undefined;
   switch (req.method) {
     case "item/commandExecution/requestApproval":
     case "item/fileChange/requestApproval":

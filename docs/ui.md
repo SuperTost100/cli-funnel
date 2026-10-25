@@ -36,7 +36,7 @@ The folder picker only lists directories inside `fsRoots`, which defaults to the
 
 Every route that reads a body stops at `maxBodyBytes` (default 10 MB) and answers 413. A body that is not valid JSON, or not a JSON object, gets a 400.
 
-A run that ends or is cancelled while it waits for an approval gets `deny` for it at once. Approvals that nobody answers are denied after `approvalTimeoutSec` (default 300).
+A run that ends or is cancelled while it waits for an approval gets `deny` for it at once, and a question it waits on gets no answer. Approvals and questions that nobody answers time out after `approvalTimeoutSec` (default 300).
 
 ## Client
 
@@ -60,7 +60,8 @@ It mirrors the funnel. `signal` is an optional `AbortSignal`, and every method r
 | `logout(id)` | Signs the provider out. |
 | `update(id)` | Updates the CLI and returns what changed. |
 | `run(input, signal?)` | Streams run events. The first is `{ type: "run", runId }`. |
-| `approve(runId, approvalId, decision)` | Answers an approval request of a run. |
+| `approve(runId, approvalId, decision)` | Answers an approval request of a run. `decision` can be an object with a `message` for the agent. |
+| `answer(runId, questionId, answers)` | Answers a `question.request`, with answers keyed by question id. `null` declines. |
 | `cancelRun(runId)` | Stops a run on the server. Its stream ends with `finishReason: "cancelled"`. |
 | `listDirs(path?, signal?)` | Lists the folders under `path`, inside the server's `fsRoots`. |
 | `pullModel(id, name, signal?)` | Streams a model download. Ollama only. |
@@ -135,7 +136,7 @@ const run = useRun(client);
 
 `useRun` keeps the session id between calls, so the next `send` continues the conversation. `newConversation()` ends the run in flight and clears the session. `cancel()` stops the run on the server and closes the stream. When the server limits concurrent runs, `queued` holds the number of runs ahead while this one waits, so you can show "2 ahead of you". Calling `send` during a run cancels that run first. Leaving the page cancels it too.
 
-`run.result` has `text`, `provider`, `model`, `sessionId`, `usage`, `finishReason`, `toolCalls`, `deniedActions`, `structured`, `structuredError` and `limit`. It is the latest run in the shape of `funnel.run()`, without `pendingToolCalls`, because `useRun` cannot pass `tools`. `provider` and `model` are the ones you passed to `send`, even if the picker has changed since. `run.text` is `run.result.text`. If `approve` fails, the prompt stays and `run.error` has the message, so the user can press the button again.
+`run.result` has `text`, `provider`, `model`, `sessionId`, `usage`, `finishReason`, `toolCalls`, `deniedActions`, `structured`, `structuredError` and `limit`. It is the latest run in the shape of `funnel.run()`, without `pendingToolCalls`, because `useRun` cannot pass `tools`. `provider` and `model` are the ones you passed to `send`, even if the picker has changed since. `run.text` is `run.result.text`. If `approve` fails, the prompt stays and `run.error` has the message, so the user can press the button again. `run.questions` holds the questions the agent waits on; answer each with `run.answer(id, answers)`. Each turn in `run.turns` also keeps the latest `plan` and the `fileChanges` of that turn.
 
 When you pass `responseSchema` to `send` and the provider does not report a parsed answer, `structured` is the answer text parsed as JSON, or `structuredError` says why that failed. Validate it against your schema yourself.
 

@@ -1,4 +1,4 @@
-import { ACCESS_LEVELS, FunnelError, type AccessLevel, type ApprovalDecision, type ApprovalRequest, type AuthStatus, type Capabilities, type FunnelEvent, type Provider, type ProviderContext, type RunInput } from "../../types.js";
+import { ACCESS_LEVELS, FunnelError, type AccessLevel, type ApprovalReply, type ApprovalRequest, type AuthStatus, type Capabilities, type FunnelEvent, type Provider, type ProviderContext, type RunInput } from "../../types.js";
 import { askApproval, detectInstallation, exitedEarly, findBinary, runLogout, runUpdate, spawnLogin } from "../base.js";
 import { bool, dirList, flag, invalidOption, object, optionsFor, positive, requireAccess, str, stringList } from "../options.js";
 import { manifestModels } from "../../catalog/manifest.js";
@@ -27,6 +27,7 @@ const capabilities: Capabilities = {
   fast: false,
   resume: true,
   approvals: true,
+  approvalInput: true,
   images: true,
   system: "native",
   schema: "native",
@@ -245,14 +246,17 @@ async function* answerControlRequest(proc: Streamed, msg: Record<string, any>, i
   }
   const request = { id: String(req.tool_use_id ?? msg.request_id), tool: String(req.tool_name), input: req.input, description: req.description };
   yield { type: "approval.request", request };
-  const decision = await awaitApproval(input, request, proc.exited);
-  if (decision === undefined) return;
-  const response = decision === "allow" ? { behavior: "allow", updatedInput: req.input } : { behavior: "deny", message: "Denied by the user." };
+  const reply = await awaitApproval(input, request, proc.exited);
+  if (reply === undefined) return;
+  const response =
+    reply.decision === "allow"
+      ? { behavior: "allow", updatedInput: reply.updatedInput ?? req.input }
+      : { behavior: "deny", message: reply.message ?? "Denied by the user." };
   proc.write(JSON.stringify({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response } }));
 }
 
 /** Waits for the caller's decision, or undefined once the run is aborted or the CLI has exited. */
-async function awaitApproval(input: RunInput, request: ApprovalRequest, exited: Promise<unknown>): Promise<ApprovalDecision | undefined> {
+async function awaitApproval(input: RunInput, request: ApprovalRequest, exited: Promise<unknown>): Promise<ApprovalReply | undefined> {
   const signal = input.signal;
   if (signal?.aborted) return undefined;
   let onAbort!: () => void;

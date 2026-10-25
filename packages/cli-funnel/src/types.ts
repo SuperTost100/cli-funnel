@@ -65,6 +65,18 @@ export interface Capabilities {
   cache?: boolean;
   /** True when `pullModel` and `deleteModel` work. Model servers such as Ollama. */
   manageModels?: boolean;
+  /** The kinds of `RunInput.mcpServers` the provider can attach. Absent or empty means none. */
+  mcpServers?: McpServer["type"][];
+  /** True when the CLI can run on `RunInput.apiKey` instead of the saved login. */
+  apiKey?: boolean;
+  /** True when the provider emits `plan` events. */
+  plan?: boolean;
+  /** True when the provider emits `file.change` events. */
+  fileChanges?: boolean;
+  /** True when the agent can ask the user through `onQuestion`. */
+  questions?: boolean;
+  /** True when an approval reply can change the tool input with `updatedInput`. */
+  approvalInput?: boolean;
 }
 
 /** Progress of `pullModel`. The stream ends after `done` or `error`. */
@@ -183,7 +195,102 @@ export interface ApprovalRequest {
   description?: string;
 }
 
-export type ApprovalDecision = "allow" | "deny";
+/** An approval answer with more detail than "allow" or "deny". */
+export interface ApprovalReply {
+  decision: "allow" | "deny";
+  /**
+   * Why, for the agent. A deny with a message tells the agent why it was refused instead of a generic refusal, so it
+   * can change course rather than retry. Providers that cannot pass it on drop it.
+   */
+  message?: string;
+  /**
+   * Replaces the tool input on an allow, in the same shape as `ApprovalRequest.input`. Needs `capabilities.approvalInput`.
+   * A provider without it denies the call rather than run the original input.
+   */
+  updatedInput?: unknown;
+}
+
+export type ApprovalDecision = "allow" | "deny" | ApprovalReply;
+
+/** One choice of a question. */
+export interface QuestionOption {
+  label: string;
+  description?: string;
+}
+
+/** One question the agent asks the user. */
+export interface Question {
+  /** The key of this question in `QuestionAnswers`. */
+  id: string;
+  /** A short title of a few words. */
+  header?: string;
+  question: string;
+  /** The choices. Empty when the answer is free text only. */
+  options: QuestionOption[];
+  /** More than one option may be chosen. */
+  multiSelect?: boolean;
+  /** The user may type an answer that is not one of the options. */
+  allowOther?: boolean;
+  /** The answer is a secret, such as a password. Do not show it or log it. */
+  secret?: boolean;
+}
+
+/** Questions the agent asks together. A provider yields `question.request`, then awaits `onQuestion`. */
+export interface QuestionRequest {
+  id: string;
+  questions: Question[];
+}
+
+/** Answers keyed by question id. Each answer is the labels of the chosen options, or the user's own text. */
+export type QuestionAnswers = Record<string, string[]>;
+
+/** One step of the agent's plan. */
+export interface PlanStep {
+  text: string;
+  status: "pending" | "in_progress" | "done";
+}
+
+/** A file the agent added, changed or deleted. */
+export interface FileChange {
+  /** The id of the tool call that made the change, the same as its `tool.start`. One call can change several files. */
+  id: string;
+  /** Absolute path. */
+  path: string;
+  /** A rename is an `update` with `movedTo`. */
+  kind: "add" | "update" | "delete";
+  /** Where an update moved the file. Absolute path. */
+  movedTo?: string;
+  /** `declined` means an approval, a permission rule or the access level refused it. */
+  status: "done" | "failed" | "declined";
+}
+
+/**
+ * An MCP server reached over HTTP. It starts no process on the machine, so every access level but `none` accepts it.
+ * The agent calls its tools under the run's access level: at `supervised` each call goes to `onApproval` unless
+ * `autoApprove` is set.
+ */
+export interface McpHttpServer {
+  type: "http";
+  url: string;
+  /** Sent with every request, for example `Authorization`. */
+  headers?: Record<string, string>;
+  /** Seconds a tool call may run before the agent gives up. Raise it for tools that wait for the user. */
+  toolTimeoutSec?: number;
+  /** Calls to this server's tools run without asking `onApproval`. The server is the caller's, so the agent gets no new access to the machine. */
+  autoApprove?: boolean;
+}
+
+/** An MCP server the CLI starts as a command. Starting it runs code before any permission check, so only `full` accepts it. */
+export interface McpStdioServer {
+  type: "stdio";
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  /** Seconds a tool call may run before the agent gives up. */
+  toolTimeoutSec?: number;
+}
+
+export type McpServer = McpHttpServer | McpStdioServer;
 
 /**
  * A rate limit or quota the provider hit or reported. `rate` clears within hours: requests per minute, or the
@@ -202,7 +309,8 @@ export interface Limit {
 export type FunnelEvent =
   /** The run waits for a slot under `maxConcurrentRuns`. `ahead` is the number of runs waiting before it. */
   | { type: "queue.position"; ahead: number }
-  | { type: "session"; sessionId: string; model?: string }
+  /** `auth` says how the CLI signed in for this run, when the provider knows: the saved account login or an API key. */
+  | { type: "session"; sessionId: string; model?: string; auth?: "account" | "api-key" }
   | { type: "text.delta"; text: string }
   | { type: "reasoning.delta"; text: string }
   /** A CLI agent started one of its own tools, such as a shell command or a file edit. */
@@ -214,6 +322,12 @@ export type FunnelEvent =
   | ({ type: "tool_call" } & ToolCall)
   /** A provider yields this, then awaits `onApproval` for the answer. */
   | { type: "approval.request"; request: ApprovalRequest }
+  /** The agent asks the user. A provider yields this, then awaits `onQuestion` for the answers. */
+  | { type: "question.request"; request: QuestionRequest }
+  /** The agent's whole plan, each time it changes. Needs `capabilities.plan`. */
+  | { type: "plan"; steps: PlanStep[]; explanation?: string }
+  /** A file the agent added, changed or deleted, once the change is applied or refused. Needs `capabilities.fileChanges`. */
+  | ({ type: "file.change" } & FileChange)
   | { type: "usage"; usage: Usage }
   /**
    * Text a subagent wrote, when `providerOptions.claude.forwardSubagentText` is on. `parentId` is the id of the tool
@@ -336,6 +450,12 @@ export interface RunResult {
   timeout?: true;
   /** The first limit the provider reported during the run. A run that failed on it throws an error that carries it too. */
   limit?: Limit;
+  /** The last plan the agent reported. Present when there was one. */
+  plan?: PlanStep[];
+  /** Files the agent added, changed or deleted, in order, including refused changes. Present when there are any. */
+  fileChanges?: FileChange[];
+  /** How the CLI signed in, when the provider reported it. */
+  auth?: "account" | "api-key";
 }
 
 /** Sampling controls. Each provider sends the fields its vendor accepts and ignores the rest. */
@@ -401,6 +521,24 @@ export interface RunInput {
   timeoutMs?: number;
   /** Called for each tool call that needs approval. Required when `selection.access` is "supervised". */
   onApproval?: (request: ApprovalRequest) => Promise<ApprovalDecision> | ApprovalDecision;
+  /**
+   * Called when the agent asks the user questions, on providers with `capabilities.questions`. Return the answers, or
+   * null to decline: the agent then learns the user did not answer. Without it the agent cannot ask, and providers
+   * refuse the question tool as they did before.
+   */
+  onQuestion?: (request: QuestionRequest) => Promise<QuestionAnswers | null> | QuestionAnswers | null;
+  /**
+   * MCP servers to attach to the agent, keyed by a name of letters, digits, `_` and `-`. Servers from the user's own
+   * CLI config stay as they are. Needs the server's type in `capabilities.mcpServers`. See `McpHttpServer` and
+   * `McpStdioServer` for the access levels each needs.
+   */
+  mcpServers?: Record<string, McpServer>;
+  /**
+   * A vendor API key the CLI runs on instead of the saved login: an Anthropic key for Claude Code, an OpenAI key for
+   * Codex, a Cursor key for Cursor Agent, a Gemini key for Antigravity. The saved login stays as it was. Needs
+   * `capabilities.apiKey`. It never appears in events, records or logs.
+   */
+  apiKey?: string;
   /** Extra environment for the CLI process. */
   env?: Record<string, string>;
   /** Where providers without server-side sessions keep the conversation. Default: the funnel's `history` option. */

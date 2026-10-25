@@ -28,7 +28,8 @@ const slow: Provider = {
     if (input.selection.access === "supervised") {
       const request = { id: "a1", tool: "Bash", input: { cmd: "ls" } };
       yield { type: "approval.request", request };
-      yield { type: "text.delta", text: await input.onApproval!(request) };
+      const d = await input.onApproval!(request);
+      yield { type: "text.delta", text: typeof d === "string" ? d : d.decision };
     }
     await untilAborted(input.signal!);
     yield { type: "done", text: "", finishReason: "cancelled" };

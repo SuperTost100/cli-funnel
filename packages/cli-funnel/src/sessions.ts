@@ -55,6 +55,9 @@ export function fingerprint(input: RunInput): string {
     input.responseSchema ?? null,
     Object.entries(input.env ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
     Boolean(input.onApproval),
+    Boolean(input.onQuestion),
+    input.mcpServers ?? null,
+    input.apiKey ?? null,
     // Flags such as --add-dir are fixed when the process starts, so other options need another process.
     // `forkSession` is left out: it only decides how the first turn starts, and a fork is never reused (see `forks`).
     withoutFork((input.providerOptions as Record<string, unknown> | undefined)?.[s.provider]),

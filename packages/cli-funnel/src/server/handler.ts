@@ -9,6 +9,7 @@ import {
   type FunnelEvent,
   type LoginSession,
   type ProviderId,
+  type QuestionAnswers,
   type RunRequest,
   type Selection,
 } from "../types.js";
@@ -19,6 +20,8 @@ import { errorBody, fail, statusOfError, tooBusy, type TrackedRun } from "./shar
 import { json, sse, sseHeaders } from "./sse.js";
 import { createCwdGuard, insideRoots, real } from "../util/fs-roots.js";
 import { RunQueue, waitForSlot, type RunLimits } from "../queue.js";
+import { approvalReply } from "../providers/base.js";
+import { isObject } from "../util/is-object.js";
 
 /** `maxConcurrentRuns`, `maxQueuedRuns` and `queueTimeoutMs` limit the runs on `/run`, `/v1/chat/completions` and `/v1/responses`. */
 export interface HandlerOptions extends RunLimits {
@@ -72,8 +75,9 @@ const CORS_ALLOW = {
   "access-control-max-age": "600",
 };
 
-interface PendingApproval {
-  resolve: (d: ApprovalDecision) => void;
+/** An approval or a question a run waits on. `resolve` takes the client's answer. */
+interface PendingReply {
+  resolve: (answer: unknown) => void;
 }
 
 /** The host name of a URL, or undefined when it does not parse. */
@@ -95,11 +99,26 @@ function isIpLiteral(hostname: string): boolean {
   return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname) || hostname.startsWith("[");
 }
 
+/** The body of `POST /approvals/:run/:id`. A plain decision stays a string, so callers that return strings see strings. */
+function approvalAnswer(body: unknown): ApprovalDecision {
+  const reply = approvalReply(body);
+  return reply.message === undefined && reply.updatedInput === undefined ? reply.decision : reply;
+}
+
+/** The body of `POST /questions/:run/:id`: `{ answers }`, where null declines. Undefined when the body is malformed. */
+function questionAnswer(body: unknown): QuestionAnswers | null | undefined {
+  const answers = isObject(body) ? body.answers : undefined;
+  if (answers === null) return null;
+  if (!isObject(answers)) return undefined;
+  return Object.values(answers).every((a) => Array.isArray(a) && a.every((v) => typeof v === "string")) ? (answers as QuestionAnswers) : undefined;
+}
+
 export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
   const base = (options.basePath ?? "").replace(/\/$/, "");
   const roots = (options.fsRoots ?? [homedir()]).map((r) => real(r) ?? resolve(r));
-  const approvals = new Map<string, PendingApproval>();
-  const earlyDecisions = new Map<string, ApprovalDecision>();
+  // Keyed by `<kind>:<runId>:<id>`, kind "approval" or "question".
+  const waiting = new Map<string, PendingReply>();
+  const earlyAnswers = new Map<string, unknown>();
   const logins = new Map<string, LoginSession>();
   // One controller per live run, so POST /runs/:id/cancel can stop it.
   const runs = new Map<string, AbortController>();
@@ -153,7 +172,7 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
   };
 
   async function run(req: Request): Promise<Response> {
-    const body = (await readBody(req)) as Pick<RunRequest, "prompt" | "messages" | "tools" | "toolChoice" | "sessionId" | "system" | "attachments" | "responseSchema" | "maxOutputTokens" | "providerOptions"> & {
+    const body = (await readBody(req)) as Pick<RunRequest, "prompt" | "messages" | "tools" | "toolChoice" | "sessionId" | "system" | "attachments" | "responseSchema" | "maxOutputTokens" | "providerOptions" | "mcpServers" | "apiKey"> & {
       selection: Selection;
     };
     // Providers with no access levels (Ollama, API providers) have no machine to protect, so cwd means nothing to them.
@@ -171,15 +190,37 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
     const tracked = startRun(req.signal);
     const runId = tracked.id;
     const timeoutMs = (options.approvalTimeoutSec ?? 300) * 1000;
-    // Approvals this run is waiting on. An aborted or finished run answers them with deny, so nothing outlives it.
-    const pending = new Set<string>();
-    // Set once the run is over. An approval the provider asks for after that, which can happen when the body is
-    // cancelled between the approval event and the provider's call to onApproval, is denied at once.
+    // Approvals and questions this run is waiting on. An aborted or finished run answers them with their fallback
+    // (deny, or no answer), so nothing outlives it.
+    const pending = new Map<string, unknown>();
+    // Set once the run is over. A request the provider makes after that, which can happen when the body is cancelled
+    // between the event and the provider's call to onApproval or onQuestion, gets its fallback at once.
     let over = false;
     const settleAll = () => {
       over = true;
-      for (const key of [...pending]) approvals.get(key)?.resolve("deny");
+      for (const [key, fallback] of [...pending]) waiting.get(key)?.resolve(fallback);
     };
+    /** Waits for the client's answer to one approval or question, or `fallback` on timeout or when the run ends. */
+    const awaitClient = <T>(kind: "approval" | "question", id: string, fallback: T): Promise<T> =>
+      new Promise<T>((resolveAnswer) => {
+        if (over || tracked.signal.aborted) return resolveAnswer(fallback);
+        const key = `${kind}:${runId}:${id}`;
+        if (earlyAnswers.has(key)) {
+          const early = earlyAnswers.get(key) as T;
+          earlyAnswers.delete(key);
+          return resolveAnswer(early);
+        }
+        const timer = setTimeout(() => finish(fallback), timeoutMs);
+        timer.unref();
+        const finish = (answer: unknown) => {
+          clearTimeout(timer);
+          waiting.delete(key);
+          pending.delete(key);
+          resolveAnswer(answer as T);
+        };
+        pending.set(key, fallback);
+        waiting.set(key, { resolve: finish });
+      });
     // Closing the request and cancelling the run by id both abort this signal.
     tracked.signal.addEventListener("abort", settleAll, { once: true });
     const input: RunRequest = {
@@ -197,26 +238,10 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
       signal: tracked.signal,
       timeoutMs: tracked.timeoutMs,
       providerOptions,
-      onApproval: (request) =>
-        new Promise<ApprovalDecision>((resolveDecision) => {
-          if (over || tracked.signal.aborted) return resolveDecision("deny");
-          const key = `${runId}:${request.id}`;
-          const early = earlyDecisions.get(key);
-          if (early) {
-            earlyDecisions.delete(key);
-            return resolveDecision(early);
-          }
-          const timer = setTimeout(() => finish("deny"), timeoutMs);
-          timer.unref();
-          const finish = (d: ApprovalDecision) => {
-            clearTimeout(timer);
-            approvals.delete(key);
-            pending.delete(key);
-            resolveDecision(d);
-          };
-          pending.add(key);
-          approvals.set(key, { resolve: finish });
-        }),
+      mcpServers: body.mcpServers,
+      apiKey: body.apiKey,
+      onApproval: (request) => awaitClient<ApprovalDecision>("approval", request.id, "deny"),
+      onQuestion: (request) => awaitClient<QuestionAnswers | null>("question", request.id, null),
     };
     const stream = funnel.stream(input);
     const events = (async function* (): AsyncGenerator<FunnelEvent | { type: "run"; runId: string }> {
@@ -363,16 +388,18 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
         return json({ ok: true });
       }
 
-      if (m === "POST" && seg[0] === "approvals" && seg[1] && seg[2]) {
-        const key = `${seg[1]}:${seg[2]}`;
-        const { decision } = (await readBody(req)) as { decision: ApprovalDecision };
-        const answer: ApprovalDecision = decision === "allow" ? "allow" : "deny";
-        const pending = approvals.get(key);
+      if (m === "POST" && (seg[0] === "approvals" || seg[0] === "questions") && seg[1] && seg[2] && !seg[3]) {
+        const body = await readBody(req);
+        const kind = seg[0] === "approvals" ? "approval" : "question";
+        const answer = kind === "approval" ? approvalAnswer(body) : questionAnswer(body);
+        if (answer === undefined) return json({ error: "answers must map question ids to lists of strings, or be null" }, 400);
+        const key = `${kind}:${seg[1]}:${seg[2]}`;
+        const pending = waiting.get(key);
         if (pending) pending.resolve(answer);
         else if (runs.has(seg[1])) {
           // The client can answer before the provider awaits. Keep the answer briefly. An unknown run never asks.
-          earlyDecisions.set(key, answer);
-          setTimeout(() => earlyDecisions.delete(key), 60_000).unref();
+          earlyAnswers.set(key, answer);
+          setTimeout(() => earlyAnswers.delete(key), 60_000).unref();
         }
         return json({ ok: true });
       }

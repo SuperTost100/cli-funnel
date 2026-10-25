@@ -37,7 +37,8 @@ function approving(gate: Promise<void>): Provider {
     ...base,
     async *run(input) {
       await gate;
-      const d = await input.onApproval!({ id: "a1", tool: "Bash", input: {} });
+      const answer = await input.onApproval!({ id: "a1", tool: "Bash", input: {} });
+      const d = typeof answer === "string" ? answer : answer.decision;
       yield { type: "text.delta", text: d };
       yield { type: "done", text: d, finishReason: "stop" };
     },

@@ -4,6 +4,7 @@ import { loadManifest } from "./catalog/manifest.js";
 import { validateProviderOptions, validateSelection } from "./selection.js";
 import { SessionPool, type LiveSessionInfo, type SessionOptions } from "./sessions.js";
 import { createRunFolder } from "./providers/base.js";
+import { mcpServersFor } from "./providers/options.js";
 import { PROVIDERS } from "./providers/index.js";
 import { memoryHistory } from "./providers/history.js";
 import { createApiProviders, type ApiConfig, type ApiKeys } from "./providers/api.js";
@@ -186,6 +187,11 @@ export function createFunnel(options: FunnelOptions = {}) {
     }
     if (input.attachments?.length && !p.capabilities.images) {
       throw new FunnelError(`${p.displayName} cannot take image attachments.`, "unsupported");
+    }
+    mcpServersFor(input, p.capabilities.mcpServers ?? [], p.displayName);
+    if (input.apiKey !== undefined) {
+      if (!p.capabilities.apiKey) throw new FunnelError(`${p.displayName} cannot run on an API key passed with the run.`, "unsupported");
+      if (typeof input.apiKey !== "string" || !input.apiKey.trim()) throw new FunnelError("apiKey must be a non-empty string.", "invalid-selection");
     }
     return p;
   }

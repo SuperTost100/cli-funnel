@@ -1,4 +1,4 @@
-import type { FinishReason, FunnelEvent, Limit, Selection, Usage } from "cli-funnel/client";
+import type { FileChange, FinishReason, FunnelEvent, Limit, PlanStep, Selection, Usage } from "cli-funnel/client";
 
 export interface TurnToolCall {
   id: string;
@@ -28,6 +28,10 @@ export interface Turn {
   /** Names of the tool calls the CLI refused because nobody could approve them. */
   deniedActions: string[];
   usage?: Usage;
+  /** The agent's latest plan, when the provider reports one. */
+  plan?: PlanStep[];
+  /** Files the agent added, changed or deleted in this turn, in order. */
+  fileChanges?: FileChange[];
   finishReason?: FinishReason;
   /** Runs waiting ahead of this one while the server holds it for a slot. Cleared when the run starts. */
   queued?: number;
@@ -63,6 +67,12 @@ export function applyEvent(turn: Turn, e: FunnelEvent, now: number = Date.now())
     }
     case "usage":
       return { ...turn, usage: e.usage };
+    case "plan":
+      return { ...turn, plan: e.steps };
+    case "file.change": {
+      const { type: _, ...change } = e;
+      return { ...turn, fileChanges: [...(turn.fileChanges ?? []), change] };
+    }
     case "limit": {
       if (turn.limit) return turn;
       const { type: _, ...limit } = e;
