@@ -1,6 +1,9 @@
 // What cli-funnel needs from each CLI. For each CLI, a list of [arguments, text that must appear in the output].
 // Every "--flag" string in packages/cli-funnel/src/providers must be listed here. test/drift-checks.test.ts enforces it.
 export const CHECKS = {
+  // Claude Code's help cannot show the stream-json fields the provider also reads: `apiKeySource` in `init`,
+  // `mcp_server` in `can_use_tool`, `tool_use_result`, AskUserQuestion's `answers`, and the per-server MCP `timeout`.
+  // The recorded fixtures in test/fixtures/claude and the live tests cover those.
   claude: {
     bin: "claude",
     help: [

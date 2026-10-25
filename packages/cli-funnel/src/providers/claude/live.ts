@@ -2,6 +2,7 @@ import { FunnelError, type FunnelEvent, type LiveSession, type RunInput } from "
 import { Channel } from "../../util/channel.js";
 import { exitedEarly } from "../base.js";
 import { claudeTurn, forwardsSubagents, launchClaude, userMessage } from "./index.js";
+import { newClaudeTrack } from "./parser.js";
 
 /**
  * Claude Code with `--input-format stream-json` reads user messages from stdin until stdin closes, and answers each
@@ -13,9 +14,11 @@ import { claudeTurn, forwardsSubagents, launchClaude, userMessage } from "./inde
 export async function openClaudeSession(first: RunInput): Promise<LiveSession> {
   // No abort signal here: the process outlives the turn. Each turn handles its own signal. The reply to a schema
   // `initialize` request arrives before any turn reads, so it is dropped with the other lines between turns.
-  const { proc, systemFile } = await launchClaude(first);
-  void proc.exited.then(() => systemFile?.remove());
+  const { proc, removeFiles } = await launchClaude(first);
+  void proc.exited.then(removeFiles);
   const forward = forwardsSubagents(first);
+  // The task list and the edit calls belong to the process, which spans the turns.
+  const track = newClaudeTrack();
   proc.hold(false);
   let sessionId: string | undefined;
   let exited = false;
@@ -59,7 +62,7 @@ export async function openClaudeSession(first: RunInput): Promise<LiveSession> {
     const state = { finished: false };
     try {
       if (!closed) proc.write(userMessage(input));
-      for await (const e of claudeTurn(proc, lines, input, forward, state)) {
+      for await (const e of claudeTurn(proc, lines, input, forward, state, track)) {
         if (e.type === "session") sessionId = e.sessionId;
         yield e;
       }
@@ -69,7 +72,7 @@ export async function openClaudeSession(first: RunInput): Promise<LiveSession> {
       // A turn that did not reach its result leaves the process mid-answer. It cannot take another turn.
       if (!state.finished) stop();
       proc.hold(false);
-      await systemFile?.remove();
+      await removeFiles();
     }
     if (!state.finished) yield await exitedEarly(proc, "Claude Code", () => aborted || closed);
   }

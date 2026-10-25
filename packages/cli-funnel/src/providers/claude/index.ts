@@ -1,12 +1,27 @@
-import { ACCESS_LEVELS, FunnelError, type AccessLevel, type ApprovalReply, type ApprovalRequest, type AuthStatus, type Capabilities, type FunnelEvent, type Provider, type ProviderContext, type RunInput } from "../../types.js";
-import { askApproval, detectInstallation, exitedEarly, findBinary, runLogout, runUpdate, spawnLogin } from "../base.js";
-import { bool, dirList, flag, invalidOption, object, optionsFor, positive, requireAccess, str, stringList } from "../options.js";
+import { existsSync } from "node:fs";
+import {
+  ACCESS_LEVELS,
+  FunnelError,
+  type AccessLevel,
+  type AuthStatus,
+  type Capabilities,
+  type FunnelEvent,
+  type McpServer,
+  type Provider,
+  type ProviderContext,
+  type Question,
+  type QuestionAnswers,
+  type QuestionRequest,
+  type RunInput,
+} from "../../types.js";
+import { askApproval, askQuestion, detectInstallation, exitedEarly, findBinary, runLogout, runUpdate, spawnLogin } from "../base.js";
+import { bool, dirList, flag, invalidOption, mcpServersFor, object, optionsFor, positive, requireAccess, str, stringList } from "../options.js";
 import { manifestModels } from "../../catalog/manifest.js";
 import { needsArgFile, writeArgFile, type ArgFile } from "../../util/argfile.js";
 import { exec, spawnStream, type Streamed } from "../../util/process.js";
 import { openClaudeSession } from "./live.js";
 import { requireMachine } from "../../selection.js";
-import { parseClaudeMessage } from "./parser.js";
+import { editPath, newClaudeTrack, parseClaudeMessage, type ClaudeTrack } from "./parser.js";
 
 const BIN = "claude";
 const TESTED_RANGE = { min: "2.1.0" };
@@ -31,7 +46,14 @@ const capabilities: Capabilities = {
   images: true,
   system: "native",
   schema: "native",
+  mcpServers: ["http", "stdio"],
+  apiKey: true,
+  plan: true,
+  fileChanges: true,
+  questions: true,
 };
+
+const MCP_KINDS: McpServer["type"][] = ["http", "stdio"];
 
 /**
  * `none` removes every built-in tool, skips MCP servers and skips the user, project and local
@@ -45,11 +67,62 @@ function cliModel(selection: RunInput["selection"]): string {
   return selection.contextWindow === 1_000_000 && !selection.model.endsWith("[1m]") ? `${selection.model}[1m]` : selection.model;
 }
 
+/** True when tool prompts go to `onApproval`. `full` never prompts and `none` has no tools. */
+function asksCaller(input: RunInput): boolean {
+  const { access } = input.selection;
+  return access !== "full" && access !== "none" && !!input.onApproval;
+}
+
+/** Names of the caller's HTTP MCP servers whose tool calls run without `onApproval`. */
+function autoApproved(input: RunInput): Set<string> {
+  return new Set(mcpServersFor(input, MCP_KINDS).flatMap(([name, s]) => (s.type === "http" && s.autoApprove ? [name] : [])));
+}
+
+/**
+ * `--permission-prompt-tool stdio` sends tool prompts to the provider as `can_use_tool` requests. Without it the CLI
+ * denies anything that needs a prompt, and it leaves out the AskUserQuestion tool. So it is on for approvals, for
+ * questions, and for auto-approved MCP servers. Prompts the caller would not have been asked about before are denied
+ * by the provider, as the CLI did (see `answerControlRequest`).
+ */
+function usesPromptTool(input: RunInput): boolean {
+  const { access } = input.selection;
+  if (access === "none") return false;
+  if (input.onQuestion) return true;
+  return asksCaller(input) || (access !== "full" && autoApproved(input).size > 0);
+}
+
+/** One server of `mcpServers` in Claude Code's `--mcp-config` shape. `timeout` is the per-server tool call limit in ms. */
+function claudeMcpServer(s: McpServer): Record<string, unknown> {
+  const timeout = s.toolTimeoutSec === undefined ? {} : { timeout: Math.round(s.toolTimeoutSec * 1000) };
+  if (s.type === "http") return { type: "http", url: s.url, ...(s.headers ? { headers: s.headers } : {}), ...timeout };
+  return { type: "stdio", command: s.command, ...(s.args ? { args: s.args } : {}), ...(s.env ? { env: s.env } : {}), ...timeout };
+}
+
+/**
+ * The `--mcp-config` object: `providerOptions.claude.mcpConfig` with `mcpServers` added to its `mcpServers`. Undefined
+ * when there is neither. A name in both is refused, so an auto-approved name always means the caller's own server.
+ */
+function mcpConfig(input: RunInput): Record<string, unknown> | undefined {
+  const own = object(optionsFor(input, "claude", OPTION_KEYS).mcpConfig, "mcpConfig");
+  // A stdio MCP server is a command that starts before any permission check.
+  if (own) requireAccess(requireMachine(input.selection).access, ["full"], "mcpConfig");
+  const servers = mcpServersFor(input, MCP_KINDS);
+  if (!servers.length) return own;
+  const merged: Record<string, unknown> = { ...object(own?.mcpServers, "mcpConfig.mcpServers") };
+  for (const [name, server] of servers) {
+    if (Object.hasOwn(merged, name)) invalidOption(`MCP server "${name}" is in both mcpServers and providerOptions.claude.mcpConfig.`);
+    merged[name] = claudeMcpServer(server);
+  }
+  return { ...own, mcpServers: merged };
+}
+
 /**
  * `systemFile` carries a long system prompt. Without it the prompt goes inline. `schemaOnStdin` leaves out
- * `--json-schema` when the schema goes in the `initialize` request instead (see `schemaInit`).
+ * `--json-schema` when the schema goes in the `initialize` request instead (see `schemaInit`). `mcpFile` holds the MCP
+ * config when `mcpServers` is set, since its headers and env can carry secrets that argv would show to other users.
+ * Without it the config goes inline.
  */
-export function buildArgs(input: RunInput, systemFile?: string, schemaOnStdin = schemaInit(input) !== undefined): string[] {
+export function buildArgs(input: RunInput, systemFile?: string, schemaOnStdin = schemaInit(input) !== undefined, mcpFile?: string): string[] {
   const { selection } = input;
   const args = [
     "-p",
@@ -68,10 +141,9 @@ export function buildArgs(input: RunInput, systemFile?: string, schemaOnStdin = 
     args.push(systemFile ? `${flag}-file` : flag, systemFile ?? input.system);
   }
   if (input.responseSchema && !schemaOnStdin) args.push("--json-schema", JSON.stringify(input.responseSchema.schema));
-  // Without this flag the CLI denies anything that needs a prompt instead of asking.
-  if (selection.access !== "full" && selection.access !== "none" && input.onApproval) args.push("--permission-prompt-tool", "stdio");
+  if (usesPromptTool(input)) args.push("--permission-prompt-tool", "stdio");
   if (input.sessionId) args.push("--resume", input.sessionId);
-  args.push(...optionArgs(input));
+  args.push(...optionArgs(input, mcpFile));
   return args;
 }
 
@@ -108,7 +180,7 @@ function agentDefinition(name: string, value: unknown): Record<string, unknown> 
  * Flags for `providerOptions.claude`. Throws `invalid-selection` when an option would widen `selection.access`.
  * Values use the `--flag=value` form, so a value that starts with a dash is never read as a flag.
  */
-function optionArgs(input: RunInput): string[] {
+function optionArgs(input: RunInput, mcpFile?: string): string[] {
   const o = optionsFor(input, "claude", OPTION_KEYS);
   const { access } = requireMachine(input.selection);
   const args: string[] = [];
@@ -123,12 +195,8 @@ function optionArgs(input: RunInput): string[] {
     requireAccess(access, NOT_NONE, "addDirs");
     for (const d of dirs) args.push(flag("--add-dir", d));
   }
-  const mcp = object(o.mcpConfig, "mcpConfig");
-  if (mcp) {
-    // A stdio MCP server is a command that starts before any permission check.
-    requireAccess(access, ["full"], "mcpConfig");
-    args.push(flag("--mcp-config", JSON.stringify(mcp)));
-  }
+  const mcp = mcpConfig(input);
+  if (mcp) args.push(flag("--mcp-config", mcpFile ?? JSON.stringify(mcp)));
   const agents = object(o.agents, "agents");
   if (agents) {
     requireAccess(access, NOT_NONE, "agents");
@@ -166,49 +234,67 @@ export const userMessage = (input: RunInput): string =>
 
 /**
  * Checks the run and starts Claude Code. A long system prompt would hit the argv size limit, so it goes through a
- * private temp file in `systemFile`; the CLI reads it at startup, and the caller removes it once the first turn ends.
+ * private temp file; so does the MCP config of `mcpServers`, which can carry secrets. The CLI reads both at startup,
+ * and the caller runs `removeFiles` once the first turn ends. `apiKey` goes in the CLI's environment, never in argv.
  * `signal` stops the process. A live session leaves it out: its process outlives the turn.
  */
-export async function launchClaude(input: RunInput, signal?: AbortSignal): Promise<{ proc: Streamed; systemFile?: ArgFile }> {
+export async function launchClaude(input: RunInput, signal?: AbortSignal): Promise<{ proc: Streamed; removeFiles: () => Promise<void> }> {
   const bin = findBinary(BIN);
   if (!bin) throw new FunnelError("Claude Code is not installed.", "not-installed");
   if (input.selection.access === "supervised" && !input.onApproval) {
     throw new FunnelError('Access "supervised" needs an onApproval handler.', "invalid-selection");
   }
-  const systemFile = input.system && needsArgFile(input.system) ? await writeArgFile("system-prompt.txt", input.system) : undefined;
+  const files: ArgFile[] = [];
+  const removeFiles = async () => {
+    await Promise.all(files.map((f) => f.remove()));
+  };
   const init = schemaInit(input);
   let proc: Streamed;
   try {
-    proc = spawnStream(bin, buildArgs(input, systemFile?.path, init !== undefined), { cwd: input.selection.cwd, env: input.env, signal, closeStdin: false });
+    const systemFile = input.system && needsArgFile(input.system) ? await writeArgFile("system-prompt.txt", input.system) : undefined;
+    if (systemFile) files.push(systemFile);
+    const mcp = mcpServersFor(input, MCP_KINDS).length ? await writeArgFile("mcp.json", JSON.stringify(mcpConfig(input))) : undefined;
+    if (mcp) files.push(mcp);
+    const args = buildArgs(input, systemFile?.path, init !== undefined, mcp?.path);
+    // In print mode Claude Code uses ANTHROPIC_API_KEY from its environment over the saved login, with no approval step.
+    const env = input.apiKey ? { ...input.env, ANTHROPIC_API_KEY: input.apiKey } : input.env;
+    proc = spawnStream(bin, args, { cwd: input.selection.cwd, env, signal, closeStdin: false });
   } catch (err) {
-    await systemFile?.remove();
+    await removeFiles();
     throw err;
   }
   if (init) proc.write(init);
-  return { proc, systemFile };
+  return { proc, removeFiles };
 }
 
 /**
  * Reads one turn from `lines`: answers control requests and yields events up to and including `result`.
  * `state.finished` is set before a terminal event is yielded, since a consumer that stops at `done` never comes back.
- * `onResult` runs when `result` arrives, before its events are yielded.
+ * `onResult` runs when `result` arrives, before its events are yielded. `track` lives as long as the process.
  */
 export async function* claudeTurn(
-  proc: Streamed,
+  proc: Pick<Streamed, "write" | "exited">,
   lines: AsyncIterable<unknown>,
   input: RunInput,
   forward: boolean,
   state: { finished: boolean },
+  track: ClaudeTrack,
   onResult?: () => void,
 ): AsyncGenerator<FunnelEvent> {
+  const { cwd } = requireMachine(input.selection);
   for await (const raw of lines) {
     const msg = raw as Record<string, any>;
     if (msg.type === "control_request") {
-      yield* answerControlRequest(proc, msg, input);
+      yield* answerControlRequest(proc, msg, input, track);
       continue;
     }
     if (msg.type === "result") onResult?.();
-    for (const e of parseClaudeMessage(raw, forward)) {
+    for (const e of parseClaudeMessage(raw, forward, track)) {
+      if (e.type === "tool.start") {
+        // The kind of a file change depends on whether the file was there before the tool ran.
+        const path = editPath(e.name, e.input, cwd);
+        if (path) track.edits.set(e.id, { path, existed: existsSync(path) });
+      }
       if (e.type === "done" || e.type === "error") state.finished = true;
       yield e;
     }
@@ -217,46 +303,110 @@ export async function* claudeTurn(
 }
 
 async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
-  const { proc, systemFile } = await launchClaude(input, input.signal);
+  const { proc, removeFiles } = await launchClaude(input, input.signal);
   proc.write(userMessage(input));
   const state = { finished: false };
   try {
     // Claude Code waits on stdin for another turn until it closes, so close it as soon as the result arrives.
-    yield* claudeTurn(proc, proc.lines, input, forwardsSubagents(input), state, () => proc.closeStdin());
+    yield* claudeTurn(proc, proc.lines, input, forwardsSubagents(input), state, newClaudeTrack(), () => proc.closeStdin());
   } finally {
     proc.closeStdin();
     // After a result Claude Code exits on its own once stdin closes. Give it a moment to save the session, then stop it.
     if (state.finished) setTimeout(() => proc.kill(), 2000).unref();
     else proc.kill();
-    await systemFile?.remove();
+    await removeFiles();
   }
   if (!state.finished) yield await exitedEarly(proc, "Claude Code", () => input.signal?.aborted);
 }
 
+type Obj = Record<string, unknown>;
+const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
+
 /**
- * Answers one `control_request` from Claude Code. A tool approval is yielded as `approval.request` and answered with the
- * caller's decision. When the run is cancelled or the CLI exits while waiting, nothing is answered: the caller's loop
- * ends with the process and reports why.
+ * AskUserQuestion's input as a QuestionRequest, or undefined when it has no questions. Question ids are the
+ * question's position. Claude Code always lets the user type an answer of their own, so `allowOther` is always true.
  */
-async function* answerControlRequest(proc: Streamed, msg: Record<string, any>, input: RunInput): AsyncGenerator<FunnelEvent> {
+export function questionRequest(id: string, input: unknown): QuestionRequest | undefined {
+  if (!isObj(input) || !Array.isArray(input.questions) || !input.questions.length) return undefined;
+  const questions = input.questions.map((q, i): Question => {
+    const o = isObj(q) ? q : {};
+    const options = (Array.isArray(o.options) ? o.options : []).flatMap((opt) =>
+      isObj(opt) && typeof opt.label === "string" ? [{ label: opt.label, ...(typeof opt.description === "string" ? { description: opt.description } : {}) }] : [],
+    );
+    return {
+      id: String(i),
+      ...(typeof o.header === "string" ? { header: o.header } : {}),
+      question: typeof o.question === "string" ? o.question : "",
+      options,
+      multiSelect: o.multiSelect === true,
+      allowOther: true,
+    };
+  });
+  return { id, questions };
+}
+
+/**
+ * Answers in the shape AskUserQuestion reads from `updatedInput.answers`: keyed by question text, with several
+ * answers joined by ", ". Questions with no answer are left out.
+ */
+export function questionAnswers(request: QuestionRequest, answers: QuestionAnswers): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const q of request.questions) {
+    const a = answers[q.id];
+    if (a?.length) out[q.question] = a.join(", ");
+  }
+  return out;
+}
+
+/** What the CLI tells the model when it denies a prompt by itself. Used for prompts the caller is not asked about. */
+const notGranted = (tool: string) => `Claude requested permissions to use ${tool}, but you haven't granted it yet.`;
+
+/**
+ * Answers one `control_request` from Claude Code. With `onQuestion`, AskUserQuestion is yielded as `question.request`
+ * and allowed with the answers. Tools of an auto-approved MCP server are allowed. Other tool approvals are yielded as
+ * `approval.request` and answered with the caller's decision, or denied when the caller is not asked at this level.
+ * When the run is cancelled or the CLI exits while waiting, nothing is answered: the caller's loop ends with the
+ * process and reports why.
+ */
+async function* answerControlRequest(proc: Pick<Streamed, "write" | "exited">, msg: Record<string, any>, input: RunInput, track: ClaudeTrack): AsyncGenerator<FunnelEvent> {
   const req = msg.request ?? {};
   if (req.subtype !== "can_use_tool") {
     proc.write(JSON.stringify({ type: "control_response", response: { subtype: "error", request_id: msg.request_id, error: "unsupported request" } }));
     return;
   }
-  const request = { id: String(req.tool_use_id ?? msg.request_id), tool: String(req.tool_name), input: req.input, description: req.description };
+  const id = String(req.tool_use_id ?? msg.request_id);
+  const tool = String(req.tool_name);
+  const reply = (response: Obj) => proc.write(JSON.stringify({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response } }));
+  const deny = (message: string) => {
+    track.declined.add(id);
+    reply({ behavior: "deny", message });
+  };
+
+  const question = tool === "AskUserQuestion" && input.onQuestion ? questionRequest(id, req.input) : undefined;
+  if (question) {
+    yield { type: "question.request", request: question };
+    const answers = await awaitReply(input, askQuestion(input, question), proc.exited);
+    if (answers === undefined) return;
+    if (answers === null) return deny("The user did not answer.");
+    return reply({ behavior: "allow", updatedInput: { ...req.input, answers: questionAnswers(question, answers) } });
+  }
+
+  // `dynamic` servers come from --mcp-config, and a name there is either the caller's or refused (see `mcpConfig`).
+  // The request names the server as configured, so another server whose tool names look the same does not match.
+  const server = isObj(req.mcp_server) ? req.mcp_server : undefined;
+  if (server?.source === "dynamic" && autoApproved(input).has(String(server.name))) return reply({ behavior: "allow", updatedInput: req.input });
+
+  if (!asksCaller(input)) return deny(notGranted(tool));
+  const request = { id, tool, input: req.input, description: req.description };
   yield { type: "approval.request", request };
-  const reply = await awaitApproval(input, request, proc.exited);
-  if (reply === undefined) return;
-  const response =
-    reply.decision === "allow"
-      ? { behavior: "allow", updatedInput: reply.updatedInput ?? req.input }
-      : { behavior: "deny", message: reply.message ?? "Denied by the user." };
-  proc.write(JSON.stringify({ type: "control_response", response: { subtype: "success", request_id: msg.request_id, response } }));
+  const decision = await awaitReply(input, askApproval(input, request), proc.exited);
+  if (decision === undefined) return;
+  if (decision.decision === "allow") reply({ behavior: "allow", updatedInput: decision.updatedInput ?? req.input });
+  else deny(decision.message ?? "Denied by the user.");
 }
 
-/** Waits for the caller's decision, or undefined once the run is aborted or the CLI has exited. */
-async function awaitApproval(input: RunInput, request: ApprovalRequest, exited: Promise<unknown>): Promise<ApprovalReply | undefined> {
+/** Waits for the caller's answer, or undefined once the run is aborted or the CLI has exited. */
+async function awaitReply<T>(input: RunInput, answer: Promise<T>, exited: Promise<unknown>): Promise<T | undefined> {
   const signal = input.signal;
   if (signal?.aborted) return undefined;
   let onAbort!: () => void;
@@ -265,7 +415,7 @@ async function awaitApproval(input: RunInput, request: ApprovalRequest, exited: 
     signal?.addEventListener("abort", onAbort, { once: true });
   });
   try {
-    return await Promise.race([askApproval(input, request), aborted, exited.then(() => undefined)]);
+    return await Promise.race([answer, aborted, exited.then(() => undefined)]);
   } finally {
     signal?.removeEventListener("abort", onAbort);
   }
