@@ -123,6 +123,10 @@ describe("funnel checks", () => {
     await expect(run({ mcpServers: { a: { type: "http", url: "http://x" } } })).rejects.toMatchObject({ code: "unsupported" });
   });
 
+  it("refuses a planTool that is not a boolean", async () => {
+    await expect(run({ planTool: "false" as never })).rejects.toMatchObject({ code: "invalid-selection" });
+  });
+
   it("passes them to a provider that takes them", async () => {
     let seen: RunInput | undefined;
     const able: Provider = {
