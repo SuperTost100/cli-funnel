@@ -1,6 +1,7 @@
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { fakeNodeCli } from "./fake-cli.js";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildArgs, claudeProvider, questionAnswers, questionRequest } from "../src/providers/claude/index.js";
 import { editPath, newClaudeTrack, parseClaudeMessage } from "../src/providers/claude/parser.js";
@@ -160,7 +161,7 @@ const IDS = { add: "toolu_01D3nNFevoQpnXJwAj1zgQ7n", deny: "toolu_01SUdmrTqih7Bu
 
 describe("claude file changes", () => {
   it("resolves the path of edit tools only", () => {
-    expect(editPath("Write", { file_path: "a/b.txt" }, "/p")).toBe("/p/a/b.txt");
+    expect(editPath("Write", { file_path: "a/b.txt" }, "/p")).toBe(resolve("/p", "a/b.txt"));
     expect(editPath("NotebookEdit", { notebook_path: "/n.ipynb" }, "/p")).toBe("/n.ipynb");
     expect(editPath("Read", { file_path: "/p/a.txt" }, "/p")).toBeUndefined();
     expect(editPath("Edit", {}, "/p")).toBeUndefined();
@@ -211,8 +212,7 @@ describe("claude auth", () => {
 
 // A fake `claude` that replays a fixture. It writes the fixture's lines after the first user message, stops after each
 // control_request until a control_response arrives, and logs its start (args, API key, MCP config) and every response.
-const FAKE_CLAUDE = `#!/usr/bin/env node
-const fs = require("node:fs");
+const FAKE_CLAUDE = `const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] === "--version") { console.log("2.1.310 (Claude Code)"); process.exit(0); }
 const log = (o) => fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify(o) + "\\n");
@@ -257,7 +257,9 @@ describe("claude control requests (fake CLI)", () => {
   const replay = (fixture: string | object[]) => {
     const text = typeof fixture === "string" ? fixtureText(fixture) : fixture.map((l) => JSON.stringify(l)).join("\n");
     const file = join(dir, "fixture.ndjson");
-    writeFileSync(file, text.replaceAll("/home/user/project", dir));
+    // Recorded paths become native paths under `dir`, escaped for the JSON strings they sit in.
+    const native = text.replace(/\/home\/user\/project((?:\/[^"/]+)*)/g, (_, rest: string) => JSON.stringify(join(dir, ...rest.split("/").filter(Boolean))).slice(1, -1));
+    writeFileSync(file, native);
     process.env.FAKE_FIXTURE = file;
   };
   const run = async (i: RunInput) => {
@@ -269,10 +271,7 @@ describe("claude control requests (fake CLI)", () => {
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "cf-claude-agent-"));
     logFile = join(dir, "log");
-    const bin = join(dir, "claude");
-    writeFileSync(bin, FAKE_CLAUDE);
-    chmodSync(bin, 0o755);
-    process.env.CLI_FUNNEL_CLAUDE_BIN = bin;
+    process.env.CLI_FUNNEL_CLAUDE_BIN = fakeNodeCli(join(dir, "claude"), FAKE_CLAUDE);
     process.env.FAKE_LOG = logFile;
   });
 
