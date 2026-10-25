@@ -83,6 +83,7 @@ process.stdin.on("data", (d) => {
     fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ pid: process.pid, method: m.method, params: p }) + "\\n");
     switch (m.method) {
       case "initialize": send({ id: m.id, result: {} }); break;
+      case "account/read": send({ id: m.id, result: { account: { type: "chatgpt" } } }); break;
       case "thread/start": thread = "thr-" + process.pid; send({ id: m.id, result: { thread: { id: thread }, model: p.model } }); break;
       case "thread/resume":
         if (p.threadId === "missing") { send({ id: m.id, error: { code: -32600, message: "no rollout found" } }); break; }

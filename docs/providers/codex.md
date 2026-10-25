@@ -1,6 +1,6 @@
 # Codex provider
 
-Runs the real `codex` binary (tested with 0.157.0, minimum 0.150.0) on your ChatGPT subscription or API key login.
+Runs the real `codex` binary (tested with 0.164.0, minimum 0.150.0) on your ChatGPT subscription, your API key login, or an OpenAI key passed with the run.
 
 ## How runs work
 
@@ -9,13 +9,17 @@ Runs use `codex app-server`, the JSON-RPC protocol over stdio, not `codex exec -
 Protocol flow:
 
 1. `initialize`, then the `initialized` notification.
-2. `thread/start` (or `thread/resume` when `sessionId` is set) with model, cwd, approval policy, sandbox, approvals reviewer and, for fast mode, `serviceTier: "priority"`.
-3. `turn/start` with the prompt and `effort`.
-4. Notifications are mapped to events. Abort sends `turn/interrupt`.
+2. With `apiKey`, `account/login/start`. Otherwise `account/read`, which runs alongside the next step.
+3. `thread/start` (or `thread/resume` when `sessionId` is set) with model, cwd, approval policy, sandbox, approvals reviewer, `config` overrides and, for fast mode, `serviceTier: "priority"`.
+4. `turn/start` with the prompt and `effort`.
+5. Notifications are mapped to events. Abort sends `turn/interrupt`.
 
 | App-server message | Funnel event |
 | --- | --- |
-| thread id from `thread/start` or `thread/resume` | `session` (`sessionId` is the thread id) |
+| thread id from `thread/start` or `thread/resume` | `session` (`sessionId` is the thread id, `auth` from `account/read` or the API key) |
+| `turn/plan/updated` | `plan` |
+| `item/completed` for a `fileChange` | one `file.change` per changed file, then `tool.end` |
+| `item/tool/requestUserInput` | `question.request`, then the answers to the server |
 | `item/agentMessage/delta` | `text.delta`, or `reasoning.delta` when the message's `phase` (from `item/started`) is `commentary` |
 | `item/reasoning/summaryTextDelta`, `item/reasoning/textDelta` | `reasoning.delta` |
 | `item/started` and `item/completed` for `commandExecution`, `fileChange`, `mcpToolCall`, `dynamicToolCall`, `webSearch`, `imageView`, `collabAgentToolCall` | `tool.start`, `tool.end` |
@@ -68,6 +72,58 @@ Plugin and feature MCP servers are not overridden by name. Codex rejects the who
 
 `system` goes to `developerInstructions` on `thread/start`. Images go as `image` input items with a `data:` URL. `responseSchema` goes to `outputSchema` on `turn/start`, and the final message is the JSON. All three were verified live.
 
+## Agent callbacks and events
+
+The capabilities are `mcpServers: ["http", "stdio"]`, `apiKey`, `plan`, `fileChanges` and `questions`. `approvalInput` is off. Each feature below was checked live on 0.164.0 with `gpt-6-luna`.
+
+### MCP servers
+
+`mcpServers` goes to the thread's `config` as keys under `mcp_servers.<name>`. Only the caller's names get keys, so the servers in your `config.toml` stay as they are. A name that your or the project's `config.toml` already declares fails the run with `invalid-selection`, because thread config would merge into that server.
+
+| Field | Codex config key |
+| --- | --- |
+| `url` | `url` |
+| `headers` | `http_headers` |
+| `toolTimeoutSec` | `tool_timeout_sec` |
+| `autoApprove` | `default_tools_approval_mode = "approve"` |
+| `command`, `args`, `env` | `command`, `args`, `env` |
+
+At `supervised` and `accept-edits` Codex asks before each call to a tool of the server, through `mcpServer/elicitation/request`. The request reaches `onApproval` as tool `mcp:<server>/<tool>` with the tool's arguments as `input`. With `autoApprove` Codex skips the question itself. At `full` Codex runs MCP tools without asking. Verified live at `supervised`: a local HTTP MCP server got `Authorization: Bearer ...` on every request, and the tool ran after one approval. With `autoApprove` it ran with no approval.
+
+If you turned the `tool_call_mcp_elicitation` feature off, Codex asks the same question through `item/tool/requestUserInput` instead. Those requests go to `onApproval` too, not to `onQuestion`.
+
+### Plans
+
+`turn/plan/updated` becomes `{ type: "plan", steps, explanation? }`, with `inProgress` mapped to `in_progress` and `completed` to `done`. Codex 0.164 registers its `update_plan` tool only when `tools.update_plan.enabled` is set, so the funnel sets it on every thread except at `none`. The model then calls the tool when a task has several steps, which adds a few tool calls to such turns.
+
+Codex also has `plan` items and `item/plan/delta`. They carry the Markdown plan proposed in plan collaboration mode, not steps with a status, so they are not mapped.
+
+### File changes
+
+When a `fileChange` item completes, each entry of its `changes` becomes a `file.change` event: `completed` is `done`, `failed` and `declined` stay as they are. Codex sends absolute paths, and a relative one is resolved against the thread's cwd. A rename is an `update` whose `move_path` becomes `movedTo`.
+
+Only `apply_patch` edits are reported. A file a shell command deletes or writes, such as `rm e.txt`, shows up as a `commandExecution` with a `commandActions` entry of type `unknown`. Codex has no delete action, and `turn/diff/updated` tracks patches only.
+
+### Approval replies with a message
+
+Codex's `decline` has no reason field. When `onApproval` returns `{ decision: "deny", message }`, the funnel first sends the message with `turn/steer` as `The user denied that action and said: <message>`, then the decline. The model reads both before its next step. Verified live: with the message "Reply only with the word PINEAPPLE." the agent answered `PINEAPPLE`.
+
+Codex cannot change a tool's input, so an allow with `updatedInput` is sent as a decline, with its message if it has one.
+
+### Questions
+
+With `onQuestion`, the thread sets the `default_mode_request_user_input` feature, so the model offers its `request_user_input` tool outside plan mode. The feature is still under development in Codex 0.164, which logs a warning about it. Each `item/tool/requestUserInput` becomes `question.request`: `isOther` becomes `allowOther` and `isSecret` becomes `secret`. Codex marks every question `isOther` and always sends options, and its tool description tells the model to ask three questions at most. There is no `multiSelect`.
+
+A chosen option goes back as its label. Other text goes back as `user_note: <text>`, the form Codex's own TUI uses. `null` sends empty answers, and the model gets `{"answers":{}}` as the tool result, since the protocol has no separate decline. Without `onQuestion` the feature stays off, and a question the model still asks gets empty answers.
+
+The request works without `experimentalApi`, which stays off: in 0.164 the app-server filters only experimental notifications and fields, not this request. Verified live: the model asked with three options and repeated a free-text answer.
+
+### API key
+
+With `apiKey` the app-server starts with `-c cli_auth_credentials_store="ephemeral"` and logs in with `account/login/start` (`type: "apiKey"`). Ephemeral credentials live in the process memory only, so `auth.json` and the keyring are never written, and the saved login is not loaded for that process. `config.toml` and the threads under `~/.codex` stay in use. The `CODEX_API_KEY` variable does not work here, because the stdio app-server ignores it. Errors are redacted with the key. Checked with a fake key: Codex used it (the API answered 401 `invalid_api_key`), and `auth.json` kept its size and mtime. The live test with a real key runs when `CLI_FUNNEL_TEST_OPENAI_KEY` is set.
+
+`session.auth` is `api-key` for such runs. Otherwise it comes from `account/read`: `account` for a ChatGPT login and `api-key` for a saved API key login. Only the account type is read. `account/read` answers about 330 ms after `thread/start`, so the first `session` event waits for it for up to one second, while `turn/start` is already sent.
+
 ## Provider options
 
 `providerOptions.codex` sets app-server params, not flags. `scripts/check-drift.mjs` reads them from `codex app-server generate-json-schema`.
@@ -98,7 +154,7 @@ The context window is not selectable. The catalog reports `context_window` and `
 
 ## Known limits
 
-- `permissions/requestApproval`, `item/tool/requestUserInput` and other server requests are answered with a JSON-RPC error. `mcpServer/elicitation/request` is routed as tool `mcp` and answered with accept or decline without form content.
+- `item/permissions/requestApproval` and other server requests not listed above are answered with a JSON-RPC error. An `mcpServer/elicitation/request` that is not an MCP tool approval is routed as tool `mcp` and answered with accept or decline without form content.
 - The user's `~/.codex/config.toml` still applies (MCP servers, instructions). Startup of configured MCP servers can add seconds and log errors on stderr.
 - `accept-edits` allows all file changes, including ones outside the workspace that Codex asks to permit.
 - Interrupt waits up to five seconds for the turn to finish before killing the process.

@@ -64,9 +64,19 @@ async function configMcpServers(bin: string, cwd: string, env?: Record<string, s
   const res = await exec(bin, ["mcp", "list", "--json"], { cwd, env, timeoutMs: 20_000 });
   if (res.code !== 0) throw new Error(`codex mcp list failed: ${(res.stderr || res.stdout).trim().slice(0, 200)}`);
   const enabled = (JSON.parse(res.stdout) as { name: string; enabled?: boolean }[]).filter((s) => s.enabled !== false).map((s) => s.name);
+  return configDeclares(enabled, cwd, env);
+}
+
+/**
+ * The names in `names` that the user's or the project's `config.toml` declares as MCP servers, read from the files
+ * without starting Codex. Thread config keys merge into a server of the same name, so a caller's server must not
+ * reuse one of these names.
+ */
+export function configDeclares(names: string[], cwd: string, env?: Record<string, string>): string[] {
+  if (!names.length) return [];
   const home = env?.CODEX_HOME ?? process.env.CODEX_HOME ?? join(homedir(), ".codex");
   const text = readConfig(join(home, "config.toml")) + "\n" + readConfig(join(cwd, ".codex", "config.toml"));
-  return declaredServers(text, enabled);
+  return declaredServers(text, names);
 }
 
 /**

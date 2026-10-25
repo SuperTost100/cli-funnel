@@ -14,7 +14,7 @@ export const CHECKS = {
   codex: {
     bin: "codex",
     help: [
-      [["app-server", "--help"], ["generate-json-schema"]],
+      [["app-server", "--help"], ["generate-json-schema", "--config <key=value>"]],
       [["login", "--help"], ["--device-auth", "status"]],
       [["debug", "--help"], ["models"]],
       [["mcp", "list", "--help"], ["--json"]],

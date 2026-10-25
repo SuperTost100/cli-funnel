@@ -1,5 +1,5 @@
 import type { RunInput } from "../../types.js";
-import { bool, invalidOption, oneOf, optionsFor, requireAccess } from "../options.js";
+import { bool, invalidOption, mcpServersFor, oneOf, optionsFor, requireAccess } from "../options.js";
 import { requireMachine } from "../../selection.js";
 import { planAccess, type ApprovalPolicy } from "./access.js";
 
@@ -44,4 +44,45 @@ export function threadOptions(input: RunInput): CodexThreadOptions {
     out.approvalPolicy = policy;
   }
   return out;
+}
+
+/**
+ * `RunInput.mcpServers` as config keys under `mcp_servers.<name>`, in the dotted form. Only the caller's names get
+ * keys, so the servers in the user's config stay as they are. `autoApprove` sets the server's
+ * `default_tools_approval_mode` to "approve", which Codex checks before it asks for an MCP tool approval.
+ */
+export function mcpConfig(input: RunInput): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [name, s] of mcpServersFor(input, ["http", "stdio"])) {
+    const key = `mcp_servers.${name}`;
+    if (s.type === "http") {
+      out[`${key}.url`] = s.url;
+      if (s.headers && Object.keys(s.headers).length) out[`${key}.http_headers`] = s.headers;
+      if (s.autoApprove) out[`${key}.default_tools_approval_mode`] = "approve";
+    } else {
+      out[`${key}.command`] = s.command;
+      if (s.args) out[`${key}.args`] = s.args;
+      if (s.env && Object.keys(s.env).length) out[`${key}.env`] = s.env;
+    }
+    if (s.toolTimeoutSec !== undefined) out[`${key}.tool_timeout_sec`] = s.toolTimeoutSec;
+  }
+  return out;
+}
+
+/**
+ * Config for the agent features of the contract, in the dotted form.
+ * - Codex 0.164 registers its `update_plan` tool only with `tools.update_plan.enabled`, so plans are switched on at
+ *   every level but `none`, where tools stay off.
+ * - The model offers `request_user_input` outside plan mode only with the `default_mode_request_user_input` feature.
+ *   It is switched on when the caller passes `onQuestion`. Asking the user touches nothing on the machine, so every
+ *   level takes it.
+ * - The caller's MCP servers. `mcpServersFor` refuses them at `none`, and stdio servers below `full`.
+ */
+export function agentConfig(input: RunInput): Record<string, unknown> {
+  const { access } = requireMachine(input.selection);
+  return {
+    ...(access !== "none" ? { "tools.update_plan.enabled": true } : {}),
+    ...(input.onQuestion ? { "features.default_mode_request_user_input": true } : {}),
+    ...mcpConfig(input),
+  };
 }

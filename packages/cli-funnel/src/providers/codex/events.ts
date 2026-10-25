@@ -1,4 +1,5 @@
-import type { FunnelEvent, Usage } from "../../types.js";
+import { isAbsolute, resolve } from "node:path";
+import type { FileChange, FunnelEvent, PlanStep, Usage } from "../../types.js";
 
 type Params = Record<string, any>;
 type LimitEvent = Extract<FunnelEvent, { type: "limit" }>;
@@ -35,6 +36,41 @@ export function snapshotLimit(snapshot: Params | undefined): LimitEvent[] {
   return [limit];
 }
 
+const STEP_STATUS: Record<string, PlanStep["status"]> = { pending: "pending", inProgress: "in_progress", completed: "done" };
+
+/** A `turn/plan/updated` notification as a `plan` event. A step with an unknown status counts as pending. */
+export function planEvent(p: Params): FunnelEvent {
+  const steps: PlanStep[] = (Array.isArray(p.plan) ? p.plan : []).map((s: Params) => ({ text: String(s?.step ?? ""), status: STEP_STATUS[s?.status] ?? "pending" }));
+  return p.explanation ? { type: "plan", steps, explanation: p.explanation } : { type: "plan", steps };
+}
+
+const CHANGE_STATUS: Record<string, FileChange["status"]> = { completed: "done", failed: "failed", declined: "declined" };
+
+/**
+ * One `file.change` event per entry of a finished `fileChange` item. Codex sends absolute paths. A relative one is
+ * resolved against the thread's working directory. An item that has not finished gives none.
+ */
+export function fileChangeEvents(item: Params, cwd: string): FunnelEvent[] {
+  const status = CHANGE_STATUS[item?.status];
+  if (!status || !Array.isArray(item.changes)) return [];
+  const abs = (path: string) => (isAbsolute(path) ? path : resolve(cwd, path));
+  return item.changes.flatMap((c: Params): FunnelEvent[] => {
+    const kind = c?.kind?.type;
+    if (typeof c?.path !== "string" || (kind !== "add" && kind !== "update" && kind !== "delete")) return [];
+    const e: Extract<FunnelEvent, { type: "file.change" }> = { type: "file.change", id: item.id, path: abs(c.path), kind, status };
+    if (kind === "update" && typeof c.kind.move_path === "string") e.movedTo = abs(c.kind.move_path);
+    return [e];
+  });
+}
+
+/** An MCP tool call in progress, kept so its approval request can name the tool. */
+export interface McpCall {
+  id: string;
+  server: string;
+  tool: string;
+  arguments: unknown;
+}
+
 export interface Translated {
   events: FunnelEvent[];
   /** Set when the turn is over. */
@@ -45,6 +81,8 @@ export interface Translated {
 export class Translator {
   /** File changes by item id, kept so approval requests can show them. */
   readonly items = new Map<string, unknown>();
+  /** MCP tool calls in flight, by item id. Codex asks to approve a call after its `item/started`, and calls can overlap. */
+  readonly mcpCalls = new Map<string, McpCall>();
   private messages: string[] = [];
   /** Message phase by item id, from `item/started`. Deltas carry only the item id. */
   private phases = new Map<string, string | null>();
@@ -52,7 +90,11 @@ export class Translator {
   /** Codex sends a rate-limit snapshot after every turn. A reached limit is reported once per run. */
   private limitReported = false;
 
-  constructor(private threadId: string) {}
+  /** `cwd` is the thread's working directory, for file change paths that are not absolute. */
+  constructor(
+    private threadId: string,
+    private cwd: string = process.cwd(),
+  ) {}
 
   handle(method: string, p: Params = {}): Translated {
     if (p.threadId && p.threadId !== this.threadId) return { events: [] };
@@ -89,6 +131,8 @@ export class Translator {
         // Codex retries some errors itself. A limit is still worth reporting then.
         if (p.willRetry) return { events: errorLimit(p.error) };
         return { events: [...errorLimit(p.error), { type: "error", message: p.error?.message ?? "Codex reported an error." }], finished: true };
+      case "turn/plan/updated":
+        return { events: [planEvent(p)] };
       case "turn/completed":
         return this.turnCompleted(p.turn);
       default:
@@ -107,6 +151,7 @@ export class Translator {
         this.items.set(item.id, item.changes);
         return [{ type: "tool.start", id: item.id, name: "file_change", input: { changes: item.changes } }];
       case "mcpToolCall":
+        this.mcpCalls.set(item.id, { id: item.id, server: item.server, tool: item.tool, arguments: item.arguments });
         return [{ type: "tool.start", id: item.id, name: `mcp:${item.server}/${item.tool}`, input: item.arguments }];
       case "dynamicToolCall":
         return [{ type: "tool.start", id: item.id, name: item.tool, input: item.arguments }];
@@ -136,9 +181,10 @@ export class Translator {
       case "fileChange": {
         const bad = item.status === "failed" || item.status === "declined";
         const error = bad ? `${item.status === "declined" ? "denied: " : ""}File change ${item.status}` : undefined;
-        return [{ type: "tool.end", id: item.id, error }];
+        return [...fileChangeEvents(item, this.cwd), { type: "tool.end", id: item.id, error }];
       }
       case "mcpToolCall": {
+        this.mcpCalls.delete(item.id);
         const error = item.error?.message ?? (item.status === "failed" ? "MCP tool call failed" : undefined);
         const out = item.result ? JSON.stringify(item.result.structuredContent ?? item.result.content) : undefined;
         return [{ type: "tool.end", id: item.id, output: out, error }];
