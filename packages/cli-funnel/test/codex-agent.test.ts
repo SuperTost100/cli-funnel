@@ -1,4 +1,5 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { fakeNodeCli } from "./fake-cli.js";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -207,8 +208,7 @@ describe("codex API key and auth", () => {
 });
 
 // A fake `codex app-server` for the wiring: it logs what it receives and acts out one scenario per prompt.
-const FAKE = `#!/usr/bin/env node
-const fs = require("node:fs");
+const FAKE = `const fs = require("node:fs");
 const log = (o) => fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify(o) + "\\n");
 log({ args: process.argv.slice(2) });
 const send = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
@@ -278,9 +278,7 @@ describe("codex agent features through the app-server", () => {
 
   beforeEach(() => {
     const dir = mkdtempSync(join(tmpdir(), "cf-codex-fake-"));
-    const bin = join(dir, "codex");
-    writeFileSync(bin, FAKE);
-    chmodSync(bin, 0o755);
+    const bin = fakeNodeCli(join(dir, "codex"), FAKE);
     logFile = join(dir, "log");
     process.env.FAKE_LOG = logFile;
     process.env.CLI_FUNNEL_CODEX_BIN = bin;
