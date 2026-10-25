@@ -1,4 +1,5 @@
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { fakeShCli, sh } from "./fake-cli.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -240,26 +241,22 @@ describe.skipIf(process.platform === "win32")("run with a fake CLI", () => {
   let out: string;
   let cache: string | undefined;
 
-  /** A stand-in `agent`. `status` answers with `statusJson`, and a run records what it was started with. */
-  function fakeAgent(statusJson: string) {
+  /** A stand-in `agent`. `status` answers with `statusJson`, and a run records what it was started with, then prints `result`. */
+  function fakeAgent(statusJson: string, result = '{"type":"result","subtype":"success","result":"ok","usage":{}}') {
     dir = mkdtempSync(join(tmpdir(), "cf-agent-fake-"));
     out = join(dir, "out");
-    const bin = join(dir, "agent");
-    writeFileSync(
-      bin,
-      `#!/bin/sh
-case "$1" in
+    const bin = fakeShCli(
+      join(dir, "agent"),
+      `case "$1" in
   status) echo '${statusJson}'; exit 0 ;;
   --list-models) exit 0 ;;
 esac
-echo "$@" > "${out}.args"
-env | grep -E '^(CURSOR_API_KEY|AGENT_CLI_CREDENTIAL_STORE|CLI_FUNNEL_MCP_)' | sort > "${out}.env"
+echo "$@" > "${sh(out)}.args"
+env | grep -E '^(CURSOR_API_KEY|AGENT_CLI_CREDENTIAL_STORE|CLI_FUNNEL_MCP_)' | sort > "${sh(out)}.env"
 cat > /dev/null
 echo '{"type":"system","subtype":"init","apiKeySource":"env","cwd":"/w","session_id":"s1"}'
-echo '{"type":"result","subtype":"success","result":"ok","usage":{}}'
-`,
+echo '${result}'`,
     );
-    chmodSync(bin, 0o755);
     process.env.CLI_FUNNEL_AGENT_BIN = bin;
   }
 
@@ -321,9 +318,7 @@ echo '{"type":"result","subtype":"success","result":"ok","usage":{}}'
   });
 
   it("cuts the key out of an error", async () => {
-    fakeAgent('{"isAuthenticated": false}');
-    const bin = process.env.CLI_FUNNEL_AGENT_BIN!;
-    writeFileSync(bin, `#!/bin/sh\ncase "$1" in status) echo '{"isAuthenticated": false}'; exit 0;; --list-models) exit 0;; esac\ncat > /dev/null\necho '{"type":"result","subtype":"error","is_error":true,"result":"bad key key_live_abc123 rejected"}'\n`);
+    fakeAgent('{"isAuthenticated": false}', '{"type":"result","subtype":"error","is_error":true,"result":"bad key key_live_abc123 rejected"}');
     const events = await run({ apiKey: "key_live_abc123" });
     expect(events.at(-1)).toEqual({ type: "error", message: "bad key [redacted] rejected" });
   });
