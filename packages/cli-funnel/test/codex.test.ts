@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -9,6 +9,7 @@ import { Translator } from "../src/providers/codex/events.js";
 import { codexProvider, INITIALIZE_PARAMS } from "../src/providers/codex/index.js";
 import { parseCatalog } from "../src/providers/codex/models.js";
 import { declaredServers, noToolsConfig } from "../src/providers/codex/tools.js";
+import { fakeNodeCli } from "./fake-cli.js";
 import { collect } from "./helpers.js";
 import type { FunnelEvent } from "../src/types.js";
 
@@ -217,12 +218,13 @@ describe("codex none: configured MCP servers", () => {
     const cwd = mkdtempSync(join(tmpdir(), "cf-codex-cwd-"));
     writeFileSync(join(home, "config.toml"), `[mcp_servers.'probe']\ncommand = "sh"\n`);
     // A fake codex that answers `mcp list --json` from the CODEX_HOME it was started with, and logs its cwd.
-    const bin = join(cwd, "codex");
-    writeFileSync(
-      bin,
-      `#!/bin/sh\npwd > "$CODEX_HOME/cwd"\n[ -f "$CODEX_HOME/config.toml" ] && echo '[{"name":"probe","enabled":true}]' || echo '[]'\n`,
+    const bin = fakeNodeCli(
+      join(cwd, "codex"),
+      `const fs = require("node:fs");
+const home = process.env.CODEX_HOME;
+fs.writeFileSync(home + "/cwd", process.cwd());
+console.log(fs.existsSync(home + "/config.toml") ? '[{"name":"probe","enabled":true}]' : "[]");`,
     );
-    chmodSync(bin, 0o755);
     const config = await noToolsConfig(bin, cwd, { CODEX_HOME: home });
     expect(config["mcp_servers.probe.enabled"]).toBe(false);
     expect(realpathSync(readFileSync(join(home, "cwd"), "utf8").trim())).toBe(realpathSync(cwd));

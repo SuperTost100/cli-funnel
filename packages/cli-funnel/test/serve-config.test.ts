@@ -33,10 +33,10 @@ describe("parseServeConfig", () => {
       openai: { cwd: "scratch", access: "none" },
       openaiCompatible: [{ id: "lm", name: "LM", baseUrl: "http://127.0.0.1:1234/v1" }],
     });
-    expect(config.fsRoots).toEqual(["/srv/code", "/etc/cf/repos"]);
-    expect(config.cwd).toBe("/etc/project");
-    expect(config.logJsonl).toBe("/etc/cf/logs/runs.jsonl");
-    expect(config.openai).toEqual({ cwd: "/etc/cf/scratch", access: "none" });
+    expect(config.fsRoots).toEqual([resolve("/srv/code"), resolve("/etc/cf/repos")]);
+    expect(config.cwd).toBe(resolve("/etc/project"));
+    expect(config.logJsonl).toBe(resolve("/etc/cf/logs/runs.jsonl"));
+    expect(config.openai).toEqual({ cwd: resolve("/etc/cf/scratch"), access: "none" });
   });
 
   it("rejects unknown keys so a typo cannot widen access", () => {
@@ -107,9 +107,9 @@ describe("resolveServe", () => {
 
   it("uses --fs-root alone when given, and runs the OpenAI endpoints in the first root", () => {
     const s = resolveServe({ "fs-root": ["/srv/a", "b"] }, { fsRoots: ["/from/file"] }, {}, where);
-    expect(s.handler.fsRoots).toEqual(["/srv/a", resolve(where.cwd, "b")]);
-    expect(s.handler.openai?.cwd).toBe("/srv/a");
-    expect(resolveServe({ "fs-root": ["/srv/a"], cwd: "/srv/a/x" }, {}, {}, where).handler.openai?.cwd).toBe("/srv/a/x");
+    expect(s.handler.fsRoots).toEqual([resolve("/srv/a"), resolve(where.cwd, "b")]);
+    expect(s.handler.openai?.cwd).toBe(resolve("/srv/a"));
+    expect(resolveServe({ "fs-root": ["/srv/a"], cwd: "/srv/a/x" }, {}, {}, where).handler.openai?.cwd).toBe(resolve("/srv/a/x"));
   });
 
   it("stops runs after 30 minutes unless --timeout or maxRunMs says otherwise", () => {

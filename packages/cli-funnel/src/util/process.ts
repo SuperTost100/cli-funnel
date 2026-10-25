@@ -1,4 +1,4 @@
-import { execFileSync, spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, accessSync, constants, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join, win32 } from "node:path";
@@ -153,7 +153,13 @@ function signal(child: ChildProcess, sig: NodeJS.Signals): void {
   if (child.pid === undefined || !running(child)) return;
   try {
     if (process.platform !== "win32") process.kill(-child.pid, sig);
-    else child.kill(sig);
+    else {
+      // Windows has no process groups and child.kill() ends only the child itself. taskkill /T ends its descendants
+      // too, so a wrapper (cmd.exe, a shell) cannot leave the real CLI running with stdout open.
+      // It runs synchronously, so it also works from the exit hook, and before the wrapper is gone.
+      const killed = spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true, timeout: 5_000 });
+      if (killed.status !== 0) child.kill(sig);
+    }
   } catch {
     // The group is gone already, or the child was not started in its own group.
     child.kill(sig);

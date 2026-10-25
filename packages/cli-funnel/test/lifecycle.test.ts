@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { getEventListeners } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +8,7 @@ import { Channel } from "../src/util/channel.js";
 import { readNDJSON } from "../src/util/ndjson.js";
 import { spawnStream, STDERR_KEEP, terminate } from "../src/util/process.js";
 import { readSSE } from "../src/util/sse.js";
+import { fakeNodeCli, fakeShCli, sh } from "./fake-cli.js";
 import type { FunnelEvent, RunInput } from "../src/types.js";
 
 const alive = (pid: number) => {
@@ -30,10 +31,7 @@ async function waitFor(check: () => boolean, ms = 3000): Promise<boolean> {
 
 function script(body: string): string {
   const dir = mkdtempSync(join(tmpdir(), "cf-life-"));
-  const file = join(dir, "cli");
-  writeFileSync(file, `#!/bin/sh\n${body}\n`);
-  chmodSync(file, 0o755);
-  return file;
+  return fakeShCli(join(dir, "cli"), body);
 }
 
 describe("Channel", () => {
@@ -66,7 +64,18 @@ describe("child processes", () => {
   it("kills the processes the CLI started", async () => {
     const dir = mkdtempSync(join(tmpdir(), "cf-grand-"));
     const pidFile = join(dir, "pid");
-    const proc = spawnStream(script(`sleep 30 &\necho $! > "${pidFile}"\necho '{"ready":true}'\nwait`), []);
+    // Node, not sh: the grandchild's pid has to be one that process.kill understands on Windows too.
+    const proc = spawnStream(
+      fakeNodeCli(
+        join(dir, "cli"),
+        `const { spawn } = require("node:child_process");
+const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "ignore" });
+require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));
+console.log('{"ready":true}');
+setInterval(() => {}, 1000);`,
+      ),
+      [],
+    );
     for await (const _ of proc.lines) break;
     const grandchild = Number(readFileSync(pidFile, "utf8"));
     expect(alive(grandchild)).toBe(true);
@@ -105,9 +114,10 @@ describe("claude process lifetime", () => {
   it("exits when the consumer stops at done", async () => {
     const dir = mkdtempSync(join(tmpdir(), "cf-claude-"));
     const mark = join(dir, "exited");
+    const markSh = sh(mark);
     // Answers one turn, then waits for more input until stdin closes, like Claude Code in stream-json mode.
     process.env.CLI_FUNNEL_CLAUDE_BIN = script(
-      `read line\necho '{"type":"result","subtype":"success","is_error":false,"result":"hi"}'\ncat >/dev/null\ntouch "${mark}"`,
+      `read line\necho '{"type":"result","subtype":"success","is_error":false,"result":"hi"}'\ncat >/dev/null\ntouch "${markSh}"`,
     );
     for await (const e of claudeProvider.run(input())) if (e.type === "done") break;
     expect(await waitFor(() => existsSync(mark))).toBe(true);
@@ -116,21 +126,23 @@ describe("claude process lifetime", () => {
   describe("long system prompts", () => {
     const BIG = "x".repeat(200_000);
     // Records every argument and, for the system prompt file flag, the file's size, its mode and its folder's mode.
-    const recorder = (log: string) =>
-      script(
+    const recorder = (log: string) => {
+      log = sh(log);
+      return script(
         `read line
 prev=""
 for a in "$@"; do
   echo "\${#a}:$(printf %s "$a" | cut -c1-30)" >> "${log}.args"
   if [ "$prev" = "--append-system-prompt-file" ] || [ "$prev" = "--system-prompt-file" ]; then
     echo "$prev" >> "${log}.file"; echo "$a" >> "${log}.file"
-    wc -c < "$a" >> "${log}.file"; stat -c %a "$a" >> "${log}.file"; stat -c %a "$(dirname "$a")" >> "${log}.file"
+    wc -c < "$a" >> "${log}.file"; { stat -c %a "$a" || stat -f %Lp "$a"; } >> "${log}.file"; { stat -c %a "$(dirname "$a")" || stat -f %Lp "$(dirname "$a")"; } >> "${log}.file"
   fi
   prev="$a"
 done
 echo '{"type":"result","subtype":"success","is_error":false,"result":"hi"}'
 cat >/dev/null`,
       );
+    };
 
     it("passes a 200 KB system prompt as a private file and removes it after the run", async () => {
       const log = join(mkdtempSync(join(tmpdir(), "cf-claude-")), "log");
@@ -141,8 +153,11 @@ cat >/dev/null`,
       const [flag, path, size, fileMode, dirMode] = readFileSync(`${log}.file`, "utf8").trim().split("\n");
       expect(flag).toBe("--append-system-prompt-file");
       expect(Number(size)).toBe(BIG.length);
-      expect(fileMode).toBe("600");
-      expect(dirMode).toBe("700");
+      // Windows has no POSIX file modes.
+      if (process.platform !== "win32") {
+        expect(fileMode).toBe("600");
+        expect(dirMode).toBe("700");
+      }
       expect(existsSync(path!)).toBe(false);
       const lengths = readFileSync(`${log}.args`, "utf8").trim().split("\n").map((l) => Number(l.split(":")[0]));
       expect(Math.max(...lengths)).toBeLessThan(1000);
@@ -167,10 +182,11 @@ cat >/dev/null`,
 
   it("sends a 200 KB response schema in the initialize request instead of argv", async () => {
     const log = join(mkdtempSync(join(tmpdir(), "cf-claude-")), "log");
+    const slog = sh(log);
     process.env.CLI_FUNNEL_CLAUDE_BIN = script(
-      `for a in "$@"; do echo "\${#a}" >> "${log}.args"; done
-read first; printf '%s\\n' "$first" > "${log}.stdin"
-read second; printf '%s\\n' "$second" >> "${log}.stdin"
+      `for a in "$@"; do echo "\${#a}" >> "${slog}.args"; done
+read first; printf '%s\\n' "$first" > "${slog}.stdin"
+read second; printf '%s\\n' "$second" >> "${slog}.stdin"
 echo '{"type":"result","subtype":"success","is_error":false,"result":"{}"}'
 cat >/dev/null`,
     );

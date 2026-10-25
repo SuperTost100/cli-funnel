@@ -37,7 +37,7 @@ const happy = provider(async function* () {
   yield { type: "done", text: "", finishReason: "stop" };
 });
 
-const selection = { provider: "claude" as const, model: "fake-1", cwd: "/tmp", access: "accept-edits" as const, effort: "high" };
+const selection = { provider: "claude" as const, model: "fake-1", cwd: tmpdir(), access: "accept-edits" as const, effort: "high" };
 const drain = async (it: AsyncIterable<unknown>) => {
   const out: unknown[] = [];
   for await (const e of it) out.push(e);
@@ -117,7 +117,7 @@ describe("jsonlRunLog", () => {
       model: "fake-1-2026",
       effort: "high",
       access: "accept-edits",
-      cwd: "/tmp",
+      cwd: tmpdir(),
       sessionId: "s1",
       finishReason: "stop",
       usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
@@ -200,7 +200,8 @@ describe("jsonlRunLog", () => {
     const log = jsonlRunLog(file);
     await createFunnel({ providers: { claude: happy }, onEvent: log }).run({ selection, prompt: "hi" });
     await log.flush();
-    expect(statSync(file).mode & 0o777).toBe(0o600);
+    // Windows has no POSIX file modes.
+    if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
     const blocker = tmp();
     writeFileSync(blocker, "");
     const errors: Error[] = [];

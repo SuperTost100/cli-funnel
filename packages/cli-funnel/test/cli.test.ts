@@ -1,17 +1,17 @@
 import { spawn } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "tsup";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { fakeShCli } from "./fake-cli.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const MODEL = "claude-opus-5-5";
 
 // A claude that answers in stream-json. FAKE=ok gives a plain answer. Otherwise it wants to run Bash:
 // with --permission-prompt-tool it asks first, without it the tool is denied by the CLI itself.
-const FAKE_CLAUDE = `#!/bin/sh
-case "$1" in --version) echo "2.1.283 (Claude Code)"; exit 0;; esac
+const FAKE_CLAUDE = `case "$1" in --version) echo "2.1.283 (Claude Code)"; exit 0;; esac
 read -r prompt
 echo '{"type":"system","subtype":"init","session_id":"s1"}'
 if [ "$FAKE" = ok ]; then
@@ -43,13 +43,11 @@ beforeAll(async () => {
   work = mkdtempSync(join(root, ".cli-test-"));
   await build({ entry: { cli: join(root, "src/bin/cli.ts") }, outDir: work, format: ["esm"], target: "node22", dts: false, silent: true, config: false });
   cli = join(work, "cli.js");
-  claude = join(work, "claude");
-  writeFileSync(claude, FAKE_CLAUDE);
-  chmodSync(claude, 0o755);
+  claude = fakeShCli(join(work, "claude"), FAKE_CLAUDE);
   mkdirSync(join(work, "state"));
 }, 60_000);
 
-afterAll(() => rmSync(work, { recursive: true, force: true }));
+afterAll(() => rmSync(work, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }));
 
 interface Ran {
   code: number | null;
@@ -191,7 +189,8 @@ describe("cli serve", () => {
     }
   });
 
-  it("writes the run log before it exits on SIGTERM", async () => {
+  // Windows cannot deliver SIGTERM to a handler: kill() ends the process at once, so there is no shutdown to test.
+  it.skipIf(process.platform === "win32")("writes the run log before it exits on SIGTERM", async () => {
     const log = join(work, "runs.jsonl");
     const child = spawn(process.execPath, [cli, "serve", "--port", "0", "--log-jsonl", log], {
       cwd: work,

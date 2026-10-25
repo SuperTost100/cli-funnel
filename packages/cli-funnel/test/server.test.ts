@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, realpathSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -113,8 +113,9 @@ describe("server", () => {
   });
 
   it("follows symlinks before checking the allowed roots", async () => {
-    const root = mkdtempSync(join(tmpdir(), "cf-root-"));
-    const outside = mkdtempSync(join(tmpdir(), "cf-out-"));
+    // realpath: on macOS tmpdir() sits behind the /var symlink, which would make every path here a symlinked one.
+    const root = mkdtempSync(join(realpathSync(tmpdir()), "cf-root-"));
+    const outside = mkdtempSync(join(realpathSync(tmpdir()), "cf-out-"));
     mkdirSync(join(outside, "secret"));
     symlinkSync(outside, join(root, "escape"));
     mkdirSync(join(root, "inner"));
