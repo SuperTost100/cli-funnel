@@ -109,7 +109,7 @@ describe("resolveServe", () => {
     const s = resolveServe({ "fs-root": ["/srv/a", "b"] }, { fsRoots: ["/from/file"] }, {}, where);
     expect(s.handler.fsRoots).toEqual([resolve("/srv/a"), resolve(where.cwd, "b")]);
     expect(s.handler.openai?.cwd).toBe(resolve("/srv/a"));
-    expect(resolveServe({ "fs-root": ["/srv/a"], cwd: "/srv/a/x" }, {}, {}, where).handler.openai?.cwd).toBe(resolve("/srv/a/x"));
+    expect(resolveServe({ "fs-root": ["/srv/a"], cwd: "/srv/a/x" }, {}, {}, where).handler.openai?.cwd).toBe("/srv/a/x");
   });
 
   it("stops runs after 30 minutes unless --timeout or maxRunMs says otherwise", () => {
