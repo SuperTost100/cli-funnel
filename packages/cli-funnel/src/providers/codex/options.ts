@@ -71,8 +71,8 @@ export function mcpConfig(input: RunInput): Record<string, unknown> {
 
 /**
  * Config for the agent features of the contract, in the dotted form.
- * - Codex 0.164 registers its `update_plan` tool only with `tools.update_plan.enabled`, so plans are switched on at
- *   every level but `none`, where tools stay off.
+ * - Codex 0.164 registers its `update_plan` tool only with `tools.update_plan.enabled`. It is switched on when the
+ *   caller passes `planTool`, at every level but `none`, where tools stay off.
  * - The model offers `request_user_input` outside plan mode only with the `default_mode_request_user_input` feature.
  *   It is switched on when the caller passes `onQuestion`. Asking the user touches nothing on the machine, so every
  *   level takes it.
@@ -81,7 +81,7 @@ export function mcpConfig(input: RunInput): Record<string, unknown> {
 export function agentConfig(input: RunInput): Record<string, unknown> {
   const { access } = requireMachine(input.selection);
   return {
-    ...(access !== "none" ? { "tools.update_plan.enabled": true } : {}),
+    ...(input.planTool && access !== "none" ? { "tools.update_plan.enabled": true } : {}),
     ...(input.onQuestion ? { "features.default_mode_request_user_input": true } : {}),
     ...mcpConfig(input),
   };

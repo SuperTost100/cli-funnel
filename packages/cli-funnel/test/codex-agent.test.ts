@@ -201,9 +201,10 @@ describe("codex MCP servers and feature config", () => {
     expect(mcpConfig(input("supervised", { mcpServers: { a: http() } }))).toEqual({ "mcp_servers.a.url": "http://127.0.0.1:7777/mcp" });
   });
 
-  it("switches plans on below none and questions on with onQuestion", () => {
-    expect(agentConfig(input("supervised"))).toEqual({ "tools.update_plan.enabled": true });
-    expect(agentConfig(input("none"))).toEqual({});
+  it("switches plans on with planTool below none, and questions on with onQuestion", () => {
+    expect(agentConfig(input("supervised"))).toEqual({});
+    expect(agentConfig(input("supervised", { planTool: true }))).toEqual({ "tools.update_plan.enabled": true });
+    expect(agentConfig(input("none", { planTool: true }))).toEqual({});
     expect(agentConfig(input("none", { onQuestion: () => null }))).toEqual({ "features.default_mode_request_user_input": true });
   });
 
@@ -325,7 +326,7 @@ describe("codex agent features through the app-server", () => {
     expect(asked[0].questions).toHaveLength(2);
     expect(JSON.parse(res.text)).toEqual({ answers: { favourite_colour: { answers: ["Green"] }, favourite_animal: { answers: ["user_note: a red panda"] } } });
     const start = entries().find((e) => e.method === "thread/start");
-    expect(start.params.config).toEqual({ "tools.update_plan.enabled": true, "features.default_mode_request_user_input": true });
+    expect(start.params.config).toEqual({ "features.default_mode_request_user_input": true });
     expect(res.auth).toBe("account");
   });
 
@@ -333,7 +334,7 @@ describe("codex agent features through the app-server", () => {
     const { res, events } = await run("ask");
     expect(events.some((e) => e.type === "question.request")).toBe(false);
     expect(JSON.parse(res.text)).toEqual({ answers: {} });
-    expect(entries().find((e) => e.method === "thread/start").params.config).toEqual({ "tools.update_plan.enabled": true });
+    expect(entries().find((e) => e.method === "thread/start").params.config).toBeUndefined();
   });
 
   it("steers the deny message into the turn before it declines", async () => {
@@ -476,7 +477,7 @@ describe.skipIf(process.env.CLI_FUNNEL_LIVE !== "1")("codex agent features live"
   }, 120_000);
 
   it("reports the plan and the file changes", async () => {
-    const inp = live("full", "Keep a plan with the update_plan tool: two steps, and mark each step completed as you finish it. With apply_patch only: 1) create a.txt containing one, 2) delete a.txt. Reply done.");
+    const inp = live("full", "Keep a plan with the update_plan tool: two steps, and mark each step completed as you finish it. With apply_patch only: 1) create a.txt containing one, 2) delete a.txt. Reply done.", { planTool: true });
     const res = await collect(codexProvider.run(inp), inp);
     expect(res.plan?.length).toBe(2);
     expect(res.plan?.every((s) => s.status === "done")).toBe(true);

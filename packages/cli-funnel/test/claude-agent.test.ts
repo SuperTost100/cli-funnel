@@ -222,7 +222,7 @@ if (mcpArg) {
   const v = mcpArg.slice("--mcp-config=".length);
   mcp = v.startsWith("{") ? { inline: JSON.parse(v) } : { mode: fs.statSync(v).mode & 0o777, content: JSON.parse(fs.readFileSync(v, "utf8")) };
 }
-log({ kind: "start", args, apiKey: process.env.ANTHROPIC_API_KEY ?? null, mcp });
+log({ kind: "start", args, apiKey: process.env.ANTHROPIC_API_KEY ?? null, todo: process.env.CLAUDE_CODE_ENABLE_TODO_TOOLS ?? null, mcp });
 const lines = fs.readFileSync(process.env.FAKE_FIXTURE, "utf8").split("\\n").filter(Boolean);
 let i = 0;
 const pump = () => {
@@ -378,6 +378,18 @@ describe("claude control requests (fake CLI)", () => {
     expect(logged()[0].apiKey).toBe("sk-ant-test");
     expect(logged()[0].args.join(" ")).not.toContain("sk-ant-test");
     expect(result.auth).toBe("api-key");
+  });
+
+  it("turns on the task tools only with planTool, and never at none", async () => {
+    const ok = [{ type: "system", subtype: "init", session_id: "s", model: "m" }, { type: "result", subtype: "success", is_error: false, result: "ok" }];
+    const todo = async (extra: Partial<RunInput>, access: RunInput["selection"]["access"] = "auto") => {
+      replay(ok);
+      await collect(claudeProvider.run({ selection: sel({ cwd: dir, access }), prompt: "x", ...extra }), input(access!));
+      return logged().at(-1).todo;
+    };
+    expect(await todo({})).toBeNull();
+    expect(await todo({ planTool: true })).toBe("1");
+    expect(await todo({ planTool: true }, "none")).toBeNull();
   });
 });
 

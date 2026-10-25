@@ -190,6 +190,8 @@ export function createFunnel(options: FunnelOptions = {}) {
       throw new FunnelError(`${p.displayName} cannot take image attachments.`, "unsupported");
     }
     mcpServersFor(input, p.capabilities.mcpServers ?? [], p.displayName);
+    // Providers read it by truthiness, so a JSON body with "false" as a string would turn the tool on.
+    if (input.planTool !== undefined && typeof input.planTool !== "boolean") throw new FunnelError("planTool must be true or false.", "invalid-selection");
     if (input.apiKey !== undefined) {
       if (!p.capabilities.apiKey) throw new FunnelError(`${p.displayName} cannot run on an API key passed with the run.`, "unsupported");
       if (typeof input.apiKey !== "string" || !input.apiKey.trim()) throw new FunnelError("apiKey must be a non-empty string.", "invalid-selection");

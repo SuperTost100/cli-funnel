@@ -148,6 +148,19 @@ Codex, the Anthropic API and the OpenAI API need `additionalProperties: false` o
 
 These fields are for the CLI agents. Each provider lists what it supports in `capabilities`, and its page under [providers](providers/) says how it maps them.
 
+| | Claude Code | Codex | Cursor Agent | Antigravity |
+|---|---|---|---|---|
+| Approval `message` | sent with the deny | sent as a user message just before the decline | no approvals | no approvals |
+| Approval `updatedInput` | applied | the call is denied | no approvals | no approvals |
+| Questions | AskUserQuestion | `request_user_input` | no: print mode skips them | no: print mode skips them |
+| Plans | task tools or TodoWrite. Sonnet 5 and Opus 5.5 need `planTool` | `update_plan`, with `planTool` | the agent's todo list | the agent's `task.md` checklist |
+| File changes | Write, Edit, MultiEdit, NotebookEdit | `apply_patch` changes | edit and delete tools | `write_file`, `edit_file` and a plain `rm` |
+| HTTP MCP servers | `supervised` and up | `supervised` and up | `auto`, `full` | `full` only |
+| Stdio MCP servers | `full` | `full` | `full` | `full` |
+| `toolTimeoutSec` | applied | applied | refused | applied |
+| `autoApprove` | applied | applied | no effect, nothing asks | no effect, nothing asks |
+| API key | `ANTHROPIC_API_KEY` | an in-memory login | `CURSOR_API_KEY` with an in-memory credential store | `GEMINI_API_KEY` with a home folder of its own |
+
 ### Approvals with a message
 
 `onApproval` can return an object instead of `"allow"` or `"deny"`:
@@ -174,6 +187,8 @@ Each question has an `id`, the `question` text, `options` with a `label` and an 
 ### Plans and file changes
 
 Providers with `capabilities.plan` emit `{ type: "plan", steps, explanation? }` with the whole plan each time it changes. Each step has `text` and a `status` of `pending`, `in_progress` or `done`. `result.plan` holds the last one.
+
+Codex 0.164, and Claude Code on Sonnet 5 and Opus 5.5, leave their plan tool off. Set `planTool: true` to turn it on, so those runs emit `plan` too. The agent then spends a few tool calls keeping its plan on tasks with several steps.
 
 Providers with `capabilities.fileChanges` emit one `file.change` event per file once the change is applied or refused: `id` (the tool call, the same id as its `tool.start`), the absolute `path`, `kind` (`add`, `update` or `delete`), `movedTo` for a rename, and `status` (`done`, `failed` or `declined`). `result.fileChanges` lists them in order.
 

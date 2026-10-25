@@ -94,7 +94,7 @@ If you turned the `tool_call_mcp_elicitation` feature off, Codex asks the same q
 
 ### Plans
 
-`turn/plan/updated` becomes `{ type: "plan", steps, explanation? }`, with `inProgress` mapped to `in_progress` and `completed` to `done`. Codex 0.164 registers its `update_plan` tool only when `tools.update_plan.enabled` is set, so the funnel sets it on every thread except at `none`. The model then calls the tool when a task has several steps, which adds a few tool calls to such turns.
+`turn/plan/updated` becomes `{ type: "plan", steps, explanation? }`, with `inProgress` mapped to `in_progress` and `completed` to `done`. Codex 0.164 registers its `update_plan` tool only when `tools.update_plan.enabled` is set. The funnel sets it when the run passes `planTool: true`, at every level but `none`. The model then calls the tool when a task has several steps, which adds a few tool calls to such turns. Without `planTool` Codex has no plan tool and the run emits no `plan`.
 
 Codex also has `plan` items and `item/plan/delta`. They carry the Markdown plan proposed in plan collaboration mode, not steps with a status, so they are not mapped.
 

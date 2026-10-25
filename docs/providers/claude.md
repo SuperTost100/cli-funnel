@@ -70,7 +70,7 @@ A deny with `message` goes to the CLI as `{behavior: "deny", message}`, and the 
 
 ### Plans
 
-Claude Code 2.1.310 picks the plan tool by model. Claude 4.x and older models (Haiku 4.5, Sonnet 4.6, Opus 4.7 and earlier) get TaskCreate and TaskUpdate. With `CLAUDE_CODE_ENABLE_TASKS=false` they get TodoWrite instead. Newer models (Sonnet 5, Opus 5.5) get no plan tool unless `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` is set, so their runs emit no `plan` events.
+Claude Code 2.1.310 picks the plan tool by model. Claude 4.x and older models (Haiku 4.5, Sonnet 4.6, Opus 4.7 and earlier) get TaskCreate and TaskUpdate. With `CLAUDE_CODE_ENABLE_TASKS=false` they get TodoWrite instead. Newer models (Sonnet 5, Opus 5.5) get no plan tool unless `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` is set. A run with `planTool: true` sets it, except at `none`, and those models then get TaskCreate and TaskUpdate. Without it their runs emit no `plan` events.
 
 - TodoWrite sends the whole list, which becomes a `plan` right after its `tool.start`.
 - TaskCreate and TaskUpdate change one task at a time. cli-funnel keeps the list for the life of the process and emits the whole plan after each successful result. `deleted` removes a task. A resumed session starts with an empty list, so updates to tasks created in earlier runs are ignored.
@@ -168,7 +168,7 @@ There is no `steer`. A `user` line written while a turn runs does not join that 
 
 - Fast mode is unavailable.
 - Approval requests other than `can_use_tool` are answered with an error.
-- Sonnet 5 and Opus 5.5 have no plan tool by default, so they emit no `plan`.
+- Sonnet 5 and Opus 5.5 have no plan tool by default, so they emit no `plan` unless the run sets `planTool`.
 - Shell commands and subagents produce no `file.change`.
 - Resume needs the same cwd as the original run, because Claude stores sessions per project directory.
 - The `paste` and other MCP servers that need auth print a note in the model's reply, not an error.

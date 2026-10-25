@@ -534,6 +534,13 @@ export interface RunInput {
    */
   mcpServers?: Record<string, McpServer>;
   /**
+   * Turns on the agent's plan tool where the CLI leaves it off, so the run emits `plan` events: Codex's `update_plan`,
+   * and Claude Code's task tools on models that lack them by default (Sonnet 5, Opus 5.5). The agent may then spend a
+   * few tool calls keeping its plan. Default off, which keeps each CLI's own behaviour. No effect at `none`, and none on
+   * providers whose agent always has a plan tool.
+   */
+  planTool?: boolean;
+  /**
    * A vendor API key the CLI runs on instead of the saved login: an Anthropic key for Claude Code, an OpenAI key for
    * Codex, a Cursor key for Cursor Agent, a Gemini key for Antigravity. The saved login stays as it was. Needs
    * `capabilities.apiKey`. It never appears in events, records or logs.
