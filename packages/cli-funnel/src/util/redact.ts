@@ -1,4 +1,4 @@
-import type { FunnelEvent } from "../types.js";
+import type { FunnelEvent, RunInput } from "../types.js";
 
 const MASK = "[redacted]";
 
@@ -32,4 +32,43 @@ export async function* redactErrors(events: AsyncIterable<FunnelEvent>, secrets:
     else if (e.type === "limit") yield { ...e, detail: redact(e.detail, secrets) };
     else yield e;
   }
+}
+
+/** Header and env names whose values are credentials. */
+const SECRET_NAME = /auth|token|key|secret|password|cookie|session|credential/i;
+
+/**
+ * The run's own secrets: `apiKey`, and the values of `mcpServers` headers and env entries whose names look like
+ * credentials. Values shorter than 8 characters are left out, so masking them cannot mangle ordinary text.
+ */
+export function runSecrets(input: Pick<RunInput, "apiKey" | "mcpServers">): string[] {
+  const values: unknown[] = [input.apiKey];
+  // Runs before the request is validated, so a malformed entry is skipped rather than trusted.
+  const servers = typeof input.mcpServers === "object" && input.mcpServers !== null ? Object.values(input.mcpServers) : [];
+  for (const server of servers) {
+    if (typeof server !== "object" || server === null) continue;
+    const named: unknown = server.type === "http" ? server.headers : server.env;
+    if (typeof named !== "object" || named === null) continue;
+    for (const [name, value] of Object.entries(named)) if (SECRET_NAME.test(name) && typeof value === "string") values.push(value);
+  }
+  return [...new Set(values.filter((v): v is string => typeof v === "string" && v.length >= 8))];
+}
+
+/** `value` with every secret masked, in strings at any depth. Other values come back as they are. */
+function mask(value: unknown, secrets: string[]): unknown {
+  if (typeof value === "string") return secrets.reduce((s, secret) => s.replaceAll(secret, MASK), value);
+  if (Array.isArray(value)) return value.map((v) => mask(v, secrets));
+  if (typeof value === "object" && value !== null) return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, mask(v, secrets)]));
+  return value;
+}
+
+/**
+ * Masks the run's secrets in every event. An agent can print its own environment, so an API key or a header value can
+ * show up in tool output, text or tool input. Only the exact values are masked: the patterns `redact` adds would
+ * change ordinary URLs in the agent's output. shortcut: a secret split across two `text.delta` chunks is not caught;
+ * buffer the stream if that ever matters.
+ */
+export async function* redactSecrets(events: AsyncIterable<FunnelEvent>, secrets: string[]): AsyncGenerator<FunnelEvent> {
+  if (!secrets.length) return yield* events;
+  for await (const e of events) yield mask(e, secrets) as FunnelEvent;
 }

@@ -187,3 +187,33 @@ describe("server answers", () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe("run secrets", () => {
+  it("masks the API key and credential headers in every event, and leaves other values alone", async () => {
+    const leaky: Provider = {
+      ...base,
+      capabilities: { ...base.capabilities, apiKey: true, mcpServers: ["http"] },
+      async *run() {
+        yield { type: "tool.start", id: "t", name: "Bash", input: { command: "echo sk-test-key-123456" } };
+        yield { type: "tool.end", id: "t", output: "CURSOR_API_KEY=sk-test-key-123456 X=Bearer-header-secret" };
+        yield { type: "done", text: "Your key is sk-test-key-123456 and the type is application/json", finishReason: "stop" };
+      },
+    };
+    const events: FunnelEvent[] = [];
+    const f = createFunnel({ providers: { claude: leaky }, onEvent: (r) => void events.push(r.event) });
+    const result = await f.run({
+      selection: { provider: "claude", model: "m", cwd: root, access: "full" },
+      prompt: "go",
+      apiKey: "sk-test-key-123456",
+      mcpServers: { a: { type: "http", url: "http://x", headers: { Authorization: "Bearer-header-secret", Accept: "application/json" } } },
+    });
+    expect(result.text).toBe("Your key is [redacted] and the type is application/json");
+    expect(result.toolCalls[0]!.input).toEqual({ command: "echo [redacted]" });
+    expect(JSON.stringify(events)).not.toMatch(/sk-test-key|Bearer-header-secret/);
+  });
+
+  it("refuses the server name __proto__, which would vanish from a plain object", () => {
+    const servers = JSON.parse('{"__proto__": {"type": "http", "url": "http://x"}}');
+    expect(() => mcpServersFor(input("full", servers), ["http"])).toThrow(/reserved/);
+  });
+});

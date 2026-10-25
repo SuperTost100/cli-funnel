@@ -96,6 +96,8 @@ export function mcpServersFor(input: RunInput, kinds: readonly McpServer["type"]
   return Object.entries(servers).map(([name, raw]) => {
     const where = `mcpServers.${name}`;
     if (!MCP_NAME.test(name)) bad(`MCP server name "${name}" must be 1 to 64 letters, digits, _ or -.`);
+    // Assigning "__proto__" to a plain object sets its prototype, so the server would vanish from the provider's config.
+    if (name === "__proto__") bad('MCP server name "__proto__" is reserved.');
     const def = object(raw, where)!;
     const type = oneOf(def.type, `${where}.type`, ["http", "stdio"] as const);
     if (!type) bad(`${where}.type must be "http" or "stdio".`);

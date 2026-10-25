@@ -5,6 +5,7 @@ import { validateProviderOptions, validateSelection } from "./selection.js";
 import { SessionPool, type LiveSessionInfo, type SessionOptions } from "./sessions.js";
 import { createRunFolder } from "./providers/base.js";
 import { mcpServersFor } from "./providers/options.js";
+import { redactSecrets, runSecrets } from "./util/redact.js";
 import { PROVIDERS } from "./providers/index.js";
 import { memoryHistory } from "./providers/history.js";
 import { createApiProviders, type ApiConfig, type ApiKeys } from "./providers/api.js";
@@ -219,7 +220,8 @@ export function createFunnel(options: FunnelOptions = {}) {
         release();
       }
     })();
-    const events = options.onEvent ? observeRun(options.onEvent, input, source) : source;
+    const masked = redactSecrets(source, runSecrets(input));
+    const events = options.onEvent ? observeRun(options.onEvent, input, masked) : masked;
     // Fold events as they pass, so `.result` works next to `for await` without keeping them.
     const folder = createRunFolder(input);
     let settle!: { resolve: (r: RunResult) => void; reject: (e: unknown) => void };
