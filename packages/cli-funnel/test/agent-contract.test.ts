@@ -229,7 +229,12 @@ describe("run secrets", () => {
       apiKey: "abc12",
       mcpServers: { a: { type: "http" as const, url: "http://x", headers: { "X-Token": "abc12-header-long" } } },
     };
-    const err = await f.run(req).catch((e: Error & { body?: string }) => e);
+    const err = (await f.run(req).then(
+      () => {
+        throw new Error("the run should fail");
+      },
+      (e: unknown) => e,
+    )) as Error & { body?: string };
     expect(err.message).toBe("401 for key [redacted]");
     expect((err.cause as Error).message).toBe("upstream said [redacted]");
     expect(err.body).toBe("key=[redacted]");
