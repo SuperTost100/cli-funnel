@@ -40,9 +40,22 @@ export function isQuestion(req: ServerRequest): boolean {
 }
 
 /** The public tool name and input of an MCP tool call, from the call the translator saw start. */
-function mcpTool(call: McpCall | undefined, server: string | undefined): { tool: string; input?: unknown } {
+function mcpTool(call: McpCall | undefined): { tool: string; input?: unknown } {
   if (!call) return { tool: "mcp" };
-  return { tool: server ? `mcp:${server}/${call.tool}` : `mcp:${call.tool}`, input: call.arguments };
+  return { tool: `mcp:${call.server}/${call.tool}`, input: call.arguments };
+}
+
+/**
+ * The call an MCP approval elicitation is about. The elicitation names the server but not the call, so with several
+ * calls in flight on one server it is matched by its `_meta.tool_params`. Undefined when no single call matches: the
+ * approval then shows the elicitation itself rather than another call's tool and arguments.
+ */
+function elicitedCall(calls: Map<string, McpCall>, server: unknown, params: unknown): McpCall | undefined {
+  const onServer = [...calls.values()].filter((c) => c.server === server);
+  if (onServer.length <= 1) return onServer[0];
+  const wanted = JSON.stringify(params ?? null);
+  const matches = onServer.filter((c) => JSON.stringify(c.arguments ?? null) === wanted);
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 /** Turns a server approval request into the public shape. Returns undefined for methods that are not approvals. */
@@ -65,15 +78,14 @@ export function toApprovalRequest(req: ServerRequest, ctx: ApprovalContext): App
       };
     case "mcpServer/elicitation/request": {
       if (p._meta?.codex_approval_kind === MCP_APPROVAL_KIND) {
-        const { tool, input } = mcpTool(ctx.mcpCalls.get(p.serverName), p.serverName);
+        const { tool, input } = mcpTool(elicitedCall(ctx.mcpCalls, p.serverName, p._meta?.tool_params));
         return { id: String(req.id), tool, input: input ?? p._meta?.tool_params ?? p, description: p.message ?? undefined };
       }
       return { id: String(req.id), tool: "mcp", input: p, description: p.message ?? undefined };
     }
     case USER_INPUT: {
       if (!isMcpApprovalQuestion(req)) return undefined;
-      const [server, call] = [...ctx.mcpCalls].find(([, c]) => c.id === p.itemId) ?? [];
-      const { tool, input } = mcpTool(call, server);
+      const { tool, input } = mcpTool(ctx.mcpCalls.get(p.itemId));
       const q = p.questions.find((x: any) => String(x?.id).startsWith(MCP_APPROVAL_QUESTION));
       return { id: String(p.itemId ?? req.id), tool, input: input ?? { question: q?.question }, description: q?.question ?? undefined };
     }

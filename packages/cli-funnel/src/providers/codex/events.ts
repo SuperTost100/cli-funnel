@@ -66,6 +66,7 @@ export function fileChangeEvents(item: Params, cwd: string): FunnelEvent[] {
 /** An MCP tool call in progress, kept so its approval request can name the tool. */
 export interface McpCall {
   id: string;
+  server: string;
   tool: string;
   arguments: unknown;
 }
@@ -80,7 +81,7 @@ export interface Translated {
 export class Translator {
   /** File changes by item id, kept so approval requests can show them. */
   readonly items = new Map<string, unknown>();
-  /** The MCP tool call each server is running, by server name. Codex asks to approve a call after its `item/started`. */
+  /** MCP tool calls in flight, by item id. Codex asks to approve a call after its `item/started`, and calls can overlap. */
   readonly mcpCalls = new Map<string, McpCall>();
   private messages: string[] = [];
   /** Message phase by item id, from `item/started`. Deltas carry only the item id. */
@@ -150,7 +151,7 @@ export class Translator {
         this.items.set(item.id, item.changes);
         return [{ type: "tool.start", id: item.id, name: "file_change", input: { changes: item.changes } }];
       case "mcpToolCall":
-        this.mcpCalls.set(item.server, { id: item.id, tool: item.tool, arguments: item.arguments });
+        this.mcpCalls.set(item.id, { id: item.id, server: item.server, tool: item.tool, arguments: item.arguments });
         return [{ type: "tool.start", id: item.id, name: `mcp:${item.server}/${item.tool}`, input: item.arguments }];
       case "dynamicToolCall":
         return [{ type: "tool.start", id: item.id, name: item.tool, input: item.arguments }];
@@ -183,7 +184,7 @@ export class Translator {
         return [...fileChangeEvents(item, this.cwd), { type: "tool.end", id: item.id, error }];
       }
       case "mcpToolCall": {
-        if (this.mcpCalls.get(item.server)?.id === item.id) this.mcpCalls.delete(item.server);
+        this.mcpCalls.delete(item.id);
         const error = item.error?.message ?? (item.status === "failed" ? "MCP tool call failed" : undefined);
         const out = item.result ? JSON.stringify(item.result.structuredContent ?? item.result.content) : undefined;
         return [{ type: "tool.end", id: item.id, output: out, error }];

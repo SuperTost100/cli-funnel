@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { fakeNodeCli } from "./fake-cli.js";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { denyNote, effectiveReply, isQuestion, toApprovalRequest, toQuestionReply, toQuestionRequest, toReply } from "../src/providers/codex/approvals.js";
 import { authKind } from "../src/providers/codex/auth.js";
@@ -85,7 +85,7 @@ describe("codex file changes", () => {
 
   it("resolves relative paths against the thread cwd and skips unfinished items", () => {
     const item = { id: "i", status: "failed", changes: [{ path: "src/a.ts", kind: { type: "update", move_path: "src/b.ts" } }, { path: "x", kind: { type: "weird" } }] };
-    expect(fileChangeEvents(item, "/w")).toEqual([{ type: "file.change", id: "i", path: "/w/src/a.ts", kind: "update", movedTo: "/w/src/b.ts", status: "failed" }]);
+    expect(fileChangeEvents(item, "/w")).toEqual([{ type: "file.change", id: "i", path: resolve("/w", "src/a.ts"), kind: "update", movedTo: resolve("/w", "src/b.ts"), status: "failed" }]);
     expect(fileChangeEvents({ ...item, status: "inProgress" }, "/w")).toEqual([]);
   });
 });
@@ -146,10 +146,30 @@ describe("codex approvals with a message", () => {
   it("answers an MCP approval that Codex routes through request_user_input", () => {
     const req = { id: 2, method: "item/tool/requestUserInput", params: { itemId: "call-1", questions: [{ id: "mcp_tool_call_approval_call-1", question: "Allow?", options: [] }] } };
     expect(isQuestion(req)).toBe(false);
-    const ctx = { items: new Map(), mcpCalls: new Map([["srv", { id: "call-1", tool: "t", arguments: { q: 1 } }]]) };
+    const ctx = { items: new Map(), mcpCalls: new Map([["call-1", { id: "call-1", server: "srv", tool: "t", arguments: { q: 1 } }]]) };
     expect(toApprovalRequest(req, ctx)).toEqual({ id: "call-1", tool: "mcp:srv/t", input: { q: 1 }, description: "Allow?" });
     expect(toReply(req, "allow")).toEqual({ result: { answers: { "mcp_tool_call_approval_call-1": { answers: ["Allow"] } } } });
     expect(toReply(req, "deny")).toEqual({ result: { answers: { "mcp_tool_call_approval_call-1": { answers: ["Cancel"] } } } });
+  });
+});
+
+describe("codex MCP approvals with calls in flight", () => {
+  const call = (id: string, tool: string, args: unknown) => [id, { id, server: "srv", tool, arguments: args }] as const;
+  const elicit = (params: unknown) => ({
+    id: 9,
+    method: "mcpServer/elicitation/request",
+    params: { serverName: "srv", message: "Allow?", _meta: { codex_approval_kind: "mcp_tool_call", tool_params: params } },
+  });
+
+  it("matches the elicitation to the call with the same arguments", () => {
+    const ctx = { items: new Map(), mcpCalls: new Map([call("a", "read", { q: 1 }), call("b", "write", { q: 2 })]) };
+    expect(toApprovalRequest(elicit({ q: 1 }), ctx)).toMatchObject({ tool: "mcp:srv/read", input: { q: 1 } });
+    expect(toApprovalRequest(elicit({ q: 2 }), ctx)).toMatchObject({ tool: "mcp:srv/write", input: { q: 2 } });
+  });
+
+  it("falls back to the generic mcp tool when no single call matches", () => {
+    const ctx = { items: new Map(), mcpCalls: new Map([call("a", "read", { q: 1 }), call("b", "write", { q: 1 })]) };
+    expect(toApprovalRequest(elicit({ q: 1 }), ctx)).toMatchObject({ tool: "mcp", input: { q: 1 } });
   });
 });
 
