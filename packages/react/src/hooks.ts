@@ -298,6 +298,11 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
   // The controller of the run that owns the state. A run that is no longer this one is stale and writes nothing.
   const abort = useRef<AbortController | undefined>(undefined);
 
+  const clearPending = () => {
+    setApprovals([]);
+    setQuestions([]);
+  };
+
   const send = useCallback(
     async (prompt: string, selection: Selection, options: RunOptions = {}) => {
       abort.current?.abort();
@@ -342,6 +347,8 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
           return;
         }
         setStatus((s) => (s === "error" ? s : "done"));
+        // The server answers whatever the run still waited on once it ends, so nothing is left to answer.
+        clearPending();
         end({ aborted: ctl.signal.aborted });
       } catch (e) {
         if (abort.current !== ctl) {
@@ -349,6 +356,7 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
           return;
         }
         const aborted = ctl.signal.aborted;
+        clearPending();
         if (aborted) setStatus("done");
         else {
           setError(messageOf(e));

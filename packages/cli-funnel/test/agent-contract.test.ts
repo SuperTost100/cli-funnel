@@ -6,6 +6,7 @@ import { createClient } from "../src/client/index.js";
 import { createFunnel } from "../src/funnel.js";
 import { approvalReply, askQuestion, createRunFolder } from "../src/providers/base.js";
 import { mcpServersFor } from "../src/providers/options.js";
+import { toReply } from "../src/providers/codex/approvals.js";
 import { createHandler } from "../src/server/handler.js";
 import type { FunnelEvent, Provider, QuestionRequest, RunInput } from "../src/types.js";
 
@@ -68,6 +69,14 @@ describe("approvalReply", () => {
     expect(approvalReply({ decision: "allow", updatedInput: { a: 1 } })).toEqual({ decision: "allow", updatedInput: { a: 1 } });
     // A deny never carries new input.
     expect(approvalReply({ decision: "deny", updatedInput: { a: 1 } })).toEqual({ decision: "deny" });
+  });
+});
+
+describe("a provider that cannot change the input", () => {
+  it("declines an allow that carries updatedInput instead of running the original", () => {
+    const req = { id: 1, method: "item/commandExecution/requestApproval", params: {} };
+    expect(toReply(req, { decision: "allow", updatedInput: { command: "ls" } })).toEqual({ result: { decision: "decline" } });
+    expect(toReply(req, { decision: "allow" })).toEqual({ result: { decision: "accept" } });
   });
 });
 

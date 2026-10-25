@@ -118,6 +118,26 @@ describe("useRun", () => {
     expect(result.current.approvals).toHaveLength(0);
   });
 
+  it("drops approvals and questions the run no longer waits on once it ends", async () => {
+    const a = stream<RunEvent>();
+    const client = fakeClient({ run: vi.fn(() => a.gen), answer: vi.fn(async () => ({ ok: true })) });
+    const { result } = renderHook(() => useRun(client));
+
+    act(() => void result.current.send("one", SEL));
+    act(() => {
+      a.push({ type: "run", runId: "A" });
+      a.push({ type: "approval.request", request: { id: "ap", tool: "Bash", input: "ls" } });
+      a.push({ type: "question.request", request: { id: "q", questions: [{ id: "x", question: "Which?", options: [] }] } });
+    });
+    await waitFor(() => expect(result.current.questions).toHaveLength(1));
+    expect(result.current.approvals).toHaveLength(1);
+
+    await act(async () => a.end());
+    await waitFor(() => expect(result.current.status).toBe("done"));
+    expect(result.current.questions).toHaveLength(0);
+    expect(result.current.approvals).toHaveLength(0);
+  });
+
   it("aborts the run on unmount", async () => {
     const a = stream<RunEvent>();
     let signal!: AbortSignal;
