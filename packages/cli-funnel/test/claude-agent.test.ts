@@ -366,7 +366,8 @@ describe("claude control requests (fake CLI)", () => {
     expect(responses().map((r) => r.behavior)).toEqual(["allow", "deny", "deny"]);
     expect(asked).toEqual(["t2", "t3"]);
     const start = logged()[0];
-    expect(start.mcp.mode).toBe(0o600);
+    // Windows has no POSIX file modes.
+    if (process.platform !== "win32") expect(start.mcp.mode).toBe(0o600);
     expect(Object.keys(start.mcp.content.mcpServers)).toEqual(["app", "other"]);
     expect(start.args.join(" ")).not.toContain("Bearer");
   });
