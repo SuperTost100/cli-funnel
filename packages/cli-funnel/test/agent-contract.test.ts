@@ -218,7 +218,7 @@ describe("run secrets", () => {
       capabilities: { ...base.capabilities, apiKey: true, mcpServers: ["http"] },
       async *run() {
         yield { type: "tool.start", id: "t", name: "x", input: { "abc12": 1, token: "abc12-header-long" } };
-        throw new Error("401 for key abc12");
+        throw Object.assign(new Error("401 for key abc12", { cause: new Error("upstream said abc12") }), { body: "key=abc12" });
       },
     };
     const records: FunnelEvent[] = [];
@@ -229,7 +229,11 @@ describe("run secrets", () => {
       apiKey: "abc12",
       mcpServers: { a: { type: "http" as const, url: "http://x", headers: { "X-Token": "abc12-header-long" } } },
     };
-    await expect(f.run(req)).rejects.toThrow("401 for key [redacted]");
+    const err = await f.run(req).catch((e: Error & { body?: string }) => e);
+    expect(err.message).toBe("401 for key [redacted]");
+    expect((err.cause as Error).message).toBe("upstream said [redacted]");
+    expect(err.body).toBe("key=[redacted]");
+    expect(err.stack).not.toContain("abc12");
     const text = JSON.stringify(records);
     expect(text).not.toMatch(/abc12/);
     expect(text).toContain('{"[redacted]":1,"token":"[redacted]"}');

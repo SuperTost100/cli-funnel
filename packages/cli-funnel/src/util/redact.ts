@@ -66,6 +66,21 @@ function mask(value: unknown, secrets: string[]): unknown {
 }
 
 /**
+ * `err` with the secrets masked in its message, stack, cause and other own properties. The same object comes back,
+ * so its class and `code` stay. A thrown value that is not an Error is masked like an event value.
+ */
+function maskError(err: unknown, secrets: string[], depth = 0): unknown {
+  if (!(err instanceof Error)) return mask(err, secrets);
+  if (depth > 3) return err;
+  for (const key of Object.getOwnPropertyNames(err)) {
+    const value = (err as unknown as Record<string, unknown>)[key];
+    const masked = value instanceof Error ? maskError(value, secrets, depth + 1) : mask(value, secrets);
+    if (masked !== value) Object.defineProperty(err, key, { value: masked, writable: true, configurable: true, enumerable: Object.prototype.propertyIsEnumerable.call(err, key) });
+  }
+  return err;
+}
+
+/**
  * Masks the run's secrets in every event, and in the message of an error the stream throws. An agent can print its own
  * environment, so an API key or a header value can show up in tool output, text or tool input. Only the exact values
  * are masked: the patterns `redact` adds would change ordinary URLs in the agent's output. shortcut: a secret split
@@ -76,7 +91,6 @@ export async function* redactSecrets(events: AsyncIterable<FunnelEvent>, secrets
   try {
     for await (const e of events) yield mask(e, secrets) as FunnelEvent;
   } catch (err) {
-    if (err instanceof Error) err.message = maskText(err.message, secrets);
-    throw err;
+    throw maskError(err, secrets);
   }
 }
