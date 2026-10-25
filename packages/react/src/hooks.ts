@@ -23,7 +23,7 @@ function sameFields(a: Partial<Selection>, b: Partial<Selection>): boolean {
 }
 
 /** Extra fields for one `useRun().send` call. */
-export type RunOptions = Pick<RunInput, "system" | "attachments" | "responseSchema" | "maxOutputTokens">;
+export type RunOptions = Pick<RunInput, "system" | "attachments" | "responseSchema" | "maxOutputTokens" | "mcpServers" | "apiKey" | "planTool">;
 
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 

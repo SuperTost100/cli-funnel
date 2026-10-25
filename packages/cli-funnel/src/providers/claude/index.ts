@@ -257,7 +257,9 @@ export async function launchClaude(input: RunInput, signal?: AbortSignal): Promi
     if (mcp) files.push(mcp);
     const args = buildArgs(input, systemFile?.path, init !== undefined, mcp?.path);
     // In print mode Claude Code uses ANTHROPIC_API_KEY from its environment over the saved login, with no approval step.
-    const env = input.apiKey ? { ...input.env, ANTHROPIC_API_KEY: input.apiKey } : input.env;
+    // Sonnet 5 and Opus 5.5 get the task tools, and so `plan` events, only with this variable.
+    const todo = input.planTool && input.selection.access !== "none" ? { CLAUDE_CODE_ENABLE_TODO_TOOLS: "1" } : {};
+    const env = { ...input.env, ...todo, ...(input.apiKey ? { ANTHROPIC_API_KEY: input.apiKey } : {}) };
     proc = spawnStream(bin, args, { cwd: input.selection.cwd, env, signal, closeStdin: false });
   } catch (err) {
     await removeFiles();
