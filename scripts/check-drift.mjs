@@ -41,11 +41,27 @@ function checkCodexSchema() {
     if (!schema("GetAccountRateLimitsResponse").properties?.rateLimits) report("rateLimits", "GetAccountRateLimitsResponse");
     for (const key of ["threadId", "turnId"]) if (!schema("TurnInterruptParams").properties?.[key]) report(key, "TurnInterruptParams");
     const methods = readFileSync(join(dir, "ClientRequest.json"), "utf8");
-    for (const m of ["thread/list", "thread/fork", "account/rateLimits/read", "turn/interrupt", "turn/steer"]) if (!methods.includes(`"${m}"`)) report(m, "ClientRequest");
+    for (const m of ["thread/list", "thread/fork", "account/rateLimits/read", "turn/interrupt", "turn/steer", "account/login/start", "account/read"]) if (!methods.includes(`"${m}"`)) report(m, "ClientRequest");
     const bundle = JSON.parse(readFileSync(join(dir, "codex_app_server_protocol.v2.schemas.json"), "utf8"));
     if (!bundle.definitions?.Config?.properties?.web_search) report("web_search", "Config");
     const modes = bundle.definitions?.WebSearchMode?.enum ?? [];
     for (const m of ["disabled", "cached", "indexed", "live"]) if (!modes.includes(m)) report(`web search mode ${m}`, "WebSearchMode");
+    // Agent features: questions, plans, file changes, the API key login and the account type.
+    const defs = bundle.definitions ?? {};
+    const top = (name) => JSON.parse(readFileSync(join(dir, `${name}.json`), "utf8"));
+    const serverRequests = readFileSync(join(dir, "ServerRequest.json"), "utf8");
+    for (const m of ["item/tool/requestUserInput", "mcpServer/elicitation/request"]) if (!serverRequests.includes(`"${m}"`)) report(m, "ServerRequest");
+    const question = top("ToolRequestUserInputParams").definitions?.ToolRequestUserInputQuestion?.properties ?? {};
+    for (const key of ["id", "header", "question", "isOther", "isSecret", "options"]) if (!question[key]) report(key, "ToolRequestUserInputQuestion");
+    if (!top("ToolRequestUserInputResponse").properties?.answers) report("answers", "ToolRequestUserInputResponse");
+    for (const key of ["plan", "explanation"]) if (!defs.TurnPlanUpdatedNotification?.properties?.[key]) report(key, "TurnPlanUpdatedNotification");
+    for (const s of ["pending", "inProgress", "completed"]) if (!defs.TurnPlanStepStatus?.enum?.includes(s)) report(`plan step status ${s}`, "TurnPlanStepStatus");
+    for (const key of ["path", "kind"]) if (!defs.FileUpdateChange?.properties?.[key]) report(key, "FileUpdateChange");
+    if (!JSON.stringify(defs.PatchChangeKind ?? {}).includes('"move_path"')) report("move_path", "PatchChangeKind");
+    for (const s of ["completed", "failed", "declined"]) if (!defs.PatchApplyStatus?.enum?.includes(s)) report(`patch status ${s}`, "PatchApplyStatus");
+    if (!JSON.stringify(defs.LoginAccountParams ?? {}).includes('"apiKey"')) report("apiKey login", "LoginAccountParams");
+    if (!defs.GetAccountResponse?.properties?.account) report("account", "GetAccountResponse");
+    if (!defs.CliAuthCredentialsStoreMode?.enum?.includes("ephemeral")) report("ephemeral", "CliAuthCredentialsStoreMode");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

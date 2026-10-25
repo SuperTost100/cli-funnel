@@ -107,7 +107,7 @@ describe("codex approvals", () => {
   it("maps a command approval and both decisions", () => {
     const { requests, t } = replay("approve-command.ndjson");
     const req = requests[0];
-    const a = toApprovalRequest(req, t.items)!;
+    const a = toApprovalRequest(req, t)!;
     expect(a.tool).toBe("command");
     expect(a.input).toMatchObject({ command: "/bin/zsh -lc 'echo hi > a.txt'" });
     expect(toReply(req, "allow")).toEqual({ result: { decision: "accept" } });
@@ -116,14 +116,14 @@ describe("codex approvals", () => {
 
   it("maps a file change approval using the item's changes", () => {
     const { requests, t } = replay("approve-file-change.ndjson");
-    const a = toApprovalRequest(requests[0], t.items)!;
+    const a = toApprovalRequest(requests[0], t)!;
     expect(a.tool).toBe("file_change");
     expect((a.input as any).changes[0].path).toContain("b.txt");
   });
 
   it("rejects unknown server requests", () => {
     const req = { id: 1, method: "item/tool/call", params: {} };
-    expect(toApprovalRequest(req, new Map())).toBeUndefined();
+    expect(toApprovalRequest(req, { items: new Map(), mcpCalls: new Map() })).toBeUndefined();
     expect(toReply(req, "allow")).toHaveProperty("error");
   });
 });
