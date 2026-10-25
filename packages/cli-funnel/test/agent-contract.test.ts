@@ -187,3 +187,84 @@ describe("server answers", () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe("run secrets", () => {
+  it("masks the API key and credential headers in every event, and leaves other values alone", async () => {
+    const leaky: Provider = {
+      ...base,
+      capabilities: { ...base.capabilities, apiKey: true, mcpServers: ["http"] },
+      async *run() {
+        yield { type: "tool.start", id: "t", name: "Bash", input: { command: "echo sk-test-key-123456" } };
+        yield { type: "tool.end", id: "t", output: "CURSOR_API_KEY=sk-test-key-123456 X=Bearer-header-secret" };
+        yield { type: "done", text: "Your key is sk-test-key-123456 and the type is application/json", finishReason: "stop" };
+      },
+    };
+    const events: FunnelEvent[] = [];
+    const f = createFunnel({ providers: { claude: leaky }, onEvent: (r) => void events.push(r.event) });
+    const result = await f.run({
+      selection: { provider: "claude", model: "m", cwd: root, access: "full" },
+      prompt: "go",
+      apiKey: "sk-test-key-123456",
+      mcpServers: { a: { type: "http", url: "http://x", headers: { Authorization: "Bearer-header-secret", Accept: "application/json" } } },
+    });
+    expect(result.text).toBe("Your key is [redacted] and the type is application/json");
+    expect(result.toolCalls[0]!.input).toEqual({ command: "echo [redacted]" });
+    expect(JSON.stringify(events)).not.toMatch(/sk-test-key|Bearer-header-secret/);
+  });
+
+  it("masks a thrown error, a short key, keys of objects, and a longer secret whole", async () => {
+    const throwing: Provider = {
+      ...base,
+      capabilities: { ...base.capabilities, apiKey: true, mcpServers: ["http"] },
+      async *run() {
+        yield { type: "tool.start", id: "t", name: "x", input: { "abc12": 1, token: "abc12-header-long" } };
+        throw Object.assign(new Error("401 for key abc12", { cause: new Error("upstream said abc12") }), { body: "key=abc12" });
+      },
+    };
+    const records: FunnelEvent[] = [];
+    const f = createFunnel({ providers: { claude: throwing }, onEvent: (r) => void records.push(r.event) });
+    const req = {
+      selection: { provider: "claude" as const, model: "m", cwd: root, access: "full" as const },
+      prompt: "go",
+      apiKey: "abc12",
+      mcpServers: { a: { type: "http" as const, url: "http://x", headers: { "X-Token": "abc12-header-long" } } },
+    };
+    const err = (await f.run(req).then(
+      () => {
+        throw new Error("the run should fail");
+      },
+      (e: unknown) => e,
+    )) as Error & { body?: string };
+    expect(err.message).toBe("401 for key [redacted]");
+    expect((err.cause as Error).message).toBe("upstream said [redacted]");
+    expect(err.body).toBe("key=[redacted]");
+    expect(err.stack).not.toContain("abc12");
+    const text = JSON.stringify(records);
+    expect(text).not.toMatch(/abc12/);
+    expect(text).toContain('{"[redacted]":1,"token":"[redacted]"}');
+  });
+
+  it("keeps the Errors inside an AggregateError, masked", async () => {
+    const failing: Provider = {
+      ...base,
+      capabilities: { ...base.capabilities, apiKey: true },
+      async *run(): AsyncGenerator<FunnelEvent> {
+        throw new AggregateError([new TypeError("bad key sk-aggregate-123")], "all failed");
+      },
+    };
+    const f = createFunnel({ providers: { claude: failing } });
+    const err = (await f.run({ selection: { provider: "claude", model: "m", cwd: root, access: "full" }, prompt: "go", apiKey: "sk-aggregate-123" }).then(
+      () => {
+        throw new Error("the run should fail");
+      },
+      (e: unknown) => e,
+    )) as AggregateError;
+    expect(err.errors[0]).toBeInstanceOf(TypeError);
+    expect((err.errors[0] as Error).message).toBe("bad key [redacted]");
+  });
+
+  it("refuses the server name __proto__, which would vanish from a plain object", () => {
+    const servers = JSON.parse('{"__proto__": {"type": "http", "url": "http://x"}}');
+    expect(() => mcpServersFor(input("full", servers), ["http"])).toThrow(/reserved/);
+  });
+});
