@@ -330,6 +330,17 @@ describe("codex agent features through the app-server", () => {
     expect(res.auth).toBe("account");
   });
 
+  it("keeps full in the workspace-write sandbox with sandbox, and leaves supervised as it is", async () => {
+    const started = async (access: AccessLevel, sandbox?: boolean) => {
+      await run("hi", { selection: { provider: "codex", model: "m", cwd, access }, sandbox, onApproval: () => "deny" });
+      const params = entries().filter((e) => e.method === "thread/start").at(-1).params;
+      return [params.sandbox, params.approvalPolicy];
+    };
+    expect(await started("full", true)).toEqual(["workspace-write", "never"]);
+    expect(await started("full")).toEqual(["danger-full-access", "never"]);
+    expect(await started("supervised", true)).toEqual(["workspace-write", "untrusted"]);
+  });
+
   it("answers no questions without onQuestion and leaves the feature off", async () => {
     const { res, events } = await run("ask");
     expect(events.some((e) => e.type === "question.request")).toBe(false);

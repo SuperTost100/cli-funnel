@@ -78,6 +78,7 @@ export const codexProvider: Provider = {
     plan: true,
     fileChanges: true,
     questions: true,
+    sandbox: true,
   },
   detect: () => detectInstallation(BINARY, TESTED_RANGE),
   authStatus,

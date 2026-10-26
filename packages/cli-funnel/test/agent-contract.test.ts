@@ -127,6 +127,19 @@ describe("funnel checks", () => {
     await expect(run({ planTool: "false" as never })).rejects.toMatchObject({ code: "invalid-selection" });
   });
 
+  it("refuses a sandbox the CLI cannot give, and one that is not a boolean", async () => {
+    await expect(run({ sandbox: true })).rejects.toMatchObject({ code: "unsupported" });
+    await expect(run({ sandbox: "true" as never })).rejects.toMatchObject({ code: "invalid-selection" });
+    const sandboxed = createFunnel({ providers: { claude: { ...base, capabilities: { ...base.capabilities, sandbox: true } } } });
+    await expect(sandboxed.run({ selection: { provider: "claude", model: "m", cwd: root, access: "full" }, prompt: "go", sandbox: true })).resolves.toBeDefined();
+  });
+
+  it("accepts a sandbox on a provider without machine access, which runs no commands", async () => {
+    const text: Provider = { ...base, capabilities: { ...base.capabilities, access: [] } };
+    const f = createFunnel({ providers: { claude: text } });
+    await expect(f.run({ selection: { provider: "claude", model: "m" }, prompt: "go", sandbox: true })).resolves.toBeDefined();
+  });
+
   it("passes them to a provider that takes them", async () => {
     let seen: RunInput | undefined;
     const able: Provider = {

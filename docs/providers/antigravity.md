@@ -19,6 +19,7 @@ Runs use `agy --print=<prompt> --output-format stream-json` with stdin closed. L
 | MCP servers | `http` and `stdio`, at `full` only |
 | API key | yes, `apiKey` runs in its own home folder |
 | Questions | no |
+| Sandbox | no |
 
 ## Access
 
@@ -29,6 +30,10 @@ Runs use `agy --print=<prompt> --output-format stream-json` with stdin closed. L
 - `auto` is not offered. `agy` 1.3.5 added `--mode auto`, but it is not available on every account. On an account without it, `agy` prints `warning: --mode auto is not available for this account; continuing in the default mode.` on stderr and runs in the default mode. cli-funnel cannot tell from the stream which mode ran, so it cannot promise the level. Tested on 1.3.5.
 
 That is not true of every shell command. On 1.2.13, a `touch` outside the workspace ran without a check both in the default print mode and with `--mode plan --sandbox`. `--mode plan` has no effect together with `--disable-slash-commands`, and the CLI prints a warning saying so. Neither mode can carry `none`.
+
+### Sandbox
+
+`sandbox: true` is refused with `unsupported`. On 1.4.7 a run with `--dangerously-skip-permissions --sandbox` wrote `../outside.txt` from a shell command, and the stream showed no sandbox error. With `--mode accept-edits --sandbox` the command was denied, but by the permission check, which also denies commands inside the workspace. It is not known whether agy's sandbox failed to start on that host or does not cover writes. Either way agy reported nothing, so cli-funnel cannot tell a confined run from an unconfined one.
 
 ### `none`
 

@@ -60,7 +60,9 @@ An error from Codex, such as a thread that does not exist, comes back as `Funnel
 | `supervised` | `untrusted` | `workspace-write` | Every command that is not on Codex's known-safe list and every file change becomes an `approval.request`. |
 | `accept-edits` | `untrusted` | `workspace-write` | File changes are allowed without asking. Commands still go to `onApproval`. |
 | `auto` | `on-request` | `workspace-write` | Codex's auto review agent (`approvalsReviewer: auto_review`) decides escalations. Commands run inside the sandbox without asking. |
-| `full` | `never` | `danger-full-access` | No sandbox and no prompts. |
+| `full` | `never` | `danger-full-access` | No sandbox and no prompts. With `sandbox: true`, `workspace-write` instead. |
+
+`sandbox: true` changes only `full`, since the other levels already run commands in a sandbox. At `full` the thread starts with `sandbox: "workspace-write"` and approval policy `never`, so commands run without asking but can write only in `cwd` and the folders Codex's `workspace-write` defaults allow, such as the temp folder. Checked live on 0.164.0: a `full` run with `sandbox: true` could not write a file next to `cwd`, and wrote one inside it.
 
 When `onApproval` is missing, requests are denied. Denied commands are declined with `decline`, so the turn continues and the model sees the refusal. Declined commands and file changes appear in `result.deniedActions`. Verified live: an approved `echo hi > a.txt` created the file, and a declined one did not.
 
@@ -74,7 +76,7 @@ Plugin and feature MCP servers are not overridden by name. Codex rejects the who
 
 ## Agent callbacks and events
 
-The capabilities are `mcpServers: ["http", "stdio"]`, `apiKey`, `plan`, `fileChanges` and `questions`. `approvalInput` is off. Each feature below was checked live on 0.164.0 with `gpt-6-luna`.
+The capabilities are `mcpServers: ["http", "stdio"]`, `apiKey`, `plan`, `fileChanges`, `questions` and `sandbox`. `approvalInput` is off. Each feature below was checked live on 0.164.0 with `gpt-6-luna`.
 
 ### MCP servers
 
