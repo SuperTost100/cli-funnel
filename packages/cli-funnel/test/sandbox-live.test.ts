@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { agentProvider } from "../src/providers/agent/index.js";
 import { claudeProvider } from "../src/providers/claude/index.js";
 import { codexProvider } from "../src/providers/codex/index.js";
@@ -12,8 +12,11 @@ import type { AccessLevel, Provider, RunInput } from "../src/types.js";
 const root = join(homedir(), ".cache", "cli-funnel-test");
 
 describe.skipIf(process.env.CLI_FUNNEL_LIVE !== "1" || process.platform === "win32")("sandbox live", () => {
-  mkdirSync(root, { recursive: true });
-  const parent = mkdtempSync(join(root, "sandbox-"));
+  let parent: string;
+  beforeAll(() => {
+    mkdirSync(root, { recursive: true });
+    parent = mkdtempSync(join(root, "sandbox-"));
+  });
   afterAll(() => rmSync(parent, { recursive: true, force: true }));
 
   /** Asks the agent to write one file outside `cwd`, one inside and any `more`, and reports which files exist afterwards. */
