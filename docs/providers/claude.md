@@ -44,13 +44,27 @@ Usage has no `costUsd`. The CLI reports a list-price estimate, not what a subscr
 
 Approvals work. The CLI writes a `control_request` (subtype `can_use_tool`) to stdout and waits. The provider answers on stdin with a `control_response` carrying `{behavior: "allow", updatedInput}` or `{behavior: "deny", message}`. This only happens with `--permission-prompt-tool stdio`. The `--permission-prompts host` flag alone is not enough: without the stdio tool the CLI denies the call and lists it in `permission_denials`, and `done` gets `finishReason: "denied"`. Each entry in `permission_denials` also lands in `result.deniedActions`. The help text lists `manual` as the mode name, not `default`, though `init` reports it as `default`.
 
+### Sandbox
+
+`sandbox: true` passes `--settings` with `{"sandbox": {"enabled": true, "failIfUnavailable": true, "allowUnsandboxedCommands": false, "autoAllowBashIfSandboxed": false}}` at every level but `none`, where no tool exists. Bash commands then run in Claude Code's sandbox, which lets them write in `cwd`, the `addDirs` folders and the CLI's own temp folder. The other settings do this:
+
+- `failIfUnavailable` stops the CLI at startup when the sandbox cannot start. Without it Claude Code shows a warning and runs commands unconfined. The run fails with an error that carries the CLI's reason from stderr.
+- `allowUnsandboxedCommands: false` makes the CLI ignore the `dangerouslyDisableSandbox` parameter, so the model cannot ask to run a command outside.
+- `autoAllowBashIfSandboxed: false` keeps every command going through the level's approvals. At `supervised` each one still reaches `onApproval`.
+
+Checked on 2.1.310. A `supervised` run whose `onApproval` allowed every command could not write `../outside.txt` ("Read-only file system"), while writes inside `cwd` and an `addDirs` folder worked. The same command was refused at `full` (`bypassPermissions`) too. The live test is in `test/sandbox-live.test.ts`.
+
+The sandbox covers Bash only. Write and Edit follow the access level: at `full` the Write tool created a file outside `cwd` with the sandbox on. The user's own settings still apply, so their `sandbox.excludedCommands` run outside the sandbox (after the level's approvals) and their `sandbox.filesystem.allowWrite` paths stay writable.
+
+On Linux the sandbox needs `bubblewrap` and `socat`. Ubuntu 24.04 blocks bubblewrap from creating user namespaces, and the run then fails with "sandbox required but unavailable" until an AppArmor profile for `/usr/bin/bwrap` allows `userns`.
+
 ## Run options
 
 `system` goes to `--system-prompt` at `none`, which replaces Claude Code's own prompt, and to `--append-system-prompt` at the other levels. Over 4 KB the text goes to a private temp file instead (`--system-prompt-file` or `--append-system-prompt-file`), which is removed after the run, because Linux refuses one argument over 128 KiB and Windows limits the whole command line to 32,767 characters. `--json-schema` takes only inline JSON, so a very large schema can still hit that limit. Images go as `image` blocks in the stream-json user message. `responseSchema` goes to `--json-schema`, and the `result` message carries the parsed answer in `structured_output`. All three were verified live on 2.1.285. A `none` run with an image and a schema used about 1,200 input tokens.
 
 ## Agent callbacks and events
 
-These features follow [Agent callbacks and events](../run-options.md#agent-callbacks-and-events). They were checked against Claude Code 2.1.310 with recorded fixtures in `test/fixtures/claude/` and the live runs described below. The capabilities are `mcpServers: ["http", "stdio"]`, `apiKey`, `plan`, `fileChanges`, `questions` and `approvalInput`.
+These features follow [Agent callbacks and events](../run-options.md#agent-callbacks-and-events). They were checked against Claude Code 2.1.310 with recorded fixtures in `test/fixtures/claude/` and the live runs described below. The capabilities are `mcpServers: ["http", "stdio"]`, `apiKey`, `plan`, `fileChanges`, `questions`, `approvalInput` and `sandbox`.
 
 ### Tool prompts
 

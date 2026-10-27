@@ -228,6 +228,12 @@ let i = 0;
 const pump = () => {
   while (i < lines.length) {
     const l = lines[i++];
+    // A line {"__stderr": text} goes to stderr instead.
+    const err = JSON.parse(l).__stderr;
+    if (err) {
+      process.stderr.write(err);
+      continue;
+    }
     process.stdout.write(l + "\\n");
     if (JSON.parse(l).type === "control_request") return;
   }
@@ -279,6 +285,18 @@ describe("claude control requests (fake CLI)", () => {
     delete process.env.CLI_FUNNEL_CLAUDE_BIN;
     delete process.env.FAKE_LOG;
     delete process.env.FAKE_FIXTURE;
+  });
+
+  it("puts the reason from stderr into an error that comes before the first turn", async () => {
+    // Recorded from Claude Code 2.1.310 with `sandbox.failIfUnavailable` on a host where bubblewrap cannot start.
+    replay([
+      { __stderr: "Error: sandbox required but unavailable: sandbox is enabled but cannot start here.\n  sandbox.failIfUnavailable is set — refusing to start without a working sandbox.\n" },
+      { type: "result", subtype: "error_during_execution", duration_ms: 0, is_error: true, num_turns: 0, session_id: "s" },
+    ]);
+    const events = await run({ selection: sel({ cwd: dir, access: "full" }), prompt: "x", sandbox: true });
+    const error = events.find((e) => e.type === "error") as { message: string };
+    expect(error.message).toMatch(/^Claude Code failed \(error_during_execution\)\. Error: sandbox required but unavailable/);
+    expect(error.message).toContain("refusing to start without a working sandbox");
   });
 
   it("round-trips a question with three options and a free-text answer", async () => {

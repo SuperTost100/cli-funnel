@@ -14,7 +14,7 @@ import {
   type QuestionRequest,
   type RunInput,
 } from "../../types.js";
-import { askApproval, askQuestion, detectInstallation, exitedEarly, findBinary, runLogout, runUpdate, spawnLogin } from "../base.js";
+import { askApproval, askQuestion, detectInstallation, exitedEarly, findBinary, runLogout, runUpdate, spawnLogin, stderrTail } from "../base.js";
 import { bool, dirList, flag, invalidOption, mcpServersFor, object, optionsFor, positive, requireAccess, str, stringList } from "../options.js";
 import { manifestModels } from "../../catalog/manifest.js";
 import { needsArgFile, writeArgFile, type ArgFile } from "../../util/argfile.js";
@@ -51,6 +51,7 @@ const capabilities: Capabilities = {
   plan: true,
   fileChanges: true,
   questions: true,
+  sandbox: true,
 };
 
 const MCP_KINDS: McpServer["type"][] = ["http", "stdio"];
@@ -61,6 +62,15 @@ const MCP_KINDS: McpServer["type"][] = ["http", "stdio"];
  * from about 21,800 input tokens to about 400.
  */
 const NO_TOOLS = ["--tools", "", "--strict-mcp-config", "--setting-sources", ""];
+
+/**
+ * `--settings` for `RunInput.sandbox`. Bash commands run in Claude Code's sandbox (bubblewrap on Linux, Seatbelt on
+ * macOS), which lets them write only in the working directories and the CLI's temp folder. `failIfUnavailable` stops
+ * the CLI at startup when the sandbox cannot start, where it would otherwise warn and run unconfined.
+ * `allowUnsandboxedCommands: false` drops the model's `dangerouslyDisableSandbox` escape, and
+ * `autoAllowBashIfSandboxed: false` keeps every command going through the access level's approvals.
+ */
+const SANDBOX_SETTINGS = { sandbox: { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, autoAllowBashIfSandboxed: false } };
 
 /** Claude Code picks the 1M context variant of a model through the `[1m]` suffix on the model id. */
 function cliModel(selection: RunInput["selection"]): string {
@@ -143,6 +153,8 @@ export function buildArgs(input: RunInput, systemFile?: string, schemaOnStdin = 
   if (input.responseSchema && !schemaOnStdin) args.push("--json-schema", JSON.stringify(input.responseSchema.schema));
   if (usesPromptTool(input)) args.push("--permission-prompt-tool", "stdio");
   if (input.sessionId) args.push("--resume", input.sessionId);
+  // `none` has no tools, so no command runs and the sandbox would only be one more thing that can fail to start.
+  if (input.sandbox && selection.access !== "none") args.push(flag("--settings", JSON.stringify(SANDBOX_SETTINGS)));
   args.push(...optionArgs(input, mcpFile));
   return args;
 }
@@ -275,7 +287,7 @@ export async function launchClaude(input: RunInput, signal?: AbortSignal): Promi
  * `onResult` runs when `result` arrives, before its events are yielded. `track` lives as long as the process.
  */
 export async function* claudeTurn(
-  proc: Pick<Streamed, "write" | "exited">,
+  proc: Pick<Streamed, "write" | "exited" | "stderr">,
   lines: AsyncIterable<unknown>,
   input: RunInput,
   forward: boolean,
@@ -298,6 +310,15 @@ export async function* claudeTurn(
         if (path) track.edits.set(e.id, { path, existed: existsSync(path) });
       }
       if (e.type === "done" || e.type === "error") state.finished = true;
+      if (e.type === "error" && !msg.result) {
+        // A run that fails before its first turn, such as a sandbox that cannot start, prints the reason on stderr.
+        await Promise.race([proc.exited, new Promise((r) => setTimeout(r, 1000).unref())]);
+        const tail = stderrTail(proc.stderr());
+        if (tail) {
+          yield { ...e, message: `${e.message} ${tail}` };
+          continue;
+        }
+      }
       yield e;
     }
     if (msg.type === "result") return;

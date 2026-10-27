@@ -118,6 +118,28 @@ describe("claude providerOptions", () => {
   });
 });
 
+describe("sandbox", () => {
+  const settings = (a: string[]) => a.find((x) => x.startsWith("--settings="));
+
+  it("turns on Claude Code's sandbox with no way around it, except at none", () => {
+    const flag = settings(claudeArgs(input("claude", "supervised", undefined, { sandbox: true })));
+    expect(JSON.parse(flag!.slice("--settings=".length))).toEqual({
+      sandbox: { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, autoAllowBashIfSandboxed: false },
+    });
+    expect(acceptedAt((a) => claudeArgs(input("claude", a, undefined, { sandbox: true })))).toEqual([...ACCESS_LEVELS]);
+    expect(settings(claudeArgs(input("claude", "none", undefined, { sandbox: true })))).toBeUndefined();
+    expect(settings(claudeArgs(input("claude", "full", undefined)))).toBeUndefined();
+  });
+
+  it("runs Cursor Agent with --sandbox=enabled at auto and refuses full, where --force skips it", () => {
+    const args = (access: AccessLevel, o?: unknown) => agentArgs(input("agent", access, o === undefined ? undefined : { agent: o }, { sandbox: true }), "m");
+    expect(args("auto")).toContain("--sandbox=enabled");
+    expect(args("auto", { sandbox: "enabled" }).filter((x) => x.startsWith("--sandbox"))).toEqual(["--sandbox=enabled"]);
+    expect(acceptedAt((a) => args(a))).toEqual(["none", "auto"]);
+    expect(args("none")).not.toContain("--sandbox=enabled");
+  });
+});
+
 describe("codex providerOptions", () => {
   const opts = (access: AccessLevel, o: unknown, extra?: Partial<RunInput>) => threadOptions(input("codex", access, { codex: o }, extra));
 

@@ -160,6 +160,7 @@ These fields are for the CLI agents. Each provider lists what it supports in `ca
 | `toolTimeoutSec` | applied | applied | refused | applied |
 | `autoApprove` | applied | applied | no effect, nothing asks | no effect, nothing asks |
 | API key | `ANTHROPIC_API_KEY` | an in-memory login | `CURSOR_API_KEY` with an in-memory credential store | `GEMINI_API_KEY` with a home folder of its own |
+| `sandbox` | every level, Claude Code's own sandbox | every level: `full` runs in `workspace-write` | `auto` only | refused |
 
 ### Approvals with a message
 
@@ -212,6 +213,23 @@ mcpServers: {
 ### API key
 
 `apiKey` runs the CLI on a vendor API key instead of the saved login, for users without a subscription: an Anthropic key for Claude Code, an OpenAI key for Codex, a Cursor key for Cursor Agent, a Gemini key for Antigravity. The saved login stays as it was, and the key never appears in events, records or logs. It needs `capabilities.apiKey`. The `session` event and `result.auth` say whether a run used the account login (`account`) or a key (`api-key`), when the provider reports it.
+
+### Sandbox
+
+`sandbox: true` runs the agent's shell commands in the CLI's own sandbox, so a command can write only inside `cwd`, `addDirs` and the temp folders the CLI allows. Use it at `supervised` and up when the caller's `onApproval` checks file paths but cannot tell what a shell command writes, as with `printf x > ../outside.txt`. A run whose sandbox cannot start fails with the CLI's reason instead of running without it. Over HTTP, send `"sandbox": true` in the `/run` body.
+
+| Provider | Levels | What it does |
+| --- | --- | --- |
+| Claude Code | every level | turns on Claude Code's sandbox (bubblewrap on Linux, Seatbelt on macOS) with no unsandboxed fallback |
+| Codex | every level | below `full` commands already run in `workspace-write` or `read-only`. At `full` the run uses `workspace-write` instead of `danger-full-access` |
+| Cursor Agent | `auto` | passes `--sandbox=enabled`. At `full` it is refused, because `--force` runs commands outside the sandbox |
+| Antigravity | none | refused with `unsupported`: `--sandbox` did not stop a write outside the workspace |
+
+It needs `capabilities.sandbox`. At `none` it has no effect, since no command runs. Providers without machine access (Ollama, the API providers, OpenAI-compatible servers) accept it, since they run no commands at all.
+
+The sandbox covers shell commands. File tools follow the access level as before: at `full` Claude Code's Write tool still wrote outside `cwd` with the sandbox on. Each CLI's sandbox may also limit network access from commands, and that follows the CLI's own defaults. The provider pages list what each one allows.
+
+On Linux, Claude Code needs `bubblewrap` and `socat`, and Cursor Agent ships its own helper. Ubuntu 24.04 blocks both from creating user namespaces until an AppArmor profile allows it, so check that the sandbox starts where you run it.
 
 ## Provider options
 

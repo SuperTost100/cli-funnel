@@ -28,7 +28,8 @@ async function threadSettings(path: string, input: RunInput, agent: Record<strin
     cwd: sel.cwd,
     approvalPolicy: extra.approvalPolicy ?? plan.approvalPolicy,
     approvalsReviewer: plan.approvalsReviewer,
-    sandbox: plan.sandbox,
+    // Below `full` commands already run in `workspace-write` or `read-only`. `sandbox` keeps `full` in it too.
+    sandbox: input.sandbox && plan.sandbox === "danger-full-access" ? "workspace-write" : plan.sandbox,
     ...(sel.fast ? { serviceTier: "priority" } : {}),
     ...(input.system ? { developerInstructions: input.system } : {}),
     ...(Object.keys(config).length ? { config } : {}),

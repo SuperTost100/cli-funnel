@@ -77,6 +77,8 @@ export interface Capabilities {
   questions?: boolean;
   /** True when an approval reply can change the tool input with `updatedInput`. */
   approvalInput?: boolean;
+  /** True when the CLI can run the agent's commands in a sandbox for `RunInput.sandbox`. */
+  sandbox?: boolean;
 }
 
 /** Progress of `pullModel`. The stream ends after `done` or `error`. */
@@ -540,6 +542,13 @@ export interface RunInput {
    * providers whose agent always has a plan tool.
    */
   planTool?: boolean;
+  /**
+   * Runs the agent's shell commands in the CLI's own sandbox, so a command can write only inside `cwd`, `addDirs` and
+   * the temp folders the CLI allows. A run whose sandbox cannot start fails instead of running without it. Needs
+   * `capabilities.sandbox`, and some providers support it only at some access levels (see docs/run-options.md). No
+   * effect at `none`, where no command runs. Providers without machine access accept it, since they run no commands.
+   */
+  sandbox?: boolean;
   /**
    * A vendor API key the CLI runs on instead of the saved login: an Anthropic key for Claude Code, an OpenAI key for
    * Codex, a Cursor key for Cursor Agent, a Gemini key for Antigravity. The saved login stays as it was. Needs

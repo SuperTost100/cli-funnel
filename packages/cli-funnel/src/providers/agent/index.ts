@@ -98,7 +98,11 @@ function optionArgs(input: RunInput): string[] {
   }
   const sandbox = oneOf(o.sandbox, "sandbox", ["enabled", "disabled"] as const);
   if (sandbox === "disabled") requireAccess(access, ["full"], 'sandbox "disabled"');
-  if (sandbox) args.push(flag("--sandbox", sandbox));
+  if (input.sandbox && access !== "none") {
+    // `--force` runs commands outside the sandbox even with `--sandbox enabled`: on 2026.10.22 a write to `../` worked.
+    requireAccess(access, ["auto"], "sandbox");
+    args.push(flag("--sandbox", "enabled"));
+  } else if (sandbox) args.push(flag("--sandbox", sandbox));
   if (oneOf(o.mode, "mode", ["plan"] as const)) {
     // Not tested: whether plan mode can write its plan outside the empty `none` folder. `none` keeps ask mode.
     requireAccess(access, ["auto", "full"], 'mode "plan"');
@@ -193,6 +197,7 @@ export const agentProvider: Provider = {
     mcpServers: ["http", "stdio"],
     plan: true,
     fileChanges: true,
+    sandbox: true,
   },
   detect: () => detectInstallation(BINARY, TESTED_RANGE),
   authStatus,

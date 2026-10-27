@@ -17,6 +17,7 @@ Provider id `agent`. Spawns the official `agent` binary in print mode, writes th
 | plan | yes |
 | fileChanges | yes |
 | questions | no |
+| sandbox | `auto` only |
 
 ## Command line
 
@@ -93,7 +94,15 @@ The CLI has no system prompt or schema flag. `system` goes in front of the promp
 | `sandbox: "enabled" \| "disabled"` | `--sandbox=<value>` | `enabled` at all levels, `disabled` at `full` only |
 | `mode: "plan"` | `--mode plan` | `auto`, `full` |
 
-`none` refuses `mode: "plan"` and keeps `--mode ask`. Nobody has tested whether plan mode can write its plan file outside the empty `none` folder. On this machine `--sandbox enabled` failed to start because of the AppArmor setup, so check that the sandbox works where you run it.
+`none` refuses `mode: "plan"` and keeps `--mode ask`. Nobody has tested whether plan mode can write its plan file outside the empty `none` folder.
+
+### Sandbox
+
+`sandbox: true` passes `--sandbox=enabled` at `auto`. Checked on 2026.10.22: at `auto` the command `printf x > ../outside.txt` failed with "Permission denied" and a write inside `cwd` worked. The sandbox lets commands write in `/tmp`.
+
+At `full`, `--force` runs commands outside the sandbox: with `--force --sandbox=enabled` the same command wrote the file. So `sandbox: true` is refused at `full` with `invalid-selection`, and `providerOptions.agent.sandbox: "enabled"` there does not confine commands either. At `none` it has no effect, since the deny rules already refuse every command.
+
+The sandbox fails to start when the host blocks user namespaces, as Ubuntu 24.04 does. The CLI then exits with "Sandbox mode is enabled but not available on this system" instead of running unconfined. An AppArmor profile that allows `userns` for the helper at `~/.local/share/cursor-agent/versions/*/cursorsandbox` fixes it.
 
 ## API key
 
