@@ -20,10 +20,10 @@ Protocol flow:
 | `turn/plan/updated` | `plan` |
 | `item/completed` for a `fileChange` | one `file.change` per changed file, then `tool.end` |
 | `item/tool/requestUserInput` | `question.request`, then the answers to the server |
-| `item/agentMessage/delta` | `text.delta`, or `reasoning.delta` when the message's `phase` (from `item/started`) is `commentary` |
+| `item/agentMessage/delta` | `text.delta`. This includes the short notes Codex writes between tool calls (`phase: "commentary"`). |
 | `item/reasoning/summaryTextDelta`, `item/reasoning/textDelta` | `reasoning.delta` |
 | `item/started` and `item/completed` for `commandExecution`, `fileChange`, `mcpToolCall`, `dynamicToolCall`, `webSearch`, `imageView`, `collabAgentToolCall` | `tool.start`, `tool.end` |
-| `item/completed` for an `agentMessage` | the text joins the answer unless its `phase` is `commentary` |
+| `item/completed` for an `agentMessage` | the text becomes `result.text`, unless its `phase` is `commentary`. Commentary is streamed as `text.delta` but is not part of `result.text`. |
 | `item/commandExecution/requestApproval`, `item/fileChange/requestApproval`, `mcpServer/elicitation/request` | `approval.request`, then the reply to the server |
 | `thread/tokenUsage/updated` | `usage` (sum of the per-call `last` breakdown, so a resumed thread reports only this turn) |
 | `turn/completed` | `done` (`cancelled` when interrupted) or `error` when the turn failed |
