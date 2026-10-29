@@ -84,8 +84,6 @@ export class Translator {
   /** MCP tool calls in flight, by item id. Codex asks to approve a call after its `item/started`, and calls can overlap. */
   readonly mcpCalls = new Map<string, McpCall>();
   private messages: string[] = [];
-  /** Message phase by item id, from `item/started`. Deltas carry only the item id. */
-  private phases = new Map<string, string | null>();
   private usage: Usage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, totalTokens: 0 };
   /** Codex sends a rate-limit snapshot after every turn. A reached limit is reported once per run. */
   private limitReported = false;
@@ -100,9 +98,9 @@ export class Translator {
     if (p.threadId && p.threadId !== this.threadId) return { events: [] };
     switch (method) {
       case "item/agentMessage/delta":
-        // Commentary is progress narration, not the answer. It goes to the reasoning stream so it never reaches
-        // `text` or the structured-output parse. A delta for an item we never saw start counts as answer text.
-        return { events: [{ type: this.phases.get(p.itemId) === "commentary" ? "reasoning.delta" : "text.delta", text: p.delta }] };
+        // Commentary is a note to the user between tool calls, the same as Claude Code's text between tool calls, so it
+        // streams as text. It stays out of `done.text` (see itemCompleted), which holds only the final message.
+        return { events: [{ type: "text.delta", text: p.delta }] };
       case "item/reasoning/summaryTextDelta":
       case "item/reasoning/textDelta":
         return { events: [{ type: "reasoning.delta", text: p.delta }] };
@@ -142,9 +140,6 @@ export class Translator {
 
   private itemStarted(item: Params): FunnelEvent[] {
     switch (item?.type) {
-      case "agentMessage":
-        this.phases.set(item.id, item.phase ?? null);
-        return [];
       case "commandExecution":
         return [{ type: "tool.start", id: item.id, name: "command", input: { command: item.command, cwd: item.cwd } }];
       case "fileChange":
@@ -169,7 +164,8 @@ export class Translator {
   private itemCompleted(item: Params): FunnelEvent[] {
     switch (item?.type) {
       case "agentMessage":
-        // Only the final answer, or a message from an older Codex that sets no phase, is answer text.
+        // Only the final answer, or a message from an older Codex that sets no phase, is result text. Commentary
+        // already streamed as text.delta.
         if (item.text && item.phase !== "commentary") this.messages.push(item.text);
         return [];
       case "commandExecution": {

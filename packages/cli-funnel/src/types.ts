@@ -313,7 +313,12 @@ export type FunnelEvent =
   | { type: "queue.position"; ahead: number }
   /** `auth` says how the CLI signed in for this run, when the provider knows: the saved account login or an API key. */
   | { type: "session"; sessionId: string; model?: string; auth?: "account" | "api-key" }
+  /**
+   * Text the agent writes to the user. On Claude Code and Codex this includes the short notes between tool calls
+   * ("I'll read the notes first"), so a stream can hold several messages. `RunResult.text` is the final message only.
+   */
   | { type: "text.delta"; text: string }
+  /** The model's thinking, not text for the user. */
   | { type: "reasoning.delta"; text: string }
   /** A CLI agent started one of its own tools, such as a shell command or a file edit. */
   | { type: "tool.start"; id: string; name: string; input?: unknown }

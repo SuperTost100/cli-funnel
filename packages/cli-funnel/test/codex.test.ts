@@ -53,14 +53,18 @@ describe("codex events", () => {
     expect(usage.usage.totalTokens).toBe(19245 + 19273);
   });
 
-  it("keeps commentary out of the answer and the text stream", () => {
+  it("streams commentary as text but keeps it out of the final text", () => {
     const { events } = replay("commentary.ndjson");
     const done = events.at(-1) as Extract<FunnelEvent, { type: "done" }>;
     expect(done.text).toBe('{"ok":true}');
-    const streamed = events.filter((e) => e.type === "text.delta").map((e) => (e as { text: string }).text).join("");
-    expect(streamed).toBe(done.text);
-    const reasoning = events.filter((e) => e.type === "reasoning.delta").map((e) => (e as { text: string }).text).join("");
-    expect(reasoning).toBe("Let me think.");
+    const streamed = events.filter((e) => e.type === "text.delta").map((e) => (e as { text: string }).text);
+    expect(streamed).toEqual(["Let me ", "think.", '{"ok":', "true}"]);
+    expect(events.some((e) => e.type === "reasoning.delta")).toBe(false);
+  });
+
+  it("still sends real reasoning as reasoning.delta", () => {
+    const t = new Translator("a");
+    expect(t.handle("item/reasoning/summaryTextDelta", { threadId: "a", itemId: "r", delta: "hmm" }).events).toEqual([{ type: "reasoning.delta", text: "hmm" }]);
   });
 
   it("treats a message without a phase as answer text", () => {

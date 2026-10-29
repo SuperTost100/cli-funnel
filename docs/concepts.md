@@ -14,7 +14,7 @@ A **provider** wraps one CLI. It knows the binary name, how to build flags from 
 
 A **selection** is one plain object with everything a user chooses: provider, model, reasoning effort, context window, fast mode, project folder and access level. Your UI produces it. You can also write it by hand and hardcode it. See [Selection](selection.md).
 
-An **event** is one step of a run: `session`, `text.delta`, `reasoning.delta`, `tool.start`, `tool.end`, `approval.request`, `question.request`, `plan`, `file.change`, `usage`, `retry`, `limit`, `done`, `error`. Every provider emits the same event shapes. `plan`, `file.change` and `question.request` come only from providers whose `capabilities` list them. A run that waits for a slot under `maxConcurrentRuns` also gets `queue.position`.
+An **event** is one step of a run: `session`, `text.delta`, `reasoning.delta`, `tool.start`, `tool.end`, `approval.request`, `question.request`, `plan`, `file.change`, `usage`, `retry`, `limit`, `done`, `error`. Every provider emits the same event shapes. `text.delta` carries everything the agent says to the user, including the short notes it writes between tool calls, on Claude Code and Codex alike. The final answer is `result.text`. `reasoning.delta` is only the model's thinking. `plan`, `file.change` and `question.request` come only from providers whose `capabilities` list them. A run that waits for a slot under `maxConcurrentRuns` also gets `queue.position`.
 
 A **result** is what `funnel.run()` resolves to once the events are folded together. It is shaped like an API response.
 
