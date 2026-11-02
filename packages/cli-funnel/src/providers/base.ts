@@ -260,11 +260,12 @@ export class RawTap {
     private readonly input: RunInput,
     proc: Pick<Streamed, "onStderr">,
   ) {
+    // The lines come with the run's secrets already masked, so dropping one never leaves part of a secret behind.
     this.off = proc.onStderr((line) => {
       this.pending.push(line);
       this.pendingSize += line.length;
       while (this.pendingSize > PENDING_STDERR_MAX && this.pending.length > 1) this.pendingSize -= this.pending.shift()!.length;
-    });
+    }, runSecrets(input));
   }
 
   /** Events for the stderr lines seen so far, then for the stdout `line` when there is one. */

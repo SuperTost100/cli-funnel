@@ -110,6 +110,30 @@ setInterval(() => {}, 1000);`,
     expect(lines.map((l) => l.length)).toEqual([STDERR_LINE_MAX, 70_000 - STDERR_LINE_MAX, 3]);
   });
 
+  describe("a secret across the STDERR_LINE_MAX boundary", () => {
+    const secret = "sk-test-straddle-0123456789";
+    const pad = STDERR_LINE_MAX - 10;
+    const rawStderr = async (body: string) => {
+      const proc = spawnStream(script(body), []);
+      const tap = new RawTap("claude", { selection: { provider: "claude", model: "m" }, prompt: "x", apiKey: secret }, proc);
+      await proc.exited;
+      return tap.events().map((e) => (e as { data: string }).data);
+    };
+
+    it("is masked whole in a complete line", async () => {
+      const pieces = await rawStderr(`head -c ${pad} /dev/zero | tr '\\0' x >&2; printf '${secret}\\n' >&2`);
+      expect(pieces.join("")).toBe("x".repeat(pad) + "[redacted]");
+      expect(pieces.join("\n")).not.toMatch(/0123456789|sk-test/);
+    });
+
+    it("is masked whole in a long line that arrives in parts", async () => {
+      const pieces = await rawStderr(`head -c ${pad} /dev/zero | tr '\\0' x >&2; printf 'sk-test-str' >&2; sleep 0.2; printf 'addle-0123456789 end' >&2; sleep 0.2; head -c ${STDERR_LINE_MAX} /dev/zero | tr '\\0' y >&2; printf '\\n' >&2`);
+      expect(pieces.join("")).toBe("x".repeat(pad) + "[redacted] end" + "y".repeat(STDERR_LINE_MAX));
+      expect(pieces.join("\n")).not.toMatch(/0123456789|sk-test/);
+      expect(Math.max(...pieces.map((p) => p.length))).toBeLessThanOrEqual(STDERR_LINE_MAX);
+    });
+  });
+
   it("keeps at most PENDING_STDERR_MAX of stderr waiting in a raw tap, dropping the oldest lines", () => {
     let listener!: (line: string) => void;
     const tap = new RawTap("claude", { selection: { provider: "claude", model: "m" }, prompt: "x" }, { onStderr: (l) => ((listener = l), () => undefined) });

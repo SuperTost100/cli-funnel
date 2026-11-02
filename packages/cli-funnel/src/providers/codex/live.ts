@@ -2,7 +2,7 @@ import { FunnelError, type ApprovalDecision, type ApprovalRequest, type FunnelEv
 import { requireMachine } from "../../selection.js";
 import { Channel } from "../../util/channel.js";
 import { spawnStream } from "../../util/process.js";
-import { redactErrors } from "../../util/redact.js";
+import { redactErrors, runSecrets } from "../../util/redact.js";
 import { askApproval, askQuestion, findBinary, rawEvent, SETTLE_MS, stderrTail } from "../base.js";
 import { planAccess } from "./access.js";
 import { denyNote, effectiveReply, isQuestion, toApprovalRequest, toQuestionReply, toQuestionRequest, toReply, type Reply, type ServerRequest } from "./approvals.js";
@@ -303,7 +303,7 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
     // The process outlives the turn, so stderr goes to this turn only while it runs, up to its terminal event: the
     // channel drops what comes after it ends. Events are pushed as they come, so stderr keeps its place among the
     // stdout lines.
-    const offStderr = input.verbose ? proc.onStderr((line) => emit(t, rawEvent("codex", "stderr", line, input))) : undefined;
+    const offStderr = input.verbose ? proc.onStderr((line) => emit(t, rawEvent("codex", "stderr", line, input)), runSecrets(input)) : undefined;
     if (exited || closed) finish(t, [{ type: "error", message: "Codex app-server is not running.", code: "cli-failed" }]);
 
     const signal = input.signal;

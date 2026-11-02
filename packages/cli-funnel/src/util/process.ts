@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { delimiter, join, win32 } from "node:path";
 import { Channel } from "./channel.js";
 import { parseLine } from "./ndjson.js";
+import { mask } from "./redact.js";
 
 const EXTRA_DIRS = [
   join(homedir(), ".local", "bin"),
@@ -250,9 +251,10 @@ export interface Streamed {
   stderr(): string;
   /**
    * Calls `listener` with each line of stderr from now on, without the line break. A last line with no line break comes
-   * when the process exits. Returns a function that stops the calls.
+   * when the process exits. A line longer than STDERR_LINE_MAX comes in pieces. `secrets` are masked in each whole line
+   * before it is cut, so no piece holds part of one. Returns a function that stops the calls.
    */
-  onStderr(listener: (line: string) => void): () => void;
+  onStderr(listener: (line: string) => void, secrets?: string[]): () => void;
   /** Resolves when the process exits. */
   exited: Promise<number | null>;
   write(line: string): void;
@@ -272,6 +274,47 @@ export const STDERR_KEEP = 16_384;
 /** The longest stderr line handed to `onStderr` listeners. A longer one, such as a progress bar redrawn with `\r`, arrives in pieces. */
 export const STDERR_LINE_MAX = 65_536;
 
+/** One `onStderr` listener: its secrets, and the line it has not seen the end of yet. */
+interface StderrListener {
+  call(line: string): void;
+  secrets: string[];
+  /** One less than the longest secret: the part of an unfinished line that may hold the start of one. */
+  hold: number;
+  partial: string;
+}
+
+const stderrListener = (call: (line: string) => void, secrets: string[]): StderrListener => {
+  const kept = secrets.filter(Boolean);
+  const longest = Math.max(0, ...kept.map((x) => x.length));
+  return { call, secrets: kept, hold: Math.min(Math.max(0, longest - 1), STDERR_LINE_MAX / 2), partial: "" };
+};
+
+/** Hands one whole stderr line to a listener: the secrets masked first, then cut into STDERR_LINE_MAX pieces. */
+function stderrLine(l: StderrListener, line: string): void {
+  const text = mask(line.endsWith("\r") ? line.slice(0, -1) : line, l.secrets) as string;
+  for (let i = 0; i < text.length || i === 0; i += STDERR_LINE_MAX) l.call(text.slice(i, i + STDERR_LINE_MAX));
+}
+
+/**
+ * Adds one stderr chunk for a listener. An unfinished line over STDERR_LINE_MAX goes out in part, with its secrets
+ * masked. A secret that is not complete yet can only start in the last `hold` characters, so those stay back.
+ */
+function stderrData(l: StderrListener, chunk: string): void {
+  const parts = (l.partial + chunk).split("\n");
+  l.partial = parts.pop()!;
+  for (const line of parts) stderrLine(l, line);
+  while (l.partial.length > STDERR_LINE_MAX) {
+    const masked = mask(l.partial, l.secrets) as string;
+    if (masked.length <= STDERR_LINE_MAX) {
+      l.partial = masked;
+      break;
+    }
+    const cut = Math.min(STDERR_LINE_MAX, masked.length - l.hold);
+    l.call(masked.slice(0, cut));
+    l.partial = masked.slice(cut);
+  }
+}
+
 /** Spawns a CLI and exposes stdout as an NDJSON stream. Aborting the signal stops it with `terminate`. */
 export function spawnStream(
   file: string,
@@ -282,16 +325,9 @@ export function spawnStream(
   const channel = new Channel<unknown>();
   let buffer = "";
   let stderr = "";
-  // Lines are split only while someone listens, so a run without a listener pays nothing.
-  const stderrListeners = new Set<(line: string) => void>();
-  let stderrPartial = "";
-  const emitStderr = (line: string) => {
-    const text = line.endsWith("\r") ? line.slice(0, -1) : line;
-    for (let i = 0; i < text.length || i === 0; i += STDERR_LINE_MAX) {
-      const piece = text.slice(i, i + STDERR_LINE_MAX);
-      for (const l of stderrListeners) l(piece);
-    }
-  };
+  // Lines are split only while someone listens, so a run without a listener pays nothing. Each listener has its own
+  // secrets, so each keeps its own unfinished line.
+  const stderrListeners = new Set<StderrListener>();
 
   const flush = (line: string) => {
     const parsed = parseLine(line);
@@ -310,14 +346,7 @@ export function spawnStream(
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (d: string) => {
     stderr = (stderr + d).slice(-STDERR_KEEP);
-    if (!stderrListeners.size) return;
-    const parts = (stderrPartial + d).split("\n");
-    stderrPartial = parts.pop()!;
-    for (const line of parts) emitStderr(line);
-    while (stderrPartial.length > STDERR_LINE_MAX) {
-      emitStderr(stderrPartial.slice(0, STDERR_LINE_MAX));
-      stderrPartial = stderrPartial.slice(STDERR_LINE_MAX);
-    }
+    for (const l of stderrListeners) stderrData(l, d);
   });
 
   const exited = new Promise<number | null>((resolve) => {
@@ -328,8 +357,10 @@ export function spawnStream(
     });
     child.on("close", (code) => {
       release();
-      if (stderrPartial) emitStderr(stderrPartial);
-      stderrPartial = "";
+      for (const l of stderrListeners) {
+        if (l.partial) stderrLine(l, l.partial);
+        l.partial = "";
+      }
       flush(buffer);
       buffer = "";
       channel.end();
@@ -344,12 +375,10 @@ export function spawnStream(
     child,
     lines: channel,
     stderr: () => stderr,
-    onStderr: (listener) => {
-      stderrListeners.add(listener);
-      return () => {
-        stderrListeners.delete(listener);
-        if (!stderrListeners.size) stderrPartial = "";
-      };
+    onStderr: (listener, secrets = []) => {
+      const entry = stderrListener(listener, secrets);
+      stderrListeners.add(entry);
+      return () => stderrListeners.delete(entry);
     },
     exited,
     write: (line) => child.stdin.write(line.endsWith("\n") ? line : line + "\n"),
