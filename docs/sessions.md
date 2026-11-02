@@ -140,6 +140,8 @@ The browser client has `client.sessions()`, `client.steer(sessionId, text, provi
 
 ## Subagents
 
+Claude Code, Codex, Cursor Agent and Antigravity can each hand part of a task to a subagent. The call that starts one is a normal `tool.start` and `tool.end` of the run. What the subagent does inside is off by default, and two provider options bring it in: `forwardSubagentText` for its messages as `subagent.text`, and `forwardSubagentTools` for its tool calls as `tool.start` and `tool.end` with `parentId`. Each CLI reports a different amount, as the [table in Run options](run-options.md#verbose-and-subagents-by-provider) shows. The rest of this section uses Claude Code, which reports the most.
+
 Claude Code runs subagents for the `Agent` tool. By default their messages stay out of the stream. Set `providerOptions.claude.forwardSubagentText` to pass `--forward-subagent-text`, and each text block a subagent writes arrives as a `subagent.text` event:
 
 ```ts
@@ -162,3 +164,5 @@ for await (const e of funnel.stream({ selection, prompt, providerOptions })) {
 ```
 
 A subagent's calls do not count as the run's own: they are not in `result.toolCalls`, its edits produce no `file.change`, and its plan tools do not change `plan`. The two options work on their own or together.
+
+On Codex the same options go in `providerOptions.codex`, and `parentId` is the id of the `agent:spawnAgent` call. On Cursor Agent, `providerOptions.agent.forwardSubagentText` sends the Task subagent's messages when its `task` call ends. The provider pages say what each CLI sends.

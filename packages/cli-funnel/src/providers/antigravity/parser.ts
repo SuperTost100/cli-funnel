@@ -200,7 +200,8 @@ export function createMapper(options: MapperOptions = {}) {
         if (s.step_type === "agent_response") {
           return s.text_delta ? [{ type: "text.delta", text: s.text_delta }] : [];
         }
-        if (s.step_type !== "tool") return [];
+        // A subagent call starts as a `tool` step and ends as a `subagent` step with the same index.
+        if (s.step_type !== "tool" && s.step_type !== "subagent") return [];
         const id = `${s.conversation_id}:${s.step_index}`;
         const name = s.tool_name ?? s.tool_info?.name ?? "tool";
         const events: FunnelEvent[] = [];
@@ -208,7 +209,16 @@ export function createMapper(options: MapperOptions = {}) {
           started.add(id);
           events.push({ type: "tool.start", id, name, input: s.tool_info?.parameters });
         }
-        if (s.state === "DONE") {
+        if (s.state === "DONE" && s.step_type === "subagent") {
+          // The subagents' own steps go to their conversations, not to this stream. The end names them.
+          const subagents = (Array.isArray(s.subagent_info?.subagents) ? s.subagent_info.subagents : []).map((a: Json) => ({
+            type: a?.type_name,
+            role: a?.role,
+            prompt: a?.initial_prompt,
+            conversationId: a?.conversation_id,
+          }));
+          events.push({ type: "tool.end", id, output: JSON.stringify(subagents) });
+        } else if (s.state === "DONE") {
           events.push({ type: "tool.end", id });
           events.push(...changes(s, id, name, "done"));
         }

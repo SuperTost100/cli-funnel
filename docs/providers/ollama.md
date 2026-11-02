@@ -131,6 +131,10 @@ npx cli-funnel rm ollama llama3.2:3b
 
 Pulling uses disk space and bandwidth on the machine that runs the server, and deleting cannot be undone. Ask the user before doing either.
 
+## Subagents
+
+There are none: the server answers one request and runs no agent, so `forwardSubagentTools` and `forwardSubagentText` have nothing to forward. Like every provider, it sends `raw` events with `verbose`, one for the response and one per body chunk. See [Verbose output](../run-options.md#verbose-output).
+
 ## Sign-in and update
 
 There is nothing to sign in to. `authStatus()` is signed in when `/api/tags` answers, and signed out with a reason when the server refuses (401 or 403) or does not answer. `login()` and `logout()` say so. `update()` changes nothing: update Ollama with its own installer.

@@ -71,6 +71,21 @@ export interface McpCall {
   arguments: unknown;
 }
 
+/** Which subagent work to turn into events. Both default to off. */
+export interface ForwardSubagents {
+  text?: boolean;
+  tools?: boolean;
+}
+
+/** The subagent a thread belongs to: the id of the item that started it, and its name when Codex gives one. */
+interface Subagent {
+  parentId: string;
+  agent?: string;
+}
+
+/** The last part of a subagent's `agentPath`, such as `list_files` for `/root/list_files`. */
+const agentName = (path: unknown): string | undefined => (typeof path === "string" ? path.split("/").filter(Boolean).at(-1) : undefined);
+
 export interface Translated {
   events: FunnelEvent[];
   /** Set when the turn is over. */
@@ -87,15 +102,22 @@ export class Translator {
   private usage: Usage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, totalTokens: 0 };
   /** Codex sends a rate-limit snapshot after every turn. A reached limit is reported once per run. */
   private limitReported = false;
+  /** Subagent threads by thread id. Their notifications carry their own thread id. */
+  private readonly subagents = new Map<string, Subagent>();
 
-  /** `cwd` is the thread's working directory, for file change paths that are not absolute. */
+  /**
+   * `cwd` is the thread's working directory, for file change paths that are not absolute. `forward` picks the subagent
+   * work that becomes events: their tool calls as `tool.start` and `tool.end` with `parentId`, and their messages as
+   * `subagent.text`.
+   */
   constructor(
     private threadId: string,
     private cwd: string = process.cwd(),
+    private readonly forward: ForwardSubagents = {},
   ) {}
 
   handle(method: string, p: Params = {}): Translated {
-    if (p.threadId && p.threadId !== this.threadId) return { events: [] };
+    if (p.threadId && p.threadId !== this.threadId) return { events: this.fromSubagent(method, p) };
     switch (method) {
       case "item/agentMessage/delta":
         // Commentary is a note to the user between tool calls, the same as Claude Code's text between tool calls, so it
@@ -138,7 +160,35 @@ export class Translator {
     }
   }
 
+  /**
+   * A notification from another thread. Only the threads of this thread's subagents count, and only their items: their
+   * turns, usage and messages never end or change this turn. Their file changes and plans are left out too, so they
+   * do not count as the run's own.
+   */
+  private fromSubagent(method: string, p: Params): FunnelEvent[] {
+    const sub = this.subagents.get(p.threadId);
+    if (!sub || (method !== "item/started" && method !== "item/completed")) return [];
+    const tag = <E extends FunnelEvent>(e: E): E => ({ ...e, parentId: sub.parentId, ...(sub.agent ? { agent: sub.agent } : {}) });
+    if (method === "item/started") return this.forward.tools ? this.itemStarted(p.item).filter((e) => e.type === "tool.start").map(tag) : [];
+    if (p.item?.type === "agentMessage") {
+      return this.forward.text && p.item.text ? [{ type: "subagent.text", parentId: sub.parentId, text: String(p.item.text), ...(sub.agent ? { agent: sub.agent } : {}) }] : [];
+    }
+    return this.forward.tools ? this.itemCompleted(p.item).filter((e) => e.type === "tool.end").map(tag) : [];
+  }
+
+  /** Remembers which item started a subagent thread, so the thread's items can name it as their parent. */
+  private trackSubagent(item: Params): void {
+    if (item?.type === "subAgentActivity" && item.kind === "started" && typeof item.agentThreadId === "string") {
+      this.subagents.set(item.agentThreadId, { parentId: String(item.id), ...(agentName(item.agentPath) ? { agent: agentName(item.agentPath) } : {}) });
+    }
+    // Codex before 0.166 named the new threads in a `spawnAgent` collab call once it completed.
+    if (item?.type === "collabAgentToolCall" && item.tool === "spawnAgent" && Array.isArray(item.receiverThreadIds)) {
+      for (const thread of item.receiverThreadIds) if (typeof thread === "string") this.subagents.set(thread, { parentId: String(item.id) });
+    }
+  }
+
   private itemStarted(item: Params): FunnelEvent[] {
+    this.trackSubagent(item);
     switch (item?.type) {
       case "commandExecution":
         return [{ type: "tool.start", id: item.id, name: "command", input: { command: item.command, cwd: item.cwd } }];
@@ -156,12 +206,17 @@ export class Translator {
         return [{ type: "tool.start", id: item.id, name: "image_view", input: { path: item.path } }];
       case "collabAgentToolCall":
         return [{ type: "tool.start", id: item.id, name: `agent:${item.tool}`, input: { prompt: item.prompt ?? undefined, model: item.model ?? undefined, receiverThreadIds: item.receiverThreadIds } }];
+      case "subAgentActivity":
+        // Codex 0.166 reports a spawned subagent this way. A `completed` activity says it finished: nothing to start.
+        if (item.kind !== "started") return [];
+        return [{ type: "tool.start", id: item.id, name: "agent:spawnAgent", input: { agent: item.agentPath ?? undefined, model: item.model ?? undefined, threadId: item.agentThreadId } }];
       default:
         return [];
     }
   }
 
   private itemCompleted(item: Params): FunnelEvent[] {
+    this.trackSubagent(item);
     switch (item?.type) {
       case "agentMessage":
         // Only the final answer, or a message from an older Codex that sets no phase, is result text. Commentary
@@ -195,6 +250,8 @@ export class Translator {
         const bad = item.status === "failed" || item.status === "interrupted";
         return [{ type: "tool.end", id: item.id, error: bad ? `Agent call ${item.status}` : undefined }];
       }
+      case "subAgentActivity":
+        return item.kind === "started" ? [{ type: "tool.end", id: item.id }] : [];
       default:
         return [];
     }

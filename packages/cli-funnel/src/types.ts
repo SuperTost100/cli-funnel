@@ -308,6 +308,9 @@ export interface Limit {
   detail: string;
 }
 
+/** Where a `raw` event came from: a CLI's stdout or stderr, an HTTP response's status and headers, or a body chunk. */
+export type RawSource = "stdout" | "stderr" | "response" | "http";
+
 export type FunnelEvent =
   /** The run waits for a slot under `maxConcurrentRuns`. `ahead` is the number of runs waiting before it. */
   | { type: "queue.position"; ahead: number }
@@ -322,8 +325,8 @@ export type FunnelEvent =
   | { type: "reasoning.delta"; text: string }
   /**
    * A CLI agent started one of its own tools, such as a shell command or a file edit. `parentId` is set on a tool call
-   * a subagent made, when `providerOptions.claude.forwardSubagentTools` is on: it is the id of the tool call that
-   * started the subagent, so it matches that call's `tool.start`. `agent` is the subagent's type, when the CLI names it.
+   * a subagent made, when the provider's `forwardSubagentTools` option is on (Claude Code, Codex): it is the id of the
+   * tool call that started the subagent, so it matches that call's `tool.start`. `agent` is the subagent's type, when the CLI names it.
    * Subagent calls are not in `RunResult.toolCalls`.
    */
   | { type: "tool.start"; id: string; name: string; input?: unknown; parentId?: string; agent?: string }
@@ -343,9 +346,9 @@ export type FunnelEvent =
   | ({ type: "file.change" } & FileChange)
   | { type: "usage"; usage: Usage }
   /**
-   * Text a subagent wrote, when `providerOptions.claude.forwardSubagentText` is on. `parentId` is the id of the tool
-   * call that started the subagent, so it matches the `tool.start` of that call. It is never part of the run's answer
-   * text, and it arrives as whole messages, not as deltas.
+   * Text a subagent wrote, when the provider's `forwardSubagentText` option is on (Claude Code, Codex, Cursor Agent).
+   * `parentId` is the id of the tool call that started the subagent, so it matches the `tool.start` of that call. It is
+   * never part of the run's answer text, and it arrives as whole messages, not as deltas.
    */
   | { type: "subagent.text"; parentId: string; text: string; agent?: string }
   /** The provider hit or reported a limit. An `error` event usually follows when the run could not finish. */
@@ -355,12 +358,14 @@ export type FunnelEvent =
   /** The parsed answer when the provider reports structured output itself. */
   | { type: "structured"; data: unknown }
   /**
-   * One line the CLI printed, when `RunInput.verbose` is on. `source: "stdout"` carries the parsed JSON object, or the
-   * line as a string when it was not JSON. `source: "stderr"` carries the line as a string. The run's own secrets are
-   * masked. Raw lines can hold anything the CLI prints, such as file contents or the signed-in account, so treat them
-   * like a debug log.
+   * What the provider received, when `RunInput.verbose` is on. CLI providers send one per line the CLI printed:
+   * `source: "stdout"` carries the parsed JSON object, or the line as a string when it was not JSON, and
+   * `source: "stderr"` the line as a string. HTTP providers send `source: "response"` with `{ status, headers }` for each
+   * response, then `source: "http"` with each parsed SSE or NDJSON chunk of the body, or the string when it is not
+   * JSON. The run's own secrets, the provider's key and its credential headers are masked. Raw data can hold anything
+   * the CLI or server sends, such as file contents or the signed-in account, so treat it like a debug log.
    */
-  | { type: "raw"; provider: ProviderId; source: "stdout" | "stderr"; data: unknown }
+  | { type: "raw"; provider: ProviderId; source: RawSource; data: unknown }
   /** `timeout` is set when the run hit `RunInput.timeoutMs`. `finishReason` is then "cancelled". */
   | { type: "done"; text: string; finishReason: FinishReason; timeout?: true }
   | { type: "error"; message: string; code?: string };
@@ -574,8 +579,8 @@ export interface RunInput {
    */
   apiKey?: string;
   /**
-   * Debug mode: emit a `raw` event for every line the CLI prints on stdout and stderr, next to the normal events.
-   * Claude Code, Codex, Cursor Agent and Antigravity. Other providers ignore it. Default off.
+   * Debug mode: emit `raw` events next to the normal events, with every line a CLI prints on stdout and stderr, or
+   * every response and body chunk an HTTP provider receives. Every provider takes it. Default off.
    */
   verbose?: boolean;
   /** Extra environment for the CLI process. */
@@ -635,6 +640,13 @@ export interface CodexOptions {
   webSearch?: "disabled" | "cached" | "indexed" | "live";
   /** Ask for approval at least as often as the access level does. A policy that asks less is refused. */
   approvalPolicy?: "untrusted" | "on-request" | "never";
+  /** Emit `subagent.text` events with the messages subagents write, tagged with the id of the item that started them. */
+  forwardSubagentText?: boolean;
+  /**
+   * Emit the tool calls subagents make as `tool.start` and `tool.end` events, with `parentId` set to the id of the item
+   * that started the subagent. They do not count toward the run's file changes or `RunResult.toolCalls`.
+   */
+  forwardSubagentTools?: boolean;
 }
 
 /** Cursor Agent settings. See docs/providers/agent.md. */
@@ -645,6 +657,11 @@ export interface AgentOptions {
   sandbox?: "enabled" | "disabled";
   /** Plan mode: the agent proposes changes and makes none. */
   mode?: "plan";
+  /**
+   * Emit `subagent.text` events with the messages a Task subagent wrote, tagged with the id of its `task` call. They
+   * arrive when the call ends. Cursor Agent does not stream a subagent's tool calls.
+   */
+  forwardSubagentText?: boolean;
 }
 
 /** Antigravity settings. See docs/providers/antigravity.md. */

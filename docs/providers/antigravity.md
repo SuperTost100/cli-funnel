@@ -153,6 +153,17 @@ The `--model` string is the base id plus `--effort <effort>`. Passing a full id 
 
 `update()` runs `agy update`.
 
+## Subagents
+
+The agent starts a subagent with `invoke_subagent`. It shows as a `tool.start` and `tool.end` named `invoke_subagent`. The step starts as a `tool` step and ends as a `subagent` step, and the `tool.end` output lists the subagents it started, each with its `type`, `role`, `prompt` and `conversationId`.
+
+| What the subagent does | What cli-funnel emits |
+| --- | --- |
+| its tool calls | nothing: they go to the subagent's own conversation, not to the stream |
+| its messages | nothing, for the same reason |
+
+So `forwardSubagentTools` and `forwardSubagentText` are not options here. `test/fixtures/antigravity/subagent.ndjson` is a recorded run with paths replaced and the tool list cut.
+
 ## Limits
 
 - Resume uses `--conversation <id>` with the `sessionId` from the earlier run. The whole history is replayed, so long conversations start slowly.

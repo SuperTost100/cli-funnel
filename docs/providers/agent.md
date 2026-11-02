@@ -93,6 +93,7 @@ The CLI has no system prompt or schema flag. `system` goes in front of the promp
 | `addDirs: string[]` | `--add-dir=<dir>`, absolute paths | `auto`, `full` |
 | `sandbox: "enabled" \| "disabled"` | `--sandbox=<value>` | `enabled` at all levels, `disabled` at `full` only |
 | `mode: "plan"` | `--mode plan` | `auto`, `full` |
+| `forwardSubagentText: boolean` | none, the mapper keeps the messages | all |
 
 `none` refuses `mode: "plan"` and keeps `--mode ask`. Nobody has tested whether plan mode can write its plan file outside the empty `none` folder.
 
@@ -117,6 +118,17 @@ Checked on 2026.10.22:
 So a run with `apiKey` sets `CURSOR_API_KEY` and `AGENT_CLI_CREDENTIAL_STORE=memory`. Before the first such run in a process, it runs `agent status` with the memory store and refuses the run (`unsupported`) unless the CLI answers `"isAuthenticated": false`. If a future CLI ignores the variable, the key would overwrite the saved login, and this check stops that. The run also lists models with the key, because the models can differ per account, and it cuts the key and the MCP header values out of error text.
 
 The agent's own shell tool inherits the process environment, so at `full` it can read `CURSOR_API_KEY`. The live test (`CLI_FUNNEL_TEST_CURSOR_KEY=<key> npx vitest run test/agent-features.test.ts`) checks that the saved login file is unchanged. It is skipped without the key.
+
+## Subagents
+
+The Task tool starts a subagent. It shows as a `tool.start` and `tool.end` named `task`, with the subagent's prompt in the input. Cursor Agent 2026.10.22 streams nothing from inside the subagent: its result carries `conversationSteps` once the subagent is done.
+
+| What the subagent does | What cli-funnel emits |
+| --- | --- |
+| its tool calls | nothing: they are not in the stream |
+| its messages, from `conversationSteps` | `subagent.text` with `parentId`, the id of the `task` call, right after its `tool.end`, with `forwardSubagentText` |
+
+`agent` is the subagent type, such as `explore`, and is left out when the CLI sends `unspecified`. `test/fixtures/agent/subagent-task.ndjson` is a recorded run with paths replaced.
 
 ## Plans
 

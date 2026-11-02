@@ -140,6 +140,17 @@ The CLI sends the request at every level with tools: it was checked live at `byp
 
 `mcpConfig` and `agents` take objects, not file paths. A subagent may set `description`, `prompt`, `tools`, `disallowedTools` and `model`. `maxBudgetUsd` compares against the CLI's list-price estimate, which is not what a subscription pays. `betas` only matters for API key logins. See [Run options](../run-options.md#provider-options) for why each limit is where it is.
 
+## Subagents
+
+| What the subagent does | What cli-funnel emits |
+| --- | --- |
+| the `Agent` call that starts it | `tool.start` and `tool.end`, always |
+| its tool calls | `tool.start` and `tool.end` with `parentId` and `agent`, with `forwardSubagentTools` |
+| its text | `subagent.text` with `parentId` and `agent`, with `forwardSubagentText` |
+| its thinking | nothing: the CLI sends it empty |
+
+See [Provider options](#provider-options) for how each one works.
+
 ## Models
 
 Claude has no list command, so models come from `data/models/claude.json`.

@@ -222,6 +222,18 @@ export interface MapperOptions {
    * file was new. The mapper itself touches no file.
    */
   exists?: (path: string) => boolean;
+  /** Emit `subagent.text` for the messages a Task subagent wrote, which arrive with the end of its `task` call. */
+  forwardSubagentText?: boolean;
+}
+
+/** The subagent type of a Task call, such as `explore`. `unspecified` gives none. */
+function subagentType(args: Record<string, any> | undefined): string | undefined {
+  const type = args?.subagentType;
+  if (!type || typeof type !== "object") return undefined;
+  const key = Object.keys(type)[0];
+  const named = key ? type[key]?.name : undefined;
+  if (typeof named === "string" && named) return named;
+  return key && key !== "unspecified" ? key : undefined;
 }
 
 /** Turns stream-json lines into FunnelEvents. Feed each parsed line to `map`. */
@@ -284,6 +296,7 @@ export class StreamMapper {
           if (status) for (const change of this.fileChanges(id, key, call, status)) events.push({ type: "file.change", ...change });
           const plan = this.plan(key, call);
           if (plan) events.push(plan);
+          if (key === "taskToolCall" && this.options.forwardSubagentText) events.push(...this.subagentText(id, call));
           return events;
         }
         return [];
@@ -301,6 +314,20 @@ export class StreamMapper {
       default:
         return [];
     }
+  }
+
+  /**
+   * The messages of a finished Task subagent as `subagent.text`. Cursor Agent sends the subagent's work only as the
+   * `conversationSteps` of the call's result, so they come after its `tool.end`. Steps other than messages are left out.
+   */
+  private subagentText(id: string, call: Record<string, any>): FunnelEvent[] {
+    const steps = call.result?.success?.conversationSteps;
+    if (!Array.isArray(steps)) return [];
+    const agent = subagentType(call.args);
+    return steps.flatMap((step: Record<string, any>): FunnelEvent[] => {
+      const text = step?.assistantMessage?.text;
+      return typeof text === "string" && text ? [{ type: "subagent.text", parentId: id, text, ...(agent ? { agent } : {}) }] : [];
+    });
   }
 
   /** Relative paths are the agent's workspace. Without one the path stays as the CLI wrote it. */

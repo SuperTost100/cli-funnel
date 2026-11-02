@@ -9,7 +9,7 @@ import { denyNote, effectiveReply, isQuestion, toApprovalRequest, toQuestionRepl
 import { authKind } from "./auth.js";
 import { Translator } from "./events.js";
 import { BINARY, INITIALIZE_PARAMS } from "./index.js";
-import { agentConfig, threadOptions } from "./options.js";
+import { agentConfig, codexForward, threadOptions } from "./options.js";
 import { RpcClient } from "./rpc.js";
 import { configDeclares, noToolsConfig } from "./tools.js";
 
@@ -150,6 +150,7 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
   // Refuses options that would widen access before a process starts. `start` holds the params only `thread/start` takes.
   const { start } = threadOptions(first);
   const agent = agentConfig(first);
+  const forward = codexForward(first);
   const taken = configDeclares(Object.keys(first.mcpServers ?? {}), requireMachine(first.selection).cwd, first.env);
   if (taken.length) {
     throw new FunnelError(`MCP server ${taken.join(", ")} is already in the user's Codex config. Give the server another name.`, "invalid-selection");
@@ -287,7 +288,7 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
     const t: Turn = {
       input,
       out: new Channel<FunnelEvent>(),
-      translator: new Translator(threadId ?? "", cwd),
+      translator: new Translator(threadId ?? "", cwd, forward),
       started,
       setTurnId: (id) => {
         t.turnId ??= id;
@@ -338,7 +339,7 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
       try {
         const id = await ready;
         if (t.finished) return;
-        t.translator = new Translator(id, cwd);
+        t.translator = new Translator(id, cwd, forward);
         t.session = () => ({ type: "session", sessionId: id, model, ...(auth ? { auth } : {}) });
         const turnStart = rpc.request("turn/start", turnParams(input, id));
         turnStart.catch(() => undefined);

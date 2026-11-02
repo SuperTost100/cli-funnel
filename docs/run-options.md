@@ -233,14 +233,23 @@ On Linux, Claude Code needs `bubblewrap` and `socat`, and Cursor Agent ships its
 
 ### Verbose output
 
-`verbose: true` is a debug mode. Next to the normal events, the run emits one `raw` event for every line the CLI prints:
+`verbose: true` is a debug mode. Next to the normal events, the run emits `raw` events with what the provider received: every line a CLI prints, or every response and body chunk an HTTP provider gets.
 
 ```ts
 { type: "raw", provider: "claude", source: "stdout", data: { type: "assistant", message: { ... } } }
 { type: "raw", provider: "claude", source: "stderr", data: "warning: ..." }
+{ type: "raw", provider: "openai-api", source: "response", data: { status: 200, headers: { "x-request-id": "req_1", ... } } }
+{ type: "raw", provider: "openai-api", source: "http", data: { choices: [{ delta: { content: "Hi" } }] } }
 ```
 
-A stdout line arrives as the parsed JSON object, or as the line itself when it is not JSON. A stderr line arrives as a string without its line break. Each `raw` event comes before the events cli-funnel parsed from the same line, so a debug view can show both side by side.
+| `source` | Providers | `data` |
+| --- | --- | --- |
+| `stdout` | CLI providers | one line, parsed as JSON, or the line as a string when it is not JSON |
+| `stderr` | CLI providers | one line as a string, without its line break |
+| `response` | HTTP providers | `{ status, headers }` of each response, a retried one included |
+| `http` | HTTP providers | one SSE `data` field or one NDJSON line, parsed as JSON, or the string when it is not JSON, such as `[DONE]` |
+
+Each `raw` event comes before the events cli-funnel parsed from the same line or chunk, so a debug view can show both side by side.
 
 ```ts
 for await (const e of funnel.stream({ selection, prompt, verbose: true })) {
@@ -252,15 +261,33 @@ for await (const e of funnel.stream({ selection, prompt, verbose: true })) {
 | Provider | What `raw` carries |
 | --- | --- |
 | Claude Code | every stream-json line, control requests included, and stderr |
-| Codex | every JSON-RPC message from `codex app-server` during the turn, the answers to cli-funnel's own requests included, and stderr |
+| Codex | every JSON-RPC message from `codex app-server` during the turn, the answers to cli-funnel's own requests and the subagents' threads included, and stderr |
 | Cursor Agent | every stream-json line, and stderr |
 | Antigravity | every JSON line, and stderr |
+| Anthropic API | each `/v1/messages` response, then every SSE event |
+| OpenAI API | each `/chat/completions` or `/responses` response, then every SSE event, `[DONE]` included |
+| Gemini API | each `streamGenerateContent` response, then every SSE event |
+| Ollama | the `/api/chat` response, then every NDJSON line |
+| OpenAI-compatible | each `/chat/completions` or `/responses` response, then every SSE event |
 
-Other providers ignore `verbose`. It is off by default, and a run without it does no extra work: stderr is split into lines only while a verbose run listens.
+It is off by default, and a run without it does no extra work: stderr is split into lines only while a verbose run listens, and HTTP chunks are not copied. Model listings, status checks and pulls send no `raw` events, only runs do. The request cli-funnel sends is not in `raw`.
 
-The run's own secrets are masked in `raw` data the same way as in every other event: `apiKey`, and the values of `env`, `mcpServers` headers and `mcpServers` env entries whose names look like credentials (8 characters or more). Everything else stays as the CLI printed it, which can include file contents, the prompt, tool output and account details such as the signed-in email. Treat `raw` events as a debug log and keep them on the user's machine.
+The run's own secrets are masked in `raw` data the same way as in every other event: `apiKey`, and the values of `env`, `mcpServers` headers and `mcpServers` env entries whose names look like credentials (8 characters or more). Each line of a multiline secret is masked too. HTTP providers also mask their key, the bare token of a `Bearer` header, and every request header value of 8 characters or more except `content-type`, `accept`, `user-agent`, `anthropic-version`, `anthropic-beta` and `openai-beta`. Response headers with `cookie`, `authorization`, `authenticate`, `secret`, `password`, `credential` or `api-key` in their name are left out. Everything else stays as the CLI printed it, which can include file contents, the prompt, tool output and account details such as the signed-in email. Treat `raw` events as a debug log and keep them on the user's machine.
 
 Stderr travels through its own pipe, so its lines are placed between stdout lines by arrival time. Before the last event of a run, a verbose run waits 20 ms for stderr written just before it. Lines printed after the run's last event are not sent. A stderr line longer than 64 KB, such as a progress bar redrawn with `\r`, arrives in pieces. Claude Code, Cursor Agent and Antigravity hold stderr until the next stdout line, at most 1 MB of it, and drop the oldest lines beyond that. On a live session, a turn gets the lines printed while it runs, and a line printed between turns goes nowhere. Over HTTP, send `"verbose": true` in the `/run` body.
+
+### Verbose and subagents by provider
+
+| Provider | `verbose` | Subagent tool calls (`forwardSubagentTools`) | Subagent text (`forwardSubagentText`) |
+| --- | --- | --- | --- |
+| Claude Code | stdout and stderr | yes, `providerOptions.claude` | yes, `providerOptions.claude`, whole messages |
+| Codex | JSON-RPC messages and stderr | yes, `providerOptions.codex` | yes, `providerOptions.codex`, whole messages |
+| Cursor Agent | stdout and stderr | no: the CLI does not stream them | yes, `providerOptions.agent`, when the `task` call ends |
+| Antigravity | stdout and stderr | no: the CLI does not stream them | no: the CLI does not stream it |
+| Anthropic, OpenAI and Gemini APIs | responses and body chunks | no subagents | no subagents |
+| Ollama, OpenAI-compatible servers | responses and body chunks | no subagents | no subagents |
+
+Every subagent tool call carries `parentId`, the id of the `tool.start` that started the subagent, and `agent` when the CLI names the subagent. The call that starts a subagent shows on every CLI without an option: `Agent` on Claude Code, `agent:spawnAgent` on Codex, `task` on Cursor Agent and `invoke_subagent` on Antigravity. The API and model server providers run no agent, so there is nothing to forward. See [Subagents](sessions.md#subagents) and the provider pages for what each CLI sends.
 
 ## Provider options
 
@@ -287,10 +314,11 @@ Options never give the agent more than `selection.access` allows. An option that
 | Claude Code | `disallowedTools`, `fallbackModel`, `maxBudgetUsd`, `forkSession`, `forwardSubagentText`, `forwardSubagentTools`, `betas` | yes | yes | yes | yes | yes |
 | Codex | `approvalPolicy` | `untrusted` | `untrusted` | `untrusted` | `untrusted`, `on-request` | any |
 | Codex | `webSearch` | `disabled` only | `disabled`, `cached`, `indexed` | `disabled`, `cached`, `indexed` | yes | yes |
-| Codex | `ephemeral` | yes | yes | yes | yes | yes |
+| Codex | `ephemeral`, `forwardSubagentText`, `forwardSubagentTools` | yes | yes | yes | yes | yes |
 | Cursor Agent | `addDirs` | refused | | | yes | yes |
 | Cursor Agent | `sandbox` | `enabled` only | | | `enabled` only | yes |
 | Cursor Agent | `mode: "plan"` | refused | | | yes | yes |
+| Cursor Agent | `forwardSubagentText` | yes | | | yes | yes |
 | Antigravity | `addDirs` | refused | | yes | | yes |
 | Antigravity | `printTimeoutSec` | yes | | yes | | yes |
 

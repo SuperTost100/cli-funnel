@@ -2,6 +2,7 @@ import type { RunInput } from "../../types.js";
 import { bool, invalidOption, mcpServersFor, oneOf, optionsFor, requireAccess } from "../options.js";
 import { requireMachine } from "../../selection.js";
 import { planAccess, type ApprovalPolicy } from "./access.js";
+import type { ForwardSubagents } from "./events.js";
 
 /** From the policy that asks most to the one that asks least. */
 const POLICIES: readonly ApprovalPolicy[] = ["untrusted", "on-request", "never"];
@@ -18,9 +19,13 @@ export interface CodexThreadOptions {
 
 /** Checks `providerOptions.codex` and turns it into app-server params. Throws `invalid-selection` when an option would widen access. */
 export function threadOptions(input: RunInput): CodexThreadOptions {
-  const o = optionsFor(input, "codex", ["ephemeral", "webSearch", "approvalPolicy"]);
+  const o = optionsFor(input, "codex", ["ephemeral", "webSearch", "approvalPolicy", "forwardSubagentText", "forwardSubagentTools"]);
   const { access } = requireMachine(input.selection);
   const out: CodexThreadOptions = { start: {}, config: {} };
+
+  // Read by the translator. Checked here so a bad value fails like the other options.
+  bool(o.forwardSubagentText, "forwardSubagentText");
+  bool(o.forwardSubagentTools, "forwardSubagentTools");
 
   const ephemeral = bool(o.ephemeral, "ephemeral");
   if (ephemeral !== undefined) {
@@ -86,3 +91,9 @@ export function agentConfig(input: RunInput): Record<string, unknown> {
     ...mcpConfig(input),
   };
 }
+
+/** The subagent work a Codex run turns into events, from `providerOptions.codex`. */
+export const codexForward = (input: RunInput): ForwardSubagents => ({
+  text: input.providerOptions?.codex?.forwardSubagentText === true,
+  tools: input.providerOptions?.codex?.forwardSubagentTools === true,
+});
