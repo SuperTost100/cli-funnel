@@ -271,7 +271,7 @@ process.stdin.on("data", (d) => {
           send({ id: "srv-1", method: "item/fileChange/requestApproval", params: { threadId: thread, turnId: turn, itemId: "fc" } });
         } else if (prompt === "fail") {
           process.stderr.write("auth failed for " + process.env.FAKE_KEY + "\\n");
-          setTimeout(() => send({ method: "turn/completed", params: { threadId: thread, turn: { id: turn, status: "failed", error: { message: "Incorrect API key provided: " + process.env.FAKE_KEY } } } }), 50);
+          send({ method: "turn/completed", params: { threadId: thread, turn: { id: turn, status: "failed", error: { message: "Incorrect API key provided: " + process.env.FAKE_KEY } } } });
         } else done("ok");
         break;
       default: if (m.id !== undefined && m.method) send({ id: m.id, error: { code: -32601, message: "unknown" } });

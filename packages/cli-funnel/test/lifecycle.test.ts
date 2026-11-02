@@ -2,11 +2,12 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { getEventListeners } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { claudeProvider } from "../src/providers/claude/index.js";
 import { Channel } from "../src/util/channel.js";
 import { readNDJSON } from "../src/util/ndjson.js";
-import { spawnStream, STDERR_KEEP, terminate } from "../src/util/process.js";
+import { spawnStream, STDERR_KEEP, STDERR_LINE_MAX, terminate } from "../src/util/process.js";
+import { PENDING_STDERR_MAX, RawTap } from "../src/providers/base.js";
 import { readSSE } from "../src/util/sse.js";
 import { fakeNodeCli, fakeShCli, sh } from "./fake-cli.js";
 import type { FunnelEvent, RunInput } from "../src/types.js";
@@ -99,6 +100,42 @@ setInterval(() => {}, 1000);`,
     proc.onStderr((l) => lines.push(l));
     await proc.exited;
     expect(lines).toEqual(["one", "two", "three"]);
+  });
+
+  it("cuts a stderr line longer than STDERR_LINE_MAX into pieces", async () => {
+    const proc = spawnStream(script(`head -c 70000 /dev/zero | tr '\\0' x >&2; printf '\\nend' >&2`), []);
+    const lines: string[] = [];
+    proc.onStderr((l) => lines.push(l));
+    await proc.exited;
+    expect(lines.map((l) => l.length)).toEqual([STDERR_LINE_MAX, 70_000 - STDERR_LINE_MAX, 3]);
+  });
+
+  it("keeps at most PENDING_STDERR_MAX of stderr waiting in a raw tap, dropping the oldest lines", () => {
+    let listener!: (line: string) => void;
+    const tap = new RawTap("claude", { selection: { provider: "claude", model: "m" }, prompt: "x" }, { onStderr: (l) => ((listener = l), () => undefined) });
+    const big = (c: string) => c.repeat(PENDING_STDERR_MAX * 0.6);
+    for (const c of ["a", "b", "c"]) listener(big(c));
+    expect(tap.events().map((e) => (e as { data: string }).data[0])).toEqual(["c"]);
+    listener("small");
+    expect(tap.events().map((e) => (e as { data: string }).data)).toEqual(["small"]);
+  });
+
+  it("keeps the raw tap's settle timer referenced, so the run still ends when the CLI has exited", async () => {
+    const tap = new RawTap("claude", { selection: { provider: "claude", model: "m" }, prompt: "x" }, { onStderr: () => () => undefined });
+    const timers: NodeJS.Timeout[] = [];
+    const real = globalThis.setTimeout;
+    const spy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void, ms?: number) => {
+      const t = real(fn, ms);
+      timers.push(t);
+      return t;
+    }) as typeof setTimeout);
+    try {
+      const settled = tap.settle();
+      expect(timers.map((t) => t.hasRef())).toEqual([true]);
+      await settled;
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("keeps only the end of stderr", async () => {

@@ -39,18 +39,21 @@ const SECRET_NAME = /auth|token|key|secret|password|cookie|session|credential/i;
 
 /**
  * The run's own secrets, longest first so a secret that contains another is masked whole: `apiKey` at any length, and
- * the values of `mcpServers` headers and env entries whose names look like credentials. Those values are kept only
- * from 8 characters, so masking them cannot mangle ordinary text.
+ * the values of `RunInput.env`, `mcpServers` headers and `mcpServers` env entries whose names look like credentials.
+ * Those values are kept only from 8 characters, so masking them cannot mangle ordinary text.
  */
-export function runSecrets(input: Pick<RunInput, "apiKey" | "mcpServers">): string[] {
+export function runSecrets(input: Pick<RunInput, "apiKey" | "mcpServers" | "env">): string[] {
   const values: string[] = typeof input.apiKey === "string" && input.apiKey ? [input.apiKey] : [];
   // Runs before the request is validated, so a malformed entry is skipped rather than trusted.
+  const named = (entries: unknown) => {
+    if (typeof entries !== "object" || entries === null) return;
+    for (const [name, value] of Object.entries(entries)) if (SECRET_NAME.test(name) && typeof value === "string" && value.length >= 8) values.push(value);
+  };
+  named(input.env);
   const servers = typeof input.mcpServers === "object" && input.mcpServers !== null ? Object.values(input.mcpServers) : [];
   for (const server of servers) {
     if (typeof server !== "object" || server === null) continue;
-    const named: unknown = server.type === "http" ? server.headers : server.env;
-    if (typeof named !== "object" || named === null) continue;
-    for (const [name, value] of Object.entries(named)) if (SECRET_NAME.test(name) && typeof value === "string" && value.length >= 8) values.push(value);
+    named(server.type === "http" ? server.headers : server.env);
   }
   return [...new Set(values)].sort((a, b) => b.length - a.length);
 }

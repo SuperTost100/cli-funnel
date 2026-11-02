@@ -269,6 +269,9 @@ export interface Streamed {
 /** How much stderr a streamed CLI keeps. Callers only show its end, and a live session can run for hours. */
 export const STDERR_KEEP = 16_384;
 
+/** The longest stderr line handed to `onStderr` listeners. A longer one, such as a progress bar redrawn with `\r`, arrives in pieces. */
+export const STDERR_LINE_MAX = 65_536;
+
 /** Spawns a CLI and exposes stdout as an NDJSON stream. Aborting the signal stops it with `terminate`. */
 export function spawnStream(
   file: string,
@@ -283,7 +286,11 @@ export function spawnStream(
   const stderrListeners = new Set<(line: string) => void>();
   let stderrPartial = "";
   const emitStderr = (line: string) => {
-    for (const l of stderrListeners) l(line.endsWith("\r") ? line.slice(0, -1) : line);
+    const text = line.endsWith("\r") ? line.slice(0, -1) : line;
+    for (let i = 0; i < text.length || i === 0; i += STDERR_LINE_MAX) {
+      const piece = text.slice(i, i + STDERR_LINE_MAX);
+      for (const l of stderrListeners) l(piece);
+    }
   };
 
   const flush = (line: string) => {
@@ -307,6 +314,10 @@ export function spawnStream(
     const parts = (stderrPartial + d).split("\n");
     stderrPartial = parts.pop()!;
     for (const line of parts) emitStderr(line);
+    while (stderrPartial.length > STDERR_LINE_MAX) {
+      emitStderr(stderrPartial.slice(0, STDERR_LINE_MAX));
+      stderrPartial = stderrPartial.slice(STDERR_LINE_MAX);
+    }
   });
 
   const exited = new Promise<number | null>((resolve) => {

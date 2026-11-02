@@ -3,7 +3,7 @@ import { requireMachine } from "../../selection.js";
 import { Channel } from "../../util/channel.js";
 import { spawnStream } from "../../util/process.js";
 import { redactErrors } from "../../util/redact.js";
-import { askApproval, askQuestion, findBinary, rawEvent, stderrTail } from "../base.js";
+import { askApproval, askQuestion, findBinary, rawEvent, SETTLE_MS, stderrTail } from "../base.js";
 import { planAccess } from "./access.js";
 import { denyNote, effectiveReply, isQuestion, toApprovalRequest, toQuestionReply, toQuestionRequest, toReply, type Reply, type ServerRequest } from "./approvals.js";
 import { authKind } from "./auth.js";
@@ -186,9 +186,14 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
     if (t.finished) return;
     open(t);
     t.finished = true;
-    for (const e of events) t.out.push(e);
-    t.out.end();
-    t.end();
+    const close = () => {
+      for (const e of events) t.out.push(e);
+      t.out.end();
+      t.end();
+    };
+    // Stderr comes through another pipe. A verbose turn gives stderr written just before the end time to arrive.
+    if (t.input.verbose) setTimeout(close, SETTLE_MS);
+    else close();
   };
 
   const stop = () => {
@@ -295,9 +300,10 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
     };
     current = t;
     proc.hold(true);
-    // The process outlives the turn, so stderr goes to this turn only while it runs. Events are pushed as they come,
-    // so stderr keeps its place among the stdout lines.
-    const offStderr = input.verbose ? proc.onStderr((line) => !t.finished && emit(t, rawEvent("codex", "stderr", line, input))) : undefined;
+    // The process outlives the turn, so stderr goes to this turn only while it runs, up to its terminal event: the
+    // channel drops what comes after it ends. Events are pushed as they come, so stderr keeps its place among the
+    // stdout lines.
+    const offStderr = input.verbose ? proc.onStderr((line) => emit(t, rawEvent("codex", "stderr", line, input))) : undefined;
     if (exited || closed) finish(t, [{ type: "error", message: "Codex app-server is not running.", code: "cli-failed" }]);
 
     const signal = input.signal;

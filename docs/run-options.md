@@ -258,9 +258,9 @@ for await (const e of funnel.stream({ selection, prompt, verbose: true })) {
 
 Other providers ignore `verbose`. It is off by default, and a run without it does no extra work: stderr is split into lines only while a verbose run listens.
 
-The run's own secrets are masked in `raw` data the same way as in every other event: `apiKey`, and the values of `mcpServers` headers and env entries whose names look like credentials. Everything else stays as the CLI printed it, which can include file contents, the prompt, tool output and account details such as the signed-in email. Treat `raw` events as a debug log and keep them on the user's machine.
+The run's own secrets are masked in `raw` data the same way as in every other event: `apiKey`, and the values of `env`, `mcpServers` headers and `mcpServers` env entries whose names look like credentials (8 characters or more). Everything else stays as the CLI printed it, which can include file contents, the prompt, tool output and account details such as the signed-in email. Treat `raw` events as a debug log and keep them on the user's machine.
 
-Stderr travels through its own pipe, so its lines are placed between stdout lines by arrival time. Before the last event of a run, a verbose run waits 20 ms for stderr written just before it. Lines printed after the run's last event are not sent. On a live session, a turn gets the lines printed while it runs, and a line printed between turns goes nowhere. Over HTTP, send `"verbose": true` in the `/run` body.
+Stderr travels through its own pipe, so its lines are placed between stdout lines by arrival time. Before the last event of a run, a verbose run waits 20 ms for stderr written just before it. Lines printed after the run's last event are not sent. A stderr line longer than 64 KB, such as a progress bar redrawn with `\r`, arrives in pieces. Claude Code, Cursor Agent and Antigravity hold stderr until the next stdout line, at most 1 MB of it, and drop the oldest lines beyond that. On a live session, a turn gets the lines printed while it runs, and a line printed between turns goes nowhere. Over HTTP, send `"verbose": true` in the `/run` body.
 
 ## Provider options
 

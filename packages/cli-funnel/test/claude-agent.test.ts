@@ -321,17 +321,18 @@ describe("claude control requests (fake CLI)", () => {
   describe("verbose", () => {
     const key = "sk-ant-test-0123456789abcdef";
     const lines = [
-      { type: "system", subtype: "init", session_id: "s", model: "m", note: `echoed ${key}` },
+      { type: "system", subtype: "init", session_id: "s", model: "m", note: `echoed ${key}`, env: "GITHUB_TOKEN=ghp-env-value-0123" },
       { __stderr: `warning: key ${key}\nsecond line\n` },
       { type: "result", subtype: "success", is_error: false, result: "ok", session_id: "s" },
     ];
 
     it("emits every stdout and stderr line as a raw event, with the API key masked", async () => {
       replay(lines);
-      const events = await run({ selection: sel({ cwd: dir, access: "full" }), prompt: "x", apiKey: key, verbose: true });
+      const env = { GITHUB_TOKEN: "ghp-env-value-0123" };
+      const events = await run({ selection: sel({ cwd: dir, access: "full" }), prompt: "x", apiKey: key, env, verbose: true });
       const raw = events.filter((e) => e.type === "raw");
       expect(raw.filter((e) => e.source === "stdout").map((e) => (e.data as { type: string }).type)).toEqual(["system", "result"]);
-      expect(raw.find((e) => e.source === "stdout")).toMatchObject({ provider: "claude", data: { note: "echoed [redacted]" } });
+      expect(raw.find((e) => e.source === "stdout")).toMatchObject({ provider: "claude", data: { note: "echoed [redacted]", env: "GITHUB_TOKEN=[redacted]" } });
       expect(raw.filter((e) => e.source === "stderr").map((e) => e.data)).toEqual(["warning: key [redacted]", "second line"]);
       expect(JSON.stringify(events)).not.toContain(key);
       // The raw line comes before the events parsed from it.
