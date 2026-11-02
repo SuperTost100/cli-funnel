@@ -165,4 +165,4 @@ for await (const e of funnel.stream({ selection, prompt, providerOptions })) {
 
 A subagent's calls do not count as the run's own: they are not in `result.toolCalls`, its edits produce no `file.change`, and its plan tools do not change `plan`. The two options work on their own or together.
 
-On Codex the same options go in `providerOptions.codex`, and `parentId` is the id of the `agent:spawnAgent` call. On Cursor Agent, `providerOptions.agent.forwardSubagentText` sends the Task subagent's messages when its `task` call ends. The provider pages say what each CLI sends.
+On Codex the same options go in `providerOptions.codex`, and `parentId` is the id of the `agent:spawnAgent` call. On Antigravity they go in `providerOptions.antigravity`, and cli-funnel reads them from the subagent's transcript file while the run lasts. On Cursor Agent, `providerOptions.agent.forwardSubagentText` sends the Task subagent's messages when its `task` call ends. The provider pages say what each CLI sends.

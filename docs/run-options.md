@@ -283,7 +283,7 @@ Stderr travels through its own pipe, so its lines are placed between stdout line
 | Claude Code | stdout and stderr | yes, `providerOptions.claude` | yes, `providerOptions.claude`, whole messages |
 | Codex | JSON-RPC messages and stderr | yes, `providerOptions.codex` | yes, `providerOptions.codex`, whole messages |
 | Cursor Agent | stdout and stderr | no: the CLI does not stream them | yes, `providerOptions.agent`, when the `task` call ends |
-| Antigravity | stdout and stderr | no: the CLI does not stream them | no: the CLI does not stream it |
+| Antigravity | stdout and stderr | yes, `providerOptions.antigravity`, read from the subagent's transcript | yes, `providerOptions.antigravity`, read from the subagent's transcript |
 | Anthropic, OpenAI and Gemini APIs | responses and body chunks | no subagents | no subagents |
 | Ollama, OpenAI-compatible servers | responses and body chunks | no subagents | no subagents |
 
@@ -319,6 +319,7 @@ Options never give the agent more than `selection.access` allows. An option that
 | Cursor Agent | `sandbox` | `enabled` only | | | `enabled` only | yes |
 | Cursor Agent | `mode: "plan"` | refused | | | yes | yes |
 | Cursor Agent | `forwardSubagentText` | yes | | | yes | yes |
+| Antigravity | `forwardSubagentText`, `forwardSubagentTools` | yes | | yes | | yes |
 | Antigravity | `addDirs` | refused | | yes | | yes |
 | Antigravity | `printTimeoutSec` | yes | | yes | | yes |
 

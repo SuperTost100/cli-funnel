@@ -21,8 +21,9 @@ import {
 } from "../../types.js";
 import { detectInstallation, exitedEarly, findBinary, isTerminal, LOGIN_TIMEOUT_MS, rawTap, runUpdate } from "../base.js";
 import { createMapper, parseModels } from "./parser.js";
+import { SubagentTranscripts, type ForwardSubagents } from "./transcript.js";
 import { composePrompt } from "../prompt.js";
-import { dirList, flag, mcpServersFor, optionsFor, positive, requireAccess } from "../options.js";
+import { bool, dirList, flag, mcpServersFor, optionsFor, positive, requireAccess } from "../options.js";
 import { requireMachine } from "../../selection.js";
 import { ownedWorkspace } from "../../util/workspace.js";
 
@@ -81,7 +82,10 @@ export function buildArgs(
 
 /** Flags for `providerOptions.antigravity`. Throws `invalid-selection` when an option would widen `selection.access`. */
 function optionArgs(input: RunInput): string[] {
-  const o = optionsFor(input, "antigravity", ["addDirs", "printTimeoutSec"]);
+  const o = optionsFor(input, "antigravity", ["addDirs", "printTimeoutSec", "forwardSubagentText", "forwardSubagentTools"]);
+  // Read by the run loop. Checked here so a bad value fails like the other options.
+  bool(o.forwardSubagentText, "forwardSubagentText");
+  bool(o.forwardSubagentTools, "forwardSubagentTools");
   const args: string[] = [];
   const dirs = dirList(o.addDirs, "addDirs");
   if (dirs) {
@@ -280,6 +284,15 @@ function login(options: { signal?: AbortSignal } = {}): LoginSession {
   return { [Symbol.asyncIterator]: () => channel[Symbol.asyncIterator](), sendCode: () => {}, cancel };
 }
 
+/** Marks a read of the subagents' transcripts in the run's channel. */
+const WAKE = Symbol("transcripts");
+
+/** The subagent work an Antigravity run turns into events, from `providerOptions.antigravity`. */
+const antigravityForward = (input: RunInput): ForwardSubagents => ({
+  text: input.providerOptions?.antigravity?.forwardSubagentText === true,
+  tools: input.providerOptions?.antigravity?.forwardSubagentTools === true,
+});
+
 async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   const path = findBinary("agy");
   if (!path) throw new FunnelError("agy is not installed.", "not-installed");
@@ -312,26 +325,56 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
     await cleanup();
     throw err;
   }
+  // The run's own brain folder: the API-key home when there is one, else the user's.
+  const brainDir = join(dataDir(home ?? homedir()), "brain");
   const mapper = createMapper({
     auth: home ? "api-key" : undefined,
     createdInRun: createdSince(startedAt),
-    brainDir: join(dataDir(home ?? homedir()), "brain"),
+    brainDir,
     readText: readTaskList,
   });
   const tap = rawTap("antigravity", input, stream);
+  const forward = antigravityForward(input);
+  // Only with a forward option: the stream lines and the subagents' transcripts then go through one channel.
+  let source: AsyncIterable<unknown> = stream.lines;
+  let transcripts: SubagentTranscripts | undefined;
+  if (forward.text || forward.tools) {
+    const merged = new Channel<unknown>();
+    transcripts = new SubagentTranscripts(brainDir, forward, input, () => merged.push(WAKE));
+    void (async () => {
+      try {
+        for await (const line of stream.lines) merged.push(line);
+        merged.end();
+      } catch (err) {
+        merged.fail(err);
+      }
+    })();
+    source = merged;
+  }
   try {
-    for await (const line of stream.lines) {
+    for await (const line of source) {
+      if (line === WAKE) {
+        const found = transcripts!.take();
+        if (!mapper.finished) yield* found;
+        continue;
+      }
       // Nothing goes out after the terminal event.
       const before = mapper.finished;
       const events = mapper.map(line);
+      transcripts?.watch(line);
+      const terminal = events.some(isTerminal);
       if (tap && !before) {
-        if (events.some(isTerminal)) yield* await tap.settle();
+        if (terminal) yield* await tap.settle();
         yield* tap.events(line);
       }
+      // A subagent may still be writing when the run ends, so its transcript is read once more first.
+      if (transcripts && terminal && !before) yield* await transcripts.finish();
       yield* events;
     }
     if (tap && !mapper.finished) yield* tap.events();
+    if (transcripts && !mapper.finished) yield* await transcripts.finish();
   } finally {
+    transcripts?.stop();
     tap?.close();
     // Runs too when the caller stops reading early. The CLI must not keep working unattended.
     stream.kill();

@@ -325,7 +325,7 @@ export type FunnelEvent =
   | { type: "reasoning.delta"; text: string }
   /**
    * A CLI agent started one of its own tools, such as a shell command or a file edit. `parentId` is set on a tool call
-   * a subagent made, when the provider's `forwardSubagentTools` option is on (Claude Code, Codex): it is the id of the
+   * a subagent made, when the provider's `forwardSubagentTools` option is on (Claude Code, Codex, Antigravity): it is the id of the
    * tool call that started the subagent, so it matches that call's `tool.start`. `agent` is the subagent's type, when the CLI names it.
    * Subagent calls are not in `RunResult.toolCalls`.
    */
@@ -346,7 +346,7 @@ export type FunnelEvent =
   | ({ type: "file.change" } & FileChange)
   | { type: "usage"; usage: Usage }
   /**
-   * Text a subagent wrote, when the provider's `forwardSubagentText` option is on (Claude Code, Codex, Cursor Agent).
+   * Text a subagent wrote, when the provider's `forwardSubagentText` option is on (Claude Code, Codex, Cursor Agent, Antigravity).
    * `parentId` is the id of the tool call that started the subagent, so it matches the `tool.start` of that call. It is
    * never part of the run's answer text, and it arrives as whole messages, not as deltas.
    */
@@ -670,6 +670,13 @@ export interface AntigravityOptions {
   addDirs?: string[];
   /** End the turn after this many seconds. */
   printTimeoutSec?: number;
+  /**
+   * Emit `subagent.text` events with the text subagents write, read from each subagent's `transcript.jsonl` in agy's
+   * brain folder while the run lasts. Tagged with the id of the `invoke_subagent` call.
+   */
+  forwardSubagentText?: boolean;
+  /** Emit the tool calls subagents make, from the same transcripts, as `tool.start` and `tool.end` with `parentId`. */
+  forwardSubagentTools?: boolean;
 }
 
 export interface ProviderOptions {
