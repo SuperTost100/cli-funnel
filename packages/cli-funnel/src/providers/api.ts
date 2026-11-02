@@ -3,7 +3,7 @@ import { redactErrors } from "../util/redact.js";
 import { anthropicAdaptive, anthropicEfforts, geminiEfforts, openaiEfforts } from "./efforts.js";
 import { parseArguments } from "../messages.js";
 import { runWithHistory } from "./history.js";
-import { bearer, fetchRetrying, httpAccount, httpCapabilities, httpError, jsonHeaders, mergeHeaders, truncated, type RetryOptions } from "./http.js";
+import { bearer, fetchRetrying, httpAccount, httpCapabilities, httpError, httpTap, jsonHeaders, mergeHeaders, truncated, type RetryOptions } from "./http.js";
 import {
   anthropicMessages,
   anthropicToolChoice,
@@ -158,10 +158,12 @@ const anthropic: ApiSpec = {
     return out;
   },
   async *stream(ctx, input, messages, turn) {
+    const tap = httpTap(input, ctx.headers);
     const res = yield* fetchRetrying(
       joinUrl(ctx.baseUrl, "/v1/messages"),
       { method: "POST", signal: input.signal, headers: { ...ctx.headers, "content-type": "application/json" }, body: JSON.stringify(anthropicBody(input, messages)) },
       ctx.retry,
+      tap,
     );
     if (!res.ok) return yield* httpError("Anthropic API", res);
     let inTok = 0;
@@ -175,6 +177,7 @@ const anthropic: ApiSpec = {
     const blocks: Record<string, any>[] = [];
     const calls: ToolCall[] = [];
     for await (const { data } of readSSE(res)) {
+      if (tap) yield tap.sse(data);
       const e = JSON.parse(data);
       const block = typeof e.index === "number" ? blocks[e.index] : undefined;
       if (e.type === "message_start") {
@@ -247,6 +250,7 @@ export interface ChatCompletionsOptions {
  * the answer with its tool calls, for the session history.
  */
 export async function* streamChatCompletions(opts: ChatCompletionsOptions, input: RunInput, messages: Msg[], turn: Turn = {}): AsyncGenerator<FunnelEvent> {
+  const tap = httpTap(input, jsonHeaders(opts.key, opts.headers), opts.key);
   let res: Response;
   try {
     res = yield* fetchRetrying(
@@ -280,6 +284,7 @@ export async function* streamChatCompletions(opts: ChatCompletionsOptions, input
         }),
       },
       opts.retry,
+      tap,
     );
   } catch (err) {
     if (input.signal?.aborted) return yield { type: "done", text: "", finishReason: "cancelled" };
@@ -302,6 +307,7 @@ export async function* streamChatCompletions(opts: ChatCompletionsOptions, input
     // The error body is read inside the try, so an abort while reading it ends the run as cancelled.
     if (!res.ok) return yield* httpError(opts.label, res);
     for await (const { data } of readSSE(res)) {
+      if (tap) yield tap.sse(data);
       if (data === "[DONE]") {
         finished = true;
         break;
@@ -449,6 +455,7 @@ const gemini: ApiSpec = {
     return out.sort((a, b) => a.id.localeCompare(b.id));
   },
   async *stream(ctx, input, messages, turn) {
+    const tap = httpTap(input, ctx.headers);
     const res = yield* fetchRetrying(
       joinUrl(ctx.baseUrl, `/models/${encodeURIComponent(input.selection.model)}:streamGenerateContent?alt=sse`),
       {
@@ -476,6 +483,7 @@ const gemini: ApiSpec = {
         }),
       },
       ctx.retry,
+      tap,
     );
     if (!res.ok) return yield* httpError("Gemini API", res);
     let usage: Record<string, number> | undefined;
@@ -485,6 +493,7 @@ const gemini: ApiSpec = {
     const parts: Record<string, unknown>[] = [];
     let called = false;
     for await (const { data } of readSSE(res)) {
+      if (tap) yield tap.sse(data);
       const e = JSON.parse(data);
       if (e.error) return yield { type: "error", message: e.error.message ?? "Gemini API error" };
       if (e.promptFeedback?.blockReason) {

@@ -3,7 +3,7 @@ import { redactErrors } from "../../util/redact.js";
 import { compareVersions } from "../../util/process.js";
 import { FunnelError, type AuthStatus, type FunnelEvent, type Installation, type ModelInfo, type Provider, type PullEvent, type RunInput, type ToolCall } from "../../types.js";
 import { runWithHistory } from "../history.js";
-import { bearer, httpAccount, httpCapabilities, jsonHeaders, truncated } from "../http.js";
+import { bearer, httpAccount, httpCapabilities, httpTap, jsonHeaders, truncated } from "../http.js";
 import { chatTools, newCallId, ollamaCalls, ollamaMessages, type Msg } from "../wire.js";
 import { mapChatLine, mapPullLine, normalizeBaseUrl, parseTags, thinkValue } from "./parser.js";
 import { joinUrl } from "../../util/url.js";
@@ -100,9 +100,12 @@ export function createOllamaProvider(options: OllamaOptions = {}): Provider {
     // The first line that was not JSON. A proxy error page looks like this, and it is what the user needs to see.
     let raw: string | undefined;
     try {
+      const tap = httpTap(input, headers(true), options.apiKey);
       const res = await fetch(joinUrl(base(), "/api/chat"), { method: "POST", signal: input.signal, headers: headers(true), body: JSON.stringify(chatBody(input, messages, options.keepAlive)) });
+      if (tap) yield tap.response(res);
       if (!res.ok) return yield { type: "error", message: `Ollama ${res.status}: ${await errorText(res)}`, code: "cli-failed" };
       for await (const line of readNDJSON(res)) {
+        if (tap) yield tap.json(line);
         if (line && typeof line === "object" && "__raw" in line) {
           raw ??= String(line.__raw).slice(0, 200);
           continue;

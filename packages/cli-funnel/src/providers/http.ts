@@ -1,5 +1,56 @@
-import { FunnelError, type Capabilities, type FunnelEvent, type Provider } from "../types.js";
+import { FunnelError, type Capabilities, type FunnelEvent, type Provider, type RunInput } from "../types.js";
+import { mask, runSecrets } from "../util/redact.js";
 import { parseHttpLimit, retryAfter } from "./limits.js";
+
+/** Request headers whose values are never secrets. Every other value of 8 characters or more is masked in `raw` data. */
+const PLAIN_REQUEST_HEADERS = new Set(["content-type", "accept", "user-agent", "anthropic-version", "anthropic-beta", "openai-beta"]);
+
+/** Response headers left out of `raw` data, since they can carry a session or a credential. */
+const HIDDEN_RESPONSE_HEADER = /cookie|authori[sz]ation|authenticate|secret|password|credential|api-key/i;
+
+/** The `raw` events of a verbose HTTP run. Build it with `httpTap`. */
+export interface HttpTap {
+  /** The status and headers of a response, with credential headers left out. */
+  response(res: Response): FunnelEvent;
+  /** One SSE `data` field: the parsed JSON, or the string when it is not JSON, such as `[DONE]`. */
+  sse(data: string): FunnelEvent;
+  /** One NDJSON line as `readNDJSON` yields it. A line that was not JSON is sent as the string. */
+  json(line: unknown): FunnelEvent;
+}
+
+/**
+ * A tap for a verbose run, or undefined without `verbose`, so a normal run pays nothing. `key` and the values of
+ * `headers` (the request's headers) are masked in everything it emits, together with the run's own secrets. Only
+ * headers known to hold no secret, such as `content-type`, are left alone.
+ */
+export function httpTap(input: RunInput, headers: Record<string, string> = {}, key?: string): HttpTap | undefined {
+  if (!input.verbose) return undefined;
+  // A Bearer header also yields its bare token, which is what a server would echo.
+  const fromHeaders = Object.entries(headers).flatMap(([name, value]) =>
+    !PLAIN_REQUEST_HEADERS.has(name.toLowerCase()) && value.length >= 8 ? [value, value.replace(/^Bearer\s+/i, "")] : [],
+  );
+  const secrets = [...new Set([...(key ? [key] : []), ...fromHeaders, ...runSecrets(input)])].sort((a, b) => b.length - a.length);
+  const provider = input.selection.provider;
+  const raw = (source: "response" | "http", data: unknown): FunnelEvent => ({ type: "raw", provider, source, data: mask(data, secrets) });
+  return {
+    response: (res) => {
+      const shown: Record<string, string> = {};
+      res.headers.forEach((value, name) => {
+        if (!HIDDEN_RESPONSE_HEADER.test(name)) shown[name] = value;
+      });
+      return raw("response", { status: res.status, headers: shown });
+    },
+    sse: (data) => {
+      try {
+        return raw("http", JSON.parse(data));
+      } catch {
+        return raw("http", data);
+      }
+    },
+    json: (line) =>
+      raw("http", typeof line === "object" && line !== null && Object.keys(line).length === 1 && "__raw" in line ? String((line as { __raw: unknown }).__raw) : line),
+  };
+}
 
 export interface RetryOptions {
   /** Extra attempts after a 429 or 5xx answer. Default 2, so a call is sent at most 3 times. 0 turns retries off. */
@@ -32,13 +83,14 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
  * Sends a request and sends it again on 429 or 5xx, up to `retries` more times. It yields a `retry` event before
  * each wait and returns the final response, which may still be an error. Nothing is read from a response that
  * is sent again, and a response that is returned is untouched, so a caller that starts reading text never retries.
- * Network errors and aborts throw as `fetch` does.
+ * Network errors and aborts throw as `fetch` does. With a `tap`, each response's status and headers go out as `raw`.
  */
-export async function* fetchRetrying(url: string, init: RequestInit, options: RetryOptions = {}): AsyncGenerator<FunnelEvent, Response> {
+export async function* fetchRetrying(url: string, init: RequestInit, options: RetryOptions = {}, tap?: HttpTap): AsyncGenerator<FunnelEvent, Response> {
   const retries = Math.max(0, options.retries ?? 2);
   const base = options.retryDelayMs ?? 500;
   for (let attempt = 1; ; attempt++) {
     const res = await fetch(url, init);
+    if (tap) yield tap.response(res);
     if (res.ok || !retryable(res.status) || attempt > retries) return res;
     const delayMs = retryAfter(res.headers) ?? base * 2 ** (attempt - 1);
     if (delayMs > MAX_RETRY_WAIT_MS) return res;
