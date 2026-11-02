@@ -129,6 +129,19 @@ describe("codex events", () => {
       expect(t.handle("turn/completed", { threadId: "child", turn: { status: "completed" } })).toEqual({ events: [] });
     });
 
+    it("follows a subagent's own subagents with text forwarding alone", () => {
+      const t = new Translator("main", "/w", { text: true });
+      const spawn = (thread: string, id: string, child: string) =>
+        t.handle("item/started", { threadId: thread, item: { type: "subAgentActivity", kind: "started", id, agentThreadId: child, agentPath: `/root/${child}` } });
+      spawn("main", "s1", "child");
+      spawn("child", "s2", "grandchild");
+      // An older Codex names the new thread only when the spawnAgent call completes.
+      t.handle("item/completed", { threadId: "child", item: { type: "collabAgentToolCall", tool: "spawnAgent", id: "s3", status: "completed", receiverThreadIds: ["old"] } });
+      const said = (thread: string) => t.handle("item/completed", { threadId: thread, item: { type: "agentMessage", id: "m", text: "hi" } }).events;
+      expect(said("grandchild")).toEqual([{ type: "subagent.text", parentId: "s2", text: "hi", agent: "grandchild" }]);
+      expect(said("old")).toEqual([{ type: "subagent.text", parentId: "s3", text: "hi" }]);
+    });
+
     it("maps the threads of an older spawnAgent call", () => {
       const t = new Translator("main", "/w", { tools: true });
       t.handle("item/completed", { threadId: "main", item: { type: "collabAgentToolCall", tool: "spawnAgent", id: "ca", status: "completed", receiverThreadIds: ["child"] } });

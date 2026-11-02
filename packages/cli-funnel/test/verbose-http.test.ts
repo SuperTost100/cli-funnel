@@ -15,7 +15,21 @@ const echo = { echo: `key ${KEY}, header ${GATEWAY}` };
 function stubFetch(body: string, contentType: string): void {
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => new Response(body, { status: 200, headers: { "content-type": contentType, "x-echo": KEY, "set-cookie": "session=abcdefgh", "x-request-id": "req_1" } })),
+    vi.fn(
+      async () =>
+        new Response(body, {
+          status: 200,
+          headers: {
+            "content-type": contentType,
+            "x-echo": KEY,
+            "set-cookie": "session=abcdefgh",
+            "x-session-token": "tok-abcdefgh",
+            "x-refresh-token": "tok-abcdefgh",
+            "x-ratelimit-remaining-tokens": "9000",
+            "x-request-id": "req_1",
+          },
+        }),
+    ),
   );
 }
 
@@ -59,8 +73,9 @@ describe("verbose on HTTP providers", () => {
       const raw = events.filter((e) => e.type === "raw");
       expect(raw.every((e) => e.provider === c.id)).toBe(true);
       const [response, ...chunks] = raw;
-      expect(response).toMatchObject({ source: "response", data: { status: 200, headers: { "x-echo": "[redacted]", "x-request-id": "req_1" } } });
-      expect((response!.data as { headers: Record<string, string> }).headers).not.toHaveProperty("set-cookie");
+      expect(response).toMatchObject({ source: "response", data: { status: 200, headers: { "x-echo": "[redacted]", "x-request-id": "req_1", "x-ratelimit-remaining-tokens": "9000" } } });
+      const shown = (response!.data as { headers: Record<string, string> }).headers;
+      for (const name of ["set-cookie", "x-session-token", "x-refresh-token"]) expect(shown).not.toHaveProperty(name);
       // The run stops reading at the vendor's end marker, so a chunk after it may not show.
       expect(chunks.every((e) => e.source === "http")).toBe(true);
       expect(chunks.length).toBeGreaterThanOrEqual(c.chunks - 1);

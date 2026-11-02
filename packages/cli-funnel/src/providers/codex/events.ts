@@ -169,6 +169,9 @@ export class Translator {
     const sub = this.subagents.get(p.threadId);
     if (!sub || (method !== "item/started" && method !== "item/completed")) return [];
     const tag = <E extends FunnelEvent>(e: E): E => ({ ...e, parentId: sub.parentId, ...(sub.agent ? { agent: sub.agent } : {}) });
+    // A subagent can start subagents of its own. itemStarted and itemCompleted note them, and without tool events
+    // they are noted here, so text forwarding alone still follows them.
+    if (!this.forward.tools) this.trackSubagent(p.item);
     if (method === "item/started") return this.forward.tools ? this.itemStarted(p.item).filter((e) => e.type === "tool.start").map(tag) : [];
     if (p.item?.type === "agentMessage") {
       return this.forward.text && p.item.text ? [{ type: "subagent.text", parentId: sub.parentId, text: String(p.item.text), ...(sub.agent ? { agent: sub.agent } : {}) }] : [];

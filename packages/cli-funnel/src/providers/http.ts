@@ -5,8 +5,12 @@ import { parseHttpLimit, retryAfter } from "./limits.js";
 /** Request headers whose values are never secrets. Every other value of 8 characters or more is masked in `raw` data. */
 const PLAIN_REQUEST_HEADERS = new Set(["content-type", "accept", "user-agent", "anthropic-version", "anthropic-beta", "openai-beta"]);
 
-/** Response headers left out of `raw` data, since they can carry a session or a credential. */
-const HIDDEN_RESPONSE_HEADER = /cookie|authori[sz]ation|authenticate|secret|password|credential|api-key/i;
+/**
+ * Response headers left out of `raw` data, since they can carry a session or a credential. Token headers are matched
+ * by kind (`x-session-token`, `refresh_token`), so token counts such as `x-ratelimit-remaining-tokens` stay.
+ */
+const HIDDEN_RESPONSE_HEADER =
+  /cookie|authori[sz]ation|authenticate|secret|password|credential|api-key|(?:access|refresh|id|session|auth|bearer)[-_]?token(?:$|[-_])/i;
 
 /** The `raw` events of a verbose HTTP run. Build it with `httpTap`. */
 export interface HttpTap {
@@ -23,6 +27,9 @@ export interface HttpTap {
  * `headers` (the request's headers) are masked in everything it emits, together with the run's own secrets. Only
  * headers known to hold no secret, such as `content-type`, are left alone.
  */
+// shortcut: each chunk is masked on its own, so a secret a server splits across two SSE events is not caught. The
+// key and headers never reach the model, so only a server that echoes them in pieces could do that. Buffer the
+// chunks if one ever does.
 export function httpTap(input: RunInput, headers: Record<string, string> = {}, key?: string): HttpTap | undefined {
   if (!input.verbose) return undefined;
   // A Bearer header also yields its bare token, which is what a server would echo.
