@@ -270,7 +270,8 @@ process.stdin.on("data", (d) => {
           send({ method: "item/started", params: { threadId: thread, item: { type: "fileChange", id: "fc", status: "inProgress", changes: [{ path: "x.txt", kind: { type: "add" }, diff: "hi" }] } } });
           send({ id: "srv-1", method: "item/fileChange/requestApproval", params: { threadId: thread, turnId: turn, itemId: "fc" } });
         } else if (prompt === "fail") {
-          send({ method: "turn/completed", params: { threadId: thread, turn: { id: turn, status: "failed", error: { message: "Incorrect API key provided: " + process.env.FAKE_KEY } } } });
+          process.stderr.write("auth failed for " + process.env.FAKE_KEY + "\\n");
+          setTimeout(() => send({ method: "turn/completed", params: { threadId: thread, turn: { id: turn, status: "failed", error: { message: "Incorrect API key provided: " + process.env.FAKE_KEY } } } }), 50);
         } else done("ok");
         break;
       default: if (m.id !== undefined && m.method) send({ id: m.id, error: { code: -32601, message: "unknown" } });
@@ -359,6 +360,25 @@ describe("codex agent features through the app-server", () => {
   it("declines without a steer when there is no message", async () => {
     await run("deny", { onApproval: () => "deny" });
     expect(entries().some((e) => e.method === "turn/steer")).toBe(false);
+  });
+
+  it("emits every app-server line with verbose, with the API key masked", async () => {
+    const key = "sk-test-0123456789abcdef";
+    process.env.FAKE_KEY = key;
+    await run("fail", { apiKey: key, verbose: true }).catch(() => undefined);
+    const raw = events.filter((e) => e.type === "raw");
+    expect(raw.every((e) => e.provider === "codex")).toBe(true);
+    const methods = raw.flatMap((e) => (e.source === "stdout" && (e.data as { method?: string }).method) || []);
+    expect(methods).toEqual(["turn/started", "turn/completed"]);
+    // Answers to the funnel's own requests come through too.
+    expect(raw.some((e) => (e.data as { result?: { thread?: unknown } }).result?.thread)).toBe(true);
+    expect(raw.filter((e) => e.source === "stderr").map((e) => e.data)).toEqual(["auth failed for [redacted]"]);
+    expect(JSON.stringify(events)).not.toContain(key);
+  });
+
+  it("emits no raw events without verbose", async () => {
+    const { events } = await run("hi");
+    expect(events.some((e) => e.type === "raw")).toBe(false);
   });
 
   it("logs in with the API key before the thread starts and redacts it from errors", async () => {

@@ -138,7 +138,7 @@ curl -X DELETE http://127.0.0.1:4747/sessions/<id>
 
 The browser client has `client.sessions()`, `client.steer(sessionId, text, provider?)` and `client.closeSession(sessionId, provider?)`. Listing threads, forking and reading usage are library calls only.
 
-## Subagent text
+## Subagents
 
 Claude Code runs subagents for the `Agent` tool. By default their messages stay out of the stream. Set `providerOptions.claude.forwardSubagentText` to pass `--forward-subagent-text`, and each text block a subagent writes arrives as a `subagent.text` event:
 
@@ -150,3 +150,15 @@ for await (const e of funnel.stream({ selection, prompt, providerOptions: { clau
 ```
 
 `parentId` is the `id` of the `tool.start` that started the subagent. `agent` is the subagent's name when Claude Code reports it. The events carry whole messages, not deltas. They are not part of `result.text`. Like every provider option, the flag is set when the process starts, so a turn that changes it gets a new process. Claude Code sends the subagent's thinking blocks empty, so they are not forwarded.
+
+Set `providerOptions.claude.forwardSubagentTools` to see the subagents' tool calls too. They arrive as `tool.start` and `tool.end` events with the same `parentId` and `agent`:
+
+```ts
+const providerOptions = { claude: { forwardSubagentText: true, forwardSubagentTools: true } };
+for await (const e of funnel.stream({ selection, prompt, providerOptions })) {
+  if (e.type === "tool.start" && e.parentId) console.log(`[${e.agent}] ${e.name}`, e.input, "inside call", e.parentId);
+  else if (e.type === "tool.start") console.log("tool:", e.name);
+}
+```
+
+A subagent's calls do not count as the run's own: they are not in `result.toolCalls`, its edits produce no `file.change`, and its plan tools do not change `plan`. The two options work on their own or together.

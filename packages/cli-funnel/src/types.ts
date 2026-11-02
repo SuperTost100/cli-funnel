@@ -320,9 +320,15 @@ export type FunnelEvent =
   | { type: "text.delta"; text: string }
   /** The model's thinking, not text for the user. */
   | { type: "reasoning.delta"; text: string }
-  /** A CLI agent started one of its own tools, such as a shell command or a file edit. */
-  | { type: "tool.start"; id: string; name: string; input?: unknown }
-  | { type: "tool.end"; id: string; output?: string; error?: string }
+  /**
+   * A CLI agent started one of its own tools, such as a shell command or a file edit. `parentId` is set on a tool call
+   * a subagent made, when `providerOptions.claude.forwardSubagentTools` is on: it is the id of the tool call that
+   * started the subagent, so it matches that call's `tool.start`. `agent` is the subagent's type, when the CLI names it.
+   * Subagent calls are not in `RunResult.toolCalls`.
+   */
+  | { type: "tool.start"; id: string; name: string; input?: unknown; parentId?: string; agent?: string }
+  /** The end of a `tool.start`. It carries the same `parentId` and `agent`. */
+  | { type: "tool.end"; id: string; output?: string; error?: string; parentId?: string; agent?: string }
   /** A piece of the JSON arguments of a call to one of `RunInput.tools`, as the model writes it. Not every vendor streams them. */
   | { type: "tool_call.delta"; id: string; name: string; arguments: string }
   /** A finished call to one of `RunInput.tools`. Your code runs the tool and sends the result in the next run. */
@@ -348,6 +354,13 @@ export type FunnelEvent =
   | { type: "retry"; attempt: number; status: number; delayMs: number }
   /** The parsed answer when the provider reports structured output itself. */
   | { type: "structured"; data: unknown }
+  /**
+   * One line the CLI printed, when `RunInput.verbose` is on. `source: "stdout"` carries the parsed JSON object, or the
+   * line as a string when it was not JSON. `source: "stderr"` carries the line as a string. The run's own secrets are
+   * masked. Raw lines can hold anything the CLI prints, such as file contents or the signed-in account, so treat them
+   * like a debug log.
+   */
+  | { type: "raw"; provider: ProviderId; source: "stdout" | "stderr"; data: unknown }
   /** `timeout` is set when the run hit `RunInput.timeoutMs`. `finishReason` is then "cancelled". */
   | { type: "done"; text: string; finishReason: FinishReason; timeout?: true }
   | { type: "error"; message: string; code?: string };
@@ -560,6 +573,11 @@ export interface RunInput {
    * `capabilities.apiKey`. It never appears in events, records or logs.
    */
   apiKey?: string;
+  /**
+   * Debug mode: emit a `raw` event for every line the CLI prints on stdout and stderr, next to the normal events.
+   * Claude Code, Codex, Cursor Agent and Antigravity. Other providers ignore it. Default off.
+   */
+  verbose?: boolean;
   /** Extra environment for the CLI process. */
   env?: Record<string, string>;
   /** Where providers without server-side sessions keep the conversation. Default: the funnel's `history` option. */
@@ -600,6 +618,11 @@ export interface ClaudeOptions {
   forkSession?: boolean;
   /** Emit `subagent.text` events with the text subagents write, tagged with the id of the tool call that started them. */
   forwardSubagentText?: boolean;
+  /**
+   * Emit the tool calls subagents make as `tool.start` and `tool.end` events, with `parentId` set to the id of the tool
+   * call that started the subagent. They do not count toward the run's file changes, plan or `RunResult.toolCalls`.
+   */
+  forwardSubagentTools?: boolean;
   /** Beta headers. Only API key logins use them. */
   betas?: string[];
 }

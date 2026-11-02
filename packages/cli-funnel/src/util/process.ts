@@ -248,6 +248,11 @@ export interface Streamed {
   lines: AsyncIterable<unknown>;
   /** The last STDERR_KEEP characters of stderr so far. */
   stderr(): string;
+  /**
+   * Calls `listener` with each line of stderr from now on, without the line break. A last line with no line break comes
+   * when the process exits. Returns a function that stops the calls.
+   */
+  onStderr(listener: (line: string) => void): () => void;
   /** Resolves when the process exits. */
   exited: Promise<number | null>;
   write(line: string): void;
@@ -274,6 +279,12 @@ export function spawnStream(
   const channel = new Channel<unknown>();
   let buffer = "";
   let stderr = "";
+  // Lines are split only while someone listens, so a run without a listener pays nothing.
+  const stderrListeners = new Set<(line: string) => void>();
+  let stderrPartial = "";
+  const emitStderr = (line: string) => {
+    for (const l of stderrListeners) l(line.endsWith("\r") ? line.slice(0, -1) : line);
+  };
 
   const flush = (line: string) => {
     const parsed = parseLine(line);
@@ -290,7 +301,13 @@ export function spawnStream(
     }
   });
   child.stderr.setEncoding("utf8");
-  child.stderr.on("data", (d: string) => (stderr = (stderr + d).slice(-STDERR_KEEP)));
+  child.stderr.on("data", (d: string) => {
+    stderr = (stderr + d).slice(-STDERR_KEEP);
+    if (!stderrListeners.size) return;
+    const parts = (stderrPartial + d).split("\n");
+    stderrPartial = parts.pop()!;
+    for (const line of parts) emitStderr(line);
+  });
 
   const exited = new Promise<number | null>((resolve) => {
     child.on("error", (e) => {
@@ -300,6 +317,8 @@ export function spawnStream(
     });
     child.on("close", (code) => {
       release();
+      if (stderrPartial) emitStderr(stderrPartial);
+      stderrPartial = "";
       flush(buffer);
       buffer = "";
       channel.end();
@@ -314,6 +333,13 @@ export function spawnStream(
     child,
     lines: channel,
     stderr: () => stderr,
+    onStderr: (listener) => {
+      stderrListeners.add(listener);
+      return () => {
+        stderrListeners.delete(listener);
+        if (!stderrListeners.size) stderrPartial = "";
+      };
+    },
     exited,
     write: (line) => child.stdin.write(line.endsWith("\n") ? line : line + "\n"),
     closeStdin: () => child.stdin.end(),

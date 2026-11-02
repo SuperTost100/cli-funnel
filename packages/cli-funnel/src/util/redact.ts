@@ -58,7 +58,7 @@ export function runSecrets(input: Pick<RunInput, "apiKey" | "mcpServers">): stri
 const maskText = (text: string, secrets: string[]) => secrets.reduce((s, secret) => s.replaceAll(secret, MASK), text);
 
 /** `value` with every secret masked, in strings and object keys at any depth. Other values come back as they are. */
-function mask(value: unknown, secrets: string[]): unknown {
+export function mask(value: unknown, secrets: string[]): unknown {
   if (typeof value === "string") return maskText(value, secrets);
   if (Array.isArray(value)) return value.map((v) => mask(v, secrets));
   if (typeof value === "object" && value !== null) return Object.fromEntries(Object.entries(value).map(([k, v]) => [maskText(k, secrets), mask(v, secrets)]));

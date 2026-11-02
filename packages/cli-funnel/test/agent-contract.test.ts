@@ -127,6 +127,10 @@ describe("funnel checks", () => {
     await expect(run({ planTool: "false" as never })).rejects.toMatchObject({ code: "invalid-selection" });
   });
 
+  it("refuses a verbose that is not a boolean", async () => {
+    await expect(run({ verbose: "true" as never })).rejects.toMatchObject({ code: "invalid-selection" });
+  });
+
   it("refuses a sandbox the CLI cannot give, and one that is not a boolean", async () => {
     await expect(run({ sandbox: true })).rejects.toMatchObject({ code: "unsupported" });
     await expect(run({ sandbox: "true" as never })).rejects.toMatchObject({ code: "invalid-selection" });

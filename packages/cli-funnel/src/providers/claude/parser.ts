@@ -31,9 +31,30 @@ export interface ClaudeTrack {
   tasks: { id: string; text: string; status: PlanStep["status"] }[];
   /** TaskCreate and TaskUpdate calls waiting for their result, by tool use id. */
   taskCalls: Map<string, { name: string; input: Obj }>;
+  /** Forwarded subagent tool calls in this turn, by tool use id, so a denial in the `result` keeps their parent. */
+  subagentCalls: Map<string, Subagent>;
 }
 
-export const newClaudeTrack = (): ClaudeTrack => ({ edits: new Map(), declined: new Set(), failedEdits: new Map(), tasks: [], taskCalls: new Map() });
+/** The subagent a message belongs to: the id of the tool call that started it, and its type when the CLI names it. */
+interface Subagent {
+  parentId: string;
+  agent?: string;
+}
+
+/** Which subagent messages to turn into events. `text` goes with `--forward-subagent-text`. `tools` needs no flag. */
+export interface ForwardSubagents {
+  text?: boolean;
+  tools?: boolean;
+}
+
+export const newClaudeTrack = (): ClaudeTrack => ({
+  edits: new Map(),
+  declined: new Set(),
+  failedEdits: new Map(),
+  tasks: [],
+  taskCalls: new Map(),
+  subagentCalls: new Map(),
+});
 
 /** Tools that write one file, and the input field that holds its path. Shell commands are not covered. */
 const EDIT_TOOLS: Record<string, string> = { Write: "file_path", Edit: "file_path", MultiEdit: "file_path", NotebookEdit: "notebook_path" };
@@ -104,18 +125,32 @@ const fileChange = (id: string, call: EditCall, kind: FileChange["kind"], status
 });
 
 /**
- * Text blocks of a subagent's `assistant` message, which Claude Code sends with `--forward-subagent-text`. Thinking
- * blocks are left out: the CLI sends them empty. The subagent's prompt (a `user` message) and its tool calls are left
- * out too. The parent's `Agent` tool call already carries the prompt.
+ * Events for one subagent message, in block order. Text blocks of an `assistant` message become `subagent.text` with
+ * `forward.text`, which goes with `--forward-subagent-text`. Thinking blocks are left out: the CLI sends them empty.
+ * With `forward.tools`, `tool_use` blocks become `tool.start` and the `tool_result` blocks of a `user` message become
+ * `tool.end`, both tagged with the subagent. Claude Code sends those messages without a flag. The subagent's prompt
+ * (a `user` message with text) is left out: the parent's `Agent` tool call already carries it. Subagent calls never
+ * reach the run's edit, task or plan tracking.
  */
-function subagentText(raw: Obj): FunnelEvent[] {
-  if (raw.type !== "assistant" || typeof raw.parent_tool_use_id !== "string" || !isObj(raw.message) || !Array.isArray(raw.message.content)) return [];
-  const agent = typeof raw.subagent_type === "string" ? raw.subagent_type : undefined;
-  return raw.message.content.flatMap((b): FunnelEvent[] =>
-    isObj(b) && b.type === "text" && typeof b.text === "string" && b.text
-      ? [{ type: "subagent.text", parentId: raw.parent_tool_use_id as string, text: b.text, ...(agent ? { agent } : {}) }]
-      : [],
-  );
+function subagentEvents(raw: Obj, forward: ForwardSubagents, track: ClaudeTrack): FunnelEvent[] {
+  if (typeof raw.parent_tool_use_id !== "string" || !isObj(raw.message) || !Array.isArray(raw.message.content)) return [];
+  const sub: Subagent = { parentId: raw.parent_tool_use_id, ...(typeof raw.subagent_type === "string" ? { agent: raw.subagent_type } : {}) };
+  return raw.message.content.flatMap((b): FunnelEvent[] => {
+    if (!isObj(b)) return [];
+    if (raw.type === "assistant" && forward.text && b.type === "text" && typeof b.text === "string" && b.text) {
+      return [{ type: "subagent.text", parentId: sub.parentId, text: b.text, ...(sub.agent ? { agent: sub.agent } : {}) }];
+    }
+    if (raw.type === "assistant" && forward.tools && b.type === "tool_use" && typeof b.id === "string") {
+      track.subagentCalls.set(b.id, sub);
+      return [{ type: "tool.start", id: b.id, name: String(b.name), input: b.input, ...sub }];
+    }
+    if (raw.type === "user" && forward.tools && b.type === "tool_result" && typeof b.tool_use_id === "string") {
+      const out = toolOutput(b.content);
+      const end = b.is_error === true ? { error: out ?? "Tool failed." } : { output: out };
+      return [{ type: "tool.end", id: b.tool_use_id, ...end, ...sub }];
+    }
+    return [];
+  });
 }
 
 /**
@@ -131,10 +166,10 @@ const AUTH: Record<string, "account" | "api-key"> = {
 
 /**
  * Maps one stream-json object from `claude -p` to zero or more FunnelEvents. Messages from subagents are dropped unless
- * `forwardSubagents` is set, which goes with the `--forward-subagent-text` flag. `track` carries what one process needs
+ * `forward` asks for their text or their tool calls (see `subagentEvents`). `track` carries what one process needs
  * across messages: the task list for `plan`, and the edit calls for `file.change`. The parser does no I/O.
  */
-export function parseClaudeMessage(raw: unknown, forwardSubagents = false, track: ClaudeTrack = newClaudeTrack()): FunnelEvent[] {
+export function parseClaudeMessage(raw: unknown, forward: ForwardSubagents = {}, track: ClaudeTrack = newClaudeTrack()): FunnelEvent[] {
   if (!isObj(raw)) return [];
   const type = raw.type;
 
@@ -145,8 +180,8 @@ export function parseClaudeMessage(raw: unknown, forwardSubagents = false, track
 
   if (type === "rate_limit_event" && isObj(raw.rate_limit_info)) return parseRateLimit(raw.rate_limit_info);
 
-  // Subagent traffic carries a parent id. The main thread is surfaced as it is, the subagents' text only on request.
-  if (raw.parent_tool_use_id) return forwardSubagents ? subagentText(raw) : [];
+  // Subagent traffic carries a parent id. The main thread is surfaced as it is, the subagents' messages only on request.
+  if (raw.parent_tool_use_id) return forward.text || forward.tools ? subagentEvents(raw, forward, track) : [];
 
   if (type === "stream_event" && isObj(raw.event) && raw.event.type === "content_block_delta" && isObj(raw.event.delta)) {
     const d = raw.event.delta;
@@ -191,7 +226,11 @@ export function parseClaudeMessage(raw: unknown, forwardSubagents = false, track
     });
   }
 
-  if (type === "result") return [...settleEdits(raw, track), ...parseResult(raw)];
+  if (type === "result") {
+    const events = [...settleEdits(raw, track), ...parseResult(raw, track)];
+    track.subagentCalls.clear();
+    return events;
+  }
   return [];
 }
 
@@ -234,7 +273,7 @@ function parseRateLimit(info: Obj): FunnelEvent[] {
   return [{ type: "limit", kind: window === "five_hour" ? "rate" : "quota", detail: `Claude ${name} limit reached.`, ...(resetAt ? { resetAt } : {}) }];
 }
 
-function parseResult(r: Obj): FunnelEvent[] {
+function parseResult(r: Obj, track: ClaudeTrack): FunnelEvent[] {
   const text = typeof r.result === "string" ? r.result : "";
   if (r.is_error === true || (typeof r.subtype === "string" && r.subtype.startsWith("error"))) {
     const status = r.api_error_status;
@@ -261,7 +300,10 @@ function parseResult(r: Obj): FunnelEvent[] {
   const denials = Array.isArray(r.permission_denials) ? r.permission_denials.filter(isObj) : [];
   // The tool result only says the call failed. The denial list says why, so the call ends again as denied.
   for (const d of denials) {
-    if (typeof d.tool_use_id === "string") events.push({ type: "tool.end", id: d.tool_use_id, error: `denied: ${String(d.tool_name)} was not allowed` });
+    if (typeof d.tool_use_id === "string") {
+      const sub = track.subagentCalls.get(d.tool_use_id);
+      events.push({ type: "tool.end", id: d.tool_use_id, error: `denied: ${String(d.tool_name)} was not allowed`, ...sub });
+    }
   }
   const finishReason: FinishReason = denials.length ? "denied" : "stop";
   events.push({ type: "done", text, finishReason });

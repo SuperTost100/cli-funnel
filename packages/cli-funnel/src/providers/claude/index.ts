@@ -14,14 +14,14 @@ import {
   type QuestionRequest,
   type RunInput,
 } from "../../types.js";
-import { askApproval, askQuestion, detectInstallation, exitedEarly, findBinary, runLogout, runUpdate, spawnLogin, stderrTail } from "../base.js";
+import { askApproval, askQuestion, detectInstallation, exitedEarly, findBinary, rawTap, runLogout, runUpdate, spawnLogin, stderrTail } from "../base.js";
 import { bool, dirList, flag, invalidOption, mcpServersFor, object, optionsFor, positive, requireAccess, str, stringList } from "../options.js";
 import { manifestModels } from "../../catalog/manifest.js";
 import { needsArgFile, writeArgFile, type ArgFile } from "../../util/argfile.js";
 import { exec, spawnStream, type Streamed } from "../../util/process.js";
 import { openClaudeSession } from "./live.js";
 import { requireMachine } from "../../selection.js";
-import { editPath, newClaudeTrack, parseClaudeMessage, type ClaudeTrack } from "./parser.js";
+import { editPath, newClaudeTrack, parseClaudeMessage, type ClaudeTrack, type ForwardSubagents } from "./parser.js";
 
 const BIN = "claude";
 const TESTED_RANGE = { min: "2.1.0" };
@@ -169,7 +169,7 @@ function schemaInit(input: RunInput): string | undefined {
   return JSON.stringify({ type: "control_request", request_id: "cli-funnel-init", request });
 }
 
-const OPTION_KEYS = ["allowedTools", "disallowedTools", "addDirs", "mcpConfig", "agents", "fallbackModel", "maxBudgetUsd", "forkSession", "forwardSubagentText", "betas"];
+const OPTION_KEYS = ["allowedTools", "disallowedTools", "addDirs", "mcpConfig", "agents", "fallbackModel", "maxBudgetUsd", "forkSession", "forwardSubagentText", "forwardSubagentTools", "betas"];
 const AGENT_KEYS = ["description", "prompt", "tools", "disallowedTools", "model"];
 const NOT_NONE = ACCESS_LEVELS.filter((a) => a !== "none");
 
@@ -224,12 +224,17 @@ function optionArgs(input: RunInput, mcpFile?: string): string[] {
     args.push("--fork-session");
   }
   if (bool(o.forwardSubagentText, "forwardSubagentText")) args.push("--forward-subagent-text");
+  // Claude Code sends subagent tool calls without a flag. Checked here so a bad value fails like the other options.
+  bool(o.forwardSubagentTools, "forwardSubagentTools");
   for (const b of stringList(o.betas, "betas") ?? []) args.push(flag("--betas", b));
   return args;
 }
 
-/** True when the run asked for `--forward-subagent-text`, so its parser keeps the subagents' text. */
-export const forwardsSubagents = (input: RunInput): boolean => input.providerOptions?.claude?.forwardSubagentText === true;
+/** The subagent messages the run's parser keeps: their text with `--forward-subagent-text`, and their tool calls. */
+export const forwardsSubagents = (input: RunInput): ForwardSubagents => ({
+  text: input.providerOptions?.claude?.forwardSubagentText === true,
+  tools: input.providerOptions?.claude?.forwardSubagentTools === true,
+});
 
 /** Plain text, or content blocks when images are attached. Same block shape as the Messages API. */
 export function userContent(input: RunInput): string | unknown[] {
@@ -285,43 +290,56 @@ export async function launchClaude(input: RunInput, signal?: AbortSignal): Promi
  * Reads one turn from `lines`: answers control requests and yields events up to and including `result`.
  * `state.finished` is set before a terminal event is yielded, since a consumer that stops at `done` never comes back.
  * `onResult` runs when `result` arrives, before its events are yielded. `track` lives as long as the process.
+ * With `input.verbose` each line, and the stderr printed before it, is yielded as `raw` events first.
  */
 export async function* claudeTurn(
-  proc: Pick<Streamed, "write" | "exited" | "stderr">,
+  proc: Pick<Streamed, "write" | "exited" | "stderr" | "onStderr">,
   lines: AsyncIterable<unknown>,
   input: RunInput,
-  forward: boolean,
+  forward: ForwardSubagents,
   state: { finished: boolean },
   track: ClaudeTrack,
   onResult?: () => void,
 ): AsyncGenerator<FunnelEvent> {
   const { cwd } = requireMachine(input.selection);
-  for await (const raw of lines) {
-    const msg = raw as Record<string, any>;
-    if (msg.type === "control_request") {
-      yield* answerControlRequest(proc, msg, input, track);
-      continue;
-    }
-    if (msg.type === "result") onResult?.();
-    for (const e of parseClaudeMessage(raw, forward, track)) {
-      if (e.type === "tool.start") {
-        // The kind of a file change depends on whether the file was there before the tool ran.
-        const path = editPath(e.name, e.input, cwd);
-        if (path) track.edits.set(e.id, { path, existed: existsSync(path) });
+  const tap = rawTap("claude", input, proc);
+  try {
+    for await (const raw of lines) {
+      const msg = raw as Record<string, any>;
+      if (tap) {
+        if (msg.type === "result") yield* await tap.settle();
+        yield* tap.events(raw);
       }
-      if (e.type === "done" || e.type === "error") state.finished = true;
-      if (e.type === "error" && !msg.result) {
-        // A run that fails before its first turn, such as a sandbox that cannot start, prints the reason on stderr.
-        await Promise.race([proc.exited, new Promise((r) => setTimeout(r, 1000).unref())]);
-        const tail = stderrTail(proc.stderr());
-        if (tail) {
-          yield { ...e, message: `${e.message} ${tail}` };
-          continue;
+      if (msg.type === "control_request") {
+        yield* answerControlRequest(proc, msg, input, track);
+        continue;
+      }
+      if (msg.type === "result") onResult?.();
+      for (const e of parseClaudeMessage(raw, forward, track)) {
+        // A subagent's edits are not tracked as the run's file changes.
+        if (e.type === "tool.start" && !e.parentId) {
+          // The kind of a file change depends on whether the file was there before the tool ran.
+          const path = editPath(e.name, e.input, cwd);
+          if (path) track.edits.set(e.id, { path, existed: existsSync(path) });
         }
+        if (e.type === "done" || e.type === "error") state.finished = true;
+        if (e.type === "error" && !msg.result) {
+          // A run that fails before its first turn, such as a sandbox that cannot start, prints the reason on stderr.
+          await Promise.race([proc.exited, new Promise((r) => setTimeout(r, 1000).unref())]);
+          const tail = stderrTail(proc.stderr());
+          if (tail) {
+            yield { ...e, message: `${e.message} ${tail}` };
+            continue;
+          }
+        }
+        yield e;
       }
-      yield e;
+      if (msg.type === "result") return;
     }
-    if (msg.type === "result") return;
+    // The CLI exited before its result. Its last stderr lines often say why.
+    if (tap) yield* tap.events();
+  } finally {
+    tap?.close();
   }
 }
 

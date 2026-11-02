@@ -19,7 +19,7 @@ import {
   type RunInput,
   type Selection,
 } from "../../types.js";
-import { detectInstallation, exitedEarly, findBinary, LOGIN_TIMEOUT_MS, runUpdate } from "../base.js";
+import { detectInstallation, exitedEarly, findBinary, isTerminal, LOGIN_TIMEOUT_MS, rawTap, runUpdate } from "../base.js";
 import { createMapper, parseModels } from "./parser.js";
 import { composePrompt } from "../prompt.js";
 import { dirList, flag, mcpServersFor, optionsFor, positive, requireAccess } from "../options.js";
@@ -318,11 +318,21 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
     brainDir: join(dataDir(home ?? homedir()), "brain"),
     readText: readTaskList,
   });
+  const tap = rawTap("antigravity", input, stream);
   try {
     for await (const line of stream.lines) {
-      for (const e of mapper.map(line)) yield e;
+      // Nothing goes out after the terminal event.
+      const before = mapper.finished;
+      const events = mapper.map(line);
+      if (tap && !before) {
+        if (events.some(isTerminal)) yield* await tap.settle();
+        yield* tap.events(line);
+      }
+      yield* events;
     }
+    if (tap && !mapper.finished) yield* tap.events();
   } finally {
+    tap?.close();
     // Runs too when the caller stops reading early. The CLI must not keep working unattended.
     stream.kill();
     await cleanup();

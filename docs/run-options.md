@@ -123,7 +123,7 @@ Two kinds of tool events exist, and they never mix:
 
 | Events | Whose tools | What to do |
 |---|---|---|
-| `tool.start`, `tool.end` | The CLI agent's own tools, such as a shell command or a file edit. The CLI runs them. | Show them. They end up in `result.toolCalls`. |
+| `tool.start`, `tool.end` | The CLI agent's own tools, such as a shell command or a file edit. The CLI runs them. | Show them. They end up in `result.toolCalls`, except the calls of Claude Code subagents, which carry a `parentId` (see [Subagents](sessions.md#subagents)). |
 | `tool_call.delta`, `tool_call` | The tools in `RunInput.tools`. Nobody runs them until your code does. | Run the calls in `result.pendingToolCalls` and answer in the next run. |
 
 `tool_call.delta` carries a piece of the JSON arguments as the model writes it, for a UI that shows them live. Anthropic, OpenAI and OpenAI-compatible servers stream arguments. Gemini and Ollama send each call whole, so they emit only `tool_call`. `tool_call.input` holds the parsed arguments, or the raw string when the model wrote something that is not JSON.
@@ -231,6 +231,37 @@ The sandbox covers shell commands. File tools follow the access level as before:
 
 On Linux, Claude Code needs `bubblewrap` and `socat`, and Cursor Agent ships its own helper. Ubuntu 24.04 blocks both from creating user namespaces until an AppArmor profile allows it, so check that the sandbox starts where you run it.
 
+### Verbose output
+
+`verbose: true` is a debug mode. Next to the normal events, the run emits one `raw` event for every line the CLI prints:
+
+```ts
+{ type: "raw", provider: "claude", source: "stdout", data: { type: "assistant", message: { ... } } }
+{ type: "raw", provider: "claude", source: "stderr", data: "warning: ..." }
+```
+
+A stdout line arrives as the parsed JSON object, or as the line itself when it is not JSON. A stderr line arrives as a string without its line break. Each `raw` event comes before the events cli-funnel parsed from the same line, so a debug view can show both side by side.
+
+```ts
+for await (const e of funnel.stream({ selection, prompt, verbose: true })) {
+  if (e.type === "raw") debugLog.push(e);
+  else render(e);
+}
+```
+
+| Provider | What `raw` carries |
+| --- | --- |
+| Claude Code | every stream-json line, control requests included, and stderr |
+| Codex | every JSON-RPC message from `codex app-server` during the turn, the answers to cli-funnel's own requests included, and stderr |
+| Cursor Agent | every stream-json line, and stderr |
+| Antigravity | every JSON line, and stderr |
+
+Other providers ignore `verbose`. It is off by default, and a run without it does no extra work: stderr is split into lines only while a verbose run listens.
+
+The run's own secrets are masked in `raw` data the same way as in every other event: `apiKey`, and the values of `mcpServers` headers and env entries whose names look like credentials. Everything else stays as the CLI printed it, which can include file contents, the prompt, tool output and account details such as the signed-in email. Treat `raw` events as a debug log and keep them on the user's machine.
+
+Stderr travels through its own pipe, so its lines are placed between stdout lines by arrival time. Before the last event of a run, a verbose run waits 20 ms for stderr written just before it. Lines printed after the run's last event are not sent. On a live session, a turn gets the lines printed while it runs, and a line printed between turns goes nowhere. Over HTTP, send `"verbose": true` in the `/run` body.
+
 ## Provider options
 
 `providerOptions` passes settings that only one CLI has. It is keyed by provider id, and a run reads only the entry for `selection.provider`, so one object can hold settings for several CLIs.
@@ -253,7 +284,7 @@ Options never give the agent more than `selection.access` allows. An option that
 | Claude Code | `allowedTools` | refused | refused | refused | refused | yes |
 | Claude Code | `mcpConfig` | refused | refused | refused | refused | yes |
 | Claude Code | `addDirs`, `agents` | refused | yes | yes | yes | yes |
-| Claude Code | `disallowedTools`, `fallbackModel`, `maxBudgetUsd`, `forkSession`, `forwardSubagentText`, `betas` | yes | yes | yes | yes | yes |
+| Claude Code | `disallowedTools`, `fallbackModel`, `maxBudgetUsd`, `forkSession`, `forwardSubagentText`, `forwardSubagentTools`, `betas` | yes | yes | yes | yes | yes |
 | Codex | `approvalPolicy` | `untrusted` | `untrusted` | `untrusted` | `untrusted`, `on-request` | any |
 | Codex | `webSearch` | `disabled` only | `disabled`, `cached`, `indexed` | `disabled`, `cached`, `indexed` | yes | yes |
 | Codex | `ephemeral` | yes | yes | yes | yes | yes |

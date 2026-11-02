@@ -93,6 +93,14 @@ setInterval(() => {}, 1000);`,
     expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
   });
 
+  it("hands stderr to listeners line by line, with a last line that has no line break", async () => {
+    const proc = spawnStream(script(`printf 'one\\r\\ntw' >&2; sleep 0.1; printf 'o\\nthree' >&2`), []);
+    const lines: string[] = [];
+    proc.onStderr((l) => lines.push(l));
+    await proc.exited;
+    expect(lines).toEqual(["one", "two", "three"]);
+  });
+
   it("keeps only the end of stderr", async () => {
     const proc = spawnStream(script(`i=0; while [ $i -lt 2000 ]; do echo "line $i of stderr noise" >&2; i=$((i+1)); done; echo last >&2`), []);
     await proc.exited;

@@ -3,7 +3,7 @@ import { requireMachine } from "../../selection.js";
 import { Channel } from "../../util/channel.js";
 import { spawnStream } from "../../util/process.js";
 import { redactErrors } from "../../util/redact.js";
-import { askApproval, askQuestion, findBinary, stderrTail } from "../base.js";
+import { askApproval, askQuestion, findBinary, rawEvent, stderrTail } from "../base.js";
 import { planAccess } from "./access.js";
 import { denyNote, effectiveReply, isQuestion, toApprovalRequest, toQuestionReply, toQuestionRequest, toReply, type Reply, type ServerRequest } from "./approvals.js";
 import { authKind } from "./auth.js";
@@ -197,6 +197,10 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
   };
 
   const rpc = new RpcClient(proc, {
+    line(raw) {
+      const t = current;
+      if (t && !t.finished && t.input.verbose) emit(t, rawEvent("codex", "stdout", raw, t.input));
+    },
     notification(method, params) {
       const t = current;
       if (!t || t.finished) return;
@@ -291,6 +295,9 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
     };
     current = t;
     proc.hold(true);
+    // The process outlives the turn, so stderr goes to this turn only while it runs. Events are pushed as they come,
+    // so stderr keeps its place among the stdout lines.
+    const offStderr = input.verbose ? proc.onStderr((line) => !t.finished && emit(t, rawEvent("codex", "stderr", line, input))) : undefined;
     if (exited || closed) finish(t, [{ type: "error", message: "Codex app-server is not running.", code: "cli-failed" }]);
 
     const signal = input.signal;
@@ -347,6 +354,7 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
         yield e;
       }
     } finally {
+      offStderr?.();
       signal?.removeEventListener("abort", onAbort);
       clearTimeout(grace);
       // A turn the consumer left before it ended leaves the thread in an unknown state. So does an aborted turn,
