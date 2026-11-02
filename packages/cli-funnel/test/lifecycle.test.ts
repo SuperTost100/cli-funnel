@@ -134,6 +134,16 @@ setInterval(() => {}, 1000);`,
     });
   });
 
+  it("masks each line of a multiline env secret the CLI prints on stderr", async () => {
+    const secret = "-----BEGIN TEST KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEF\n-----END TEST KEY-----";
+    const env = { PRIVATE_KEY: secret };
+    const proc = spawnStream(script(`printf 'key:\\n%s\\n' "$PRIVATE_KEY" >&2`), [], { env });
+    const tap = new RawTap("claude", { selection: { provider: "claude", model: "m" }, prompt: "x", env }, proc);
+    await proc.exited;
+    const lines = tap.events().map((e) => (e as { data: string }).data);
+    expect(lines).toEqual(["key:", "[redacted]", "[redacted]", "[redacted]"]);
+  });
+
   it("keeps at most PENDING_STDERR_MAX of stderr waiting in a raw tap, dropping the oldest lines", () => {
     let listener!: (line: string) => void;
     const tap = new RawTap("claude", { selection: { provider: "claude", model: "m" }, prompt: "x" }, { onStderr: (l) => ((listener = l), () => undefined) });
