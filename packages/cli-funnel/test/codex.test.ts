@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { planAccess } from "../src/providers/codex/access.js";
 import { toApprovalRequest, toReply } from "../src/providers/codex/approvals.js";
 import { parseLoginStatus } from "../src/providers/codex/auth.js";
-import { Translator } from "../src/providers/codex/events.js";
+import { type ForwardSubagents, Translator } from "../src/providers/codex/events.js";
 import { codexProvider, INITIALIZE_PARAMS } from "../src/providers/codex/index.js";
 import { parseCatalog } from "../src/providers/codex/models.js";
 import { declaredServers, noToolsConfig } from "../src/providers/codex/tools.js";
@@ -17,10 +17,10 @@ const fx = (name: string) => new URL(`./fixtures/codex/${name}`, import.meta.url
 const load = (name: string) =>
   readFileSync(fx(name), "utf8").trim().split("\n").map((l) => JSON.parse(l) as { dir: string; m: any });
 
-function replay(name: string) {
+function replay(name: string, forward: ForwardSubagents = {}) {
   const rows = load(name);
   const thread = rows.find((r) => r.m.result?.thread)!.m.result.thread.id;
-  const t = new Translator(thread);
+  const t = new Translator(thread, "/tmp/cf-codex-test", forward);
   const events: FunnelEvent[] = [];
   const requests: any[] = [];
   for (const { dir, m } of rows) {
@@ -93,6 +93,62 @@ describe("codex events", () => {
     expect(events.find((e) => e.type === "tool.end")).toMatchObject({ id: "ca_1" });
     const t = new Translator("a");
     expect(t.handle("item/completed", { threadId: "a", item: { type: "collabAgentToolCall", id: "x", status: "failed" } }).events[0]).toMatchObject({ type: "tool.end", error: "Agent call failed" });
+  });
+
+  // Recorded from codex 0.166 with one spawned subagent that runs `ls`. Paths are replaced.
+  describe("subagents on 0.166", () => {
+    const SPAWN = "call_e81d997ed3134b7e90032bb9f83072a7";
+
+    it("shows the spawn as a tool call, and nothing from the subagent's thread by default", () => {
+      const { events } = replay("sub-agent-0.166.ndjson");
+      expect(events.filter((e) => e.type === "tool.start").map((e) => (e as { name: string }).name)).toEqual(["agent:spawnAgent", "agent:wait"]);
+      expect(events.find((e) => e.type === "tool.start")).toMatchObject({ id: SPAWN, input: { agent: "/root/list_files", model: "gpt-6-luna" } });
+      expect(events.filter((e) => e.type === "tool.end").map((e) => (e as { id: string }).id)).toContain(SPAWN);
+      expect(events.some((e) => "parentId" in e)).toBe(false);
+      expect(events.at(-1)).toMatchObject({ type: "done" });
+    });
+
+    it("forwards the subagent's tool calls and messages with the spawn's id", () => {
+      const { events } = replay("sub-agent-0.166.ndjson", { text: true, tools: true });
+      const sub = events.filter((e) => "parentId" in e);
+      expect(sub.map((e) => e.type)).toEqual(["tool.start", "tool.end", "subagent.text"]);
+      expect(sub[0]).toMatchObject({ name: "command", input: { command: "/bin/bash -lc ls" }, parentId: SPAWN, agent: "list_files" });
+      expect(sub[1]).toMatchObject({ type: "tool.end", id: (sub[0] as { id: string }).id, parentId: SPAWN, agent: "list_files" });
+      expect(sub[2]).toEqual({ type: "subagent.text", parentId: SPAWN, agent: "list_files", text: "Files in the current directory: `a.txt`, `b.txt`." });
+      // The main thread reads as before: the subagent's turn does not end it, and its text is not the answer.
+      expect(events.filter((e) => !("parentId" in e))).toEqual(replay("sub-agent-0.166.ndjson").events);
+      expect(events.filter((e) => e.type === "done")).toHaveLength(1);
+    });
+
+    it("keeps a subagent's file changes out of the run", () => {
+      const t = new Translator("main", "/w", { tools: true });
+      t.handle("item/started", { threadId: "main", item: { type: "subAgentActivity", kind: "started", id: "spawn", agentThreadId: "child", agentPath: "/root/writer" } });
+      const item = { type: "fileChange", id: "fc", status: "completed", changes: [{ path: "a.txt", kind: { type: "add" } }] };
+      const events = [...t.handle("item/started", { threadId: "child", item: { ...item, status: "inProgress" } }).events, ...t.handle("item/completed", { threadId: "child", item }).events];
+      expect(events.map((e) => e.type)).toEqual(["tool.start", "tool.end"]);
+      expect(t.handle("turn/completed", { threadId: "child", turn: { status: "completed" } })).toEqual({ events: [] });
+    });
+
+    it("follows a subagent's own subagents with text forwarding alone", () => {
+      const t = new Translator("main", "/w", { text: true });
+      const spawn = (thread: string, id: string, child: string) =>
+        t.handle("item/started", { threadId: thread, item: { type: "subAgentActivity", kind: "started", id, agentThreadId: child, agentPath: `/root/${child}` } });
+      spawn("main", "s1", "child");
+      spawn("child", "s2", "grandchild");
+      // An older Codex names the new thread only when the spawnAgent call completes.
+      t.handle("item/completed", { threadId: "child", item: { type: "collabAgentToolCall", tool: "spawnAgent", id: "s3", status: "completed", receiverThreadIds: ["old"] } });
+      const said = (thread: string) => t.handle("item/completed", { threadId: thread, item: { type: "agentMessage", id: "m", text: "hi" } }).events;
+      expect(said("grandchild")).toEqual([{ type: "subagent.text", parentId: "s2", text: "hi", agent: "grandchild" }]);
+      expect(said("old")).toEqual([{ type: "subagent.text", parentId: "s3", text: "hi" }]);
+    });
+
+    it("maps the threads of an older spawnAgent call", () => {
+      const t = new Translator("main", "/w", { tools: true });
+      t.handle("item/completed", { threadId: "main", item: { type: "collabAgentToolCall", tool: "spawnAgent", id: "ca", status: "completed", receiverThreadIds: ["child"] } });
+      expect(t.handle("item/started", { threadId: "child", item: { type: "commandExecution", id: "c1", command: "ls" } }).events).toEqual([
+        { type: "tool.start", id: "c1", name: "command", input: { command: "ls", cwd: undefined }, parentId: "ca" },
+      ]);
+    });
   });
 
   it("ignores other threads", () => {

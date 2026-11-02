@@ -130,7 +130,7 @@ describe("claude plans", () => {
 
   it("builds the plan from TaskCreate and TaskUpdate results", async () => {
     const track = newClaudeTrack();
-    const ev = fixtureLines("plan-tasks").flatMap((l) => parseClaudeMessage(l, false, track));
+    const ev = fixtureLines("plan-tasks").flatMap((l) => parseClaudeMessage(l, {}, track));
     const plans = ev.filter((e) => e.type === "plan");
     expect(plans).toHaveLength(5);
     expect(plans[0]).toEqual({ type: "plan", steps: [{ text: "Pick topic", status: "pending" }] });
@@ -151,7 +151,7 @@ describe("claude plans", () => {
       { type: "assistant", message: { content: [{ type: "tool_use", id, name: "TaskUpdate", input: taskInput }] } },
       { type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] }, tool_use_result: { success: true } },
     ];
-    const ev = [...call("u1", { taskId: "1", status: "deleted" }), ...call("u2", { taskId: "9", status: "completed" })].flatMap((l) => parseClaudeMessage(l, false, track));
+    const ev = [...call("u1", { taskId: "1", status: "deleted" }), ...call("u2", { taskId: "9", status: "completed" })].flatMap((l) => parseClaudeMessage(l, {}, track));
     expect(ev.filter((e) => e.type === "plan")).toEqual([{ type: "plan", steps: [{ text: "b", status: "pending" }] }]);
   });
 });
@@ -172,7 +172,7 @@ describe("claude file changes", () => {
     const track = newClaudeTrack();
     const ev: FunnelEvent[] = [];
     for (const l of fixtureLines("file-changes")) {
-      for (const e of parseClaudeMessage(l, false, track)) {
+      for (const e of parseClaudeMessage(l, {}, track)) {
         ev.push(e);
         const path = e.type === "tool.start" ? editPath(e.name, e.input, "/home/user/project") : undefined;
         if (e.type === "tool.start" && path) track.edits.set(e.id, { path, existed: path.endsWith("existing.txt") });
@@ -194,7 +194,7 @@ describe("claude file changes", () => {
     track.edits.set("w1", { path: "/p/a.txt", existed: true });
     const ev = parseClaudeMessage(
       { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "w1", content: "File created" }] }, tool_use_result: { type: "create", filePath: "/p/a.txt" } },
-      false,
+      {},
       track,
     );
     expect(ev.find((e) => e.type === "file.change")).toEqual({ type: "file.change", id: "w1", path: "/p/a.txt", kind: "add", status: "done" });
@@ -297,6 +297,54 @@ describe("claude control requests (fake CLI)", () => {
     const error = events.find((e) => e.type === "error") as { message: string };
     expect(error.message).toMatch(/^Claude Code failed \(error_during_execution\)\. Error: sandbox required but unavailable/);
     expect(error.message).toContain("refusing to start without a working sandbox");
+  });
+
+  it("does not count a subagent's edit as a file change of the run", async () => {
+    const from = { parent_tool_use_id: "agent-call", subagent_type: "writer", session_id: "s" };
+    replay([
+      { type: "system", subtype: "init", session_id: "s", model: "m" },
+      { type: "assistant", message: { content: [{ type: "tool_use", id: "agent-call", name: "Agent", input: { subagent_type: "writer", prompt: "write" } }] }, parent_tool_use_id: null },
+      { type: "assistant", message: { content: [{ type: "tool_use", id: "w1", name: "Write", input: { file_path: "/home/user/project/a.txt", content: "a" } }] }, ...from },
+      { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "w1", content: "File created" }] }, tool_use_result: { type: "create" }, ...from },
+      { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "agent-call", content: "done" }] }, parent_tool_use_id: null },
+      { type: "result", subtype: "success", is_error: false, result: "ok", session_id: "s" },
+    ]);
+    const events = await run({ selection: sel({ cwd: dir, access: "full" }), prompt: "x", providerOptions: { claude: { forwardSubagentTools: true } } });
+    expect(events.filter((e) => e.type === "tool.start").map((e) => [(e as { name: string }).name, (e as { parentId?: string }).parentId])).toEqual([
+      ["Agent", undefined],
+      ["Write", "agent-call"],
+    ]);
+    expect(events.some((e) => e.type === "file.change")).toBe(false);
+    expect(events.at(-1)).toMatchObject({ type: "done", text: "ok" });
+  });
+
+  describe("verbose", () => {
+    const key = "sk-ant-test-0123456789abcdef";
+    const lines = [
+      { type: "system", subtype: "init", session_id: "s", model: "m", note: `echoed ${key}`, env: "GITHUB_TOKEN=ghp-env-value-0123" },
+      { __stderr: `warning: key ${key}\nsecond line\n` },
+      { type: "result", subtype: "success", is_error: false, result: "ok", session_id: "s" },
+    ];
+
+    it("emits every stdout and stderr line as a raw event, with the API key masked", async () => {
+      replay(lines);
+      const env = { GITHUB_TOKEN: "ghp-env-value-0123" };
+      const events = await run({ selection: sel({ cwd: dir, access: "full" }), prompt: "x", apiKey: key, env, verbose: true });
+      const raw = events.filter((e) => e.type === "raw");
+      expect(raw.filter((e) => e.source === "stdout").map((e) => (e.data as { type: string }).type)).toEqual(["system", "result"]);
+      expect(raw.find((e) => e.source === "stdout")).toMatchObject({ provider: "claude", data: { note: "echoed [redacted]", env: "GITHUB_TOKEN=[redacted]" } });
+      expect(raw.filter((e) => e.source === "stderr").map((e) => e.data)).toEqual(["warning: key [redacted]", "second line"]);
+      expect(JSON.stringify(events)).not.toContain(key);
+      // The raw line comes before the events parsed from it.
+      expect(events.findIndex((e) => e.type === "raw")).toBeLessThan(events.findIndex((e) => e.type === "session"));
+      expect(events.at(-1)).toMatchObject({ type: "done", text: "ok" });
+    });
+
+    it("emits nothing new when it is off", async () => {
+      replay(lines);
+      const events = await run({ selection: sel({ cwd: dir, access: "full" }), prompt: "x", apiKey: key });
+      expect(events.map((e) => e.type)).toEqual(["session", "done"]);
+    });
   });
 
   it("round-trips a question with three options and a free-text answer", async () => {

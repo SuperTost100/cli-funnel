@@ -150,6 +150,35 @@ describe.skipIf(process.platform === "win32")("antigravity long schema", () => {
   });
 });
 
+describe.skipIf(process.platform === "win32")("antigravity verbose", () => {
+  afterEach(() => {
+    delete process.env.CLI_FUNNEL_AGY_BIN;
+  });
+
+  const runWith = async (verbose?: boolean) => {
+    const dir = mkdtempSync(join(tmpdir(), "cf-agy-"));
+    const bin = join(dir, "agy");
+    writeFileSync(bin, `#!/bin/sh\necho "warming up" >&2\necho 'not json'\necho '{"event":"result","result":{"status":"SUCCESS","response":"ok"}}'\n`);
+    chmodSync(bin, 0o755);
+    process.env.CLI_FUNNEL_AGY_BIN = bin;
+    const events: FunnelEvent[] = [];
+    for await (const e of antigravityProvider.run({ selection: { provider: "antigravity", model: "m", cwd: dir, access: "full" }, prompt: "hi", verbose })) events.push(e);
+    return events;
+  };
+
+  it("emits stdout and stderr lines as raw events before the terminal event", async () => {
+    const events = await runWith(true);
+    const raw = events.filter((e) => e.type === "raw");
+    expect(raw.filter((e) => e.source === "stdout").map((e) => e.data)).toEqual(["not json", { event: "result", result: { status: "SUCCESS", response: "ok" } }]);
+    expect(raw.filter((e) => e.source === "stderr")).toEqual([{ type: "raw", provider: "antigravity", source: "stderr", data: "warming up" }]);
+    expect(events.at(-1)).toMatchObject({ type: "done", text: "ok" });
+  });
+
+  it("emits no raw events without verbose", async () => {
+    expect((await runWith()).some((e) => e.type === "raw")).toBe(false);
+  });
+});
+
 describe.skipIf(process.platform === "win32")("antigravity sign-in", () => {
   afterEach(() => {
     delete process.env.CLI_FUNNEL_AGY_BIN;

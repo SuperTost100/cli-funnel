@@ -127,6 +127,10 @@ describe("funnel checks", () => {
     await expect(run({ planTool: "false" as never })).rejects.toMatchObject({ code: "invalid-selection" });
   });
 
+  it("refuses a verbose that is not a boolean", async () => {
+    await expect(run({ verbose: "true" as never })).rejects.toMatchObject({ code: "invalid-selection" });
+  });
+
   it("refuses a sandbox the CLI cannot give, and one that is not a boolean", async () => {
     await expect(run({ sandbox: true })).rejects.toMatchObject({ code: "unsupported" });
     await expect(run({ sandbox: "true" as never })).rejects.toMatchObject({ code: "invalid-selection" });
@@ -212,7 +216,7 @@ describe("run secrets", () => {
       capabilities: { ...base.capabilities, apiKey: true, mcpServers: ["http"] },
       async *run() {
         yield { type: "tool.start", id: "t", name: "Bash", input: { command: "echo sk-test-key-123456" } };
-        yield { type: "tool.end", id: "t", output: "CURSOR_API_KEY=sk-test-key-123456 X=Bearer-header-secret" };
+        yield { type: "tool.end", id: "t", output: "CURSOR_API_KEY=sk-test-key-123456 X=Bearer-header-secret T=env-token-value-1 HOME=/home/user/project" };
         yield { type: "done", text: "Your key is sk-test-key-123456 and the type is application/json", finishReason: "stop" };
       },
     };
@@ -223,10 +227,12 @@ describe("run secrets", () => {
       prompt: "go",
       apiKey: "sk-test-key-123456",
       mcpServers: { a: { type: "http", url: "http://x", headers: { Authorization: "Bearer-header-secret", Accept: "application/json" } } },
+      env: { SERVICE_TOKEN: "env-token-value-1", PROJECT_HOME: "/home/user/project" },
     });
+    expect(events.find((e) => e.type === "tool.end")).toMatchObject({ output: "CURSOR_API_KEY=[redacted] X=[redacted] T=[redacted] HOME=/home/user/project" });
     expect(result.text).toBe("Your key is [redacted] and the type is application/json");
     expect(result.toolCalls[0]!.input).toEqual({ command: "echo [redacted]" });
-    expect(JSON.stringify(events)).not.toMatch(/sk-test-key|Bearer-header-secret/);
+    expect(JSON.stringify(events)).not.toMatch(/sk-test-key|Bearer-header-secret|env-token-value/);
   });
 
   it("masks a thrown error, a short key, keys of objects, and a longer secret whole", async () => {

@@ -193,6 +193,7 @@ export function createFunnel(options: FunnelOptions = {}) {
     // Providers read it by truthiness, so a JSON body with "false" as a string would turn the tool on.
     if (input.planTool !== undefined && typeof input.planTool !== "boolean") throw new FunnelError("planTool must be true or false.", "invalid-selection");
     if (input.sandbox !== undefined && typeof input.sandbox !== "boolean") throw new FunnelError("sandbox must be true or false.", "invalid-selection");
+    if (input.verbose !== undefined && typeof input.verbose !== "boolean") throw new FunnelError("verbose must be true or false.", "invalid-selection");
     // Providers without machine access run no commands, so there is nothing to confine.
     if (input.sandbox && p.capabilities.access.length > 0 && !p.capabilities.sandbox) {
       throw new FunnelError(`${p.displayName} cannot run the agent's commands in a sandbox.`, "unsupported");

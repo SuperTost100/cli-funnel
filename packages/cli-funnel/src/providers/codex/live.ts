@@ -2,14 +2,14 @@ import { FunnelError, type ApprovalDecision, type ApprovalRequest, type FunnelEv
 import { requireMachine } from "../../selection.js";
 import { Channel } from "../../util/channel.js";
 import { spawnStream } from "../../util/process.js";
-import { redactErrors } from "../../util/redact.js";
-import { askApproval, askQuestion, findBinary, stderrTail } from "../base.js";
+import { redactErrors, runSecrets } from "../../util/redact.js";
+import { askApproval, askQuestion, findBinary, rawEvent, SETTLE_MS, stderrTail } from "../base.js";
 import { planAccess } from "./access.js";
 import { denyNote, effectiveReply, isQuestion, toApprovalRequest, toQuestionReply, toQuestionRequest, toReply, type Reply, type ServerRequest } from "./approvals.js";
 import { authKind } from "./auth.js";
 import { Translator } from "./events.js";
 import { BINARY, INITIALIZE_PARAMS } from "./index.js";
-import { agentConfig, threadOptions } from "./options.js";
+import { agentConfig, codexForward, threadOptions } from "./options.js";
 import { RpcClient } from "./rpc.js";
 import { configDeclares, noToolsConfig } from "./tools.js";
 
@@ -150,6 +150,7 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
   // Refuses options that would widen access before a process starts. `start` holds the params only `thread/start` takes.
   const { start } = threadOptions(first);
   const agent = agentConfig(first);
+  const forward = codexForward(first);
   const taken = configDeclares(Object.keys(first.mcpServers ?? {}), requireMachine(first.selection).cwd, first.env);
   if (taken.length) {
     throw new FunnelError(`MCP server ${taken.join(", ")} is already in the user's Codex config. Give the server another name.`, "invalid-selection");
@@ -186,9 +187,14 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
     if (t.finished) return;
     open(t);
     t.finished = true;
-    for (const e of events) t.out.push(e);
-    t.out.end();
-    t.end();
+    const close = () => {
+      for (const e of events) t.out.push(e);
+      t.out.end();
+      t.end();
+    };
+    // Stderr comes through another pipe. A verbose turn gives stderr written just before the end time to arrive.
+    if (t.input.verbose) setTimeout(close, SETTLE_MS);
+    else close();
   };
 
   const stop = () => {
@@ -197,6 +203,10 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
   };
 
   const rpc = new RpcClient(proc, {
+    line(raw) {
+      const t = current;
+      if (t && !t.finished && t.input.verbose) emit(t, rawEvent("codex", "stdout", raw, t.input));
+    },
     notification(method, params) {
       const t = current;
       if (!t || t.finished) return;
@@ -278,7 +288,7 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
     const t: Turn = {
       input,
       out: new Channel<FunnelEvent>(),
-      translator: new Translator(threadId ?? "", cwd),
+      translator: new Translator(threadId ?? "", cwd, forward),
       started,
       setTurnId: (id) => {
         t.turnId ??= id;
@@ -291,6 +301,10 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
     };
     current = t;
     proc.hold(true);
+    // The process outlives the turn, so stderr goes to this turn only while it runs, up to its terminal event: the
+    // channel drops what comes after it ends. Events are pushed as they come, so stderr keeps its place among the
+    // stdout lines.
+    const offStderr = input.verbose ? proc.onStderr((line) => emit(t, rawEvent("codex", "stderr", line, input)), runSecrets(input)) : undefined;
     if (exited || closed) finish(t, [{ type: "error", message: "Codex app-server is not running.", code: "cli-failed" }]);
 
     const signal = input.signal;
@@ -325,7 +339,7 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
       try {
         const id = await ready;
         if (t.finished) return;
-        t.translator = new Translator(id, cwd);
+        t.translator = new Translator(id, cwd, forward);
         t.session = () => ({ type: "session", sessionId: id, model, ...(auth ? { auth } : {}) });
         const turnStart = rpc.request("turn/start", turnParams(input, id));
         turnStart.catch(() => undefined);
@@ -347,6 +361,7 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
         yield e;
       }
     } finally {
+      offStderr?.();
       signal?.removeEventListener("abort", onAbort);
       clearTimeout(grace);
       // A turn the consumer left before it ended leaves the thread in an unknown state. So does an aborted turn,

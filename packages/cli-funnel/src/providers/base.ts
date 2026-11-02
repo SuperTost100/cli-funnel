@@ -9,6 +9,7 @@ import {
   type FinishReason,
   type FunnelEvent,
   type Installation,
+  type ProviderId,
   type LoginEvent,
   type LoginSession,
   type QuestionAnswers,
@@ -18,6 +19,8 @@ import {
   type UpdateResult,
 } from "../types.js";
 import { parseJsonAnswer } from "./prompt.js";
+import { isObject } from "../util/is-object.js";
+import { mask, runSecrets } from "../util/redact.js";
 
 function binaryEnvVar(binary: string): string {
   return `CLI_FUNNEL_${binary.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_BIN`;
@@ -223,6 +226,74 @@ export async function exitedEarly(proc: Streamed, name: string, stopped: () => b
   };
 }
 
+/**
+ * The `raw` event for one line a CLI printed. A stdout line that was not JSON (`{ __raw }` from `parseLine`) is sent as
+ * the string. The run's own secrets are masked, so an API key the CLI echoes never reaches the event.
+ */
+export function rawEvent(provider: ProviderId, source: "stdout" | "stderr", line: unknown, input: Pick<RunInput, "apiKey" | "mcpServers" | "env">): FunnelEvent {
+  const text = source === "stdout" && isObject(line) && Object.keys(line).length === 1 && typeof line.__raw === "string" ? line.__raw : undefined;
+  return { type: "raw", provider, source, data: mask(text ?? line, runSecrets(input)) };
+}
+
+/** True for the event that ends a run. */
+export const isTerminal = (e: FunnelEvent): boolean => e.type === "done" || e.type === "error";
+
+/** How long a verbose run waits before its terminal event, so stderr written just before the last stdout line arrives. */
+export const SETTLE_MS = 20;
+
+/** How much stderr a `RawTap` holds while it waits for the next stdout line. Older lines are dropped beyond it. */
+export const PENDING_STDERR_MAX = 1_048_576;
+
+/**
+ * The `raw` events of a verbose run that reads a CLI's stdout line by line. Stderr comes through another pipe, so its
+ * lines wait here and go out before the next stdout line. At most PENDING_STDERR_MAX characters wait: a CLI that
+ * writes more stderr than that before its next stdout line loses the oldest lines. Stderr printed after the run's
+ * terminal event is not sent.
+ */
+export class RawTap {
+  private readonly pending: string[] = [];
+  private pendingSize = 0;
+  private readonly off: () => void;
+
+  constructor(
+    private readonly provider: ProviderId,
+    private readonly input: RunInput,
+    proc: Pick<Streamed, "onStderr">,
+  ) {
+    // The lines come with the run's secrets already masked, so dropping one never leaves part of a secret behind.
+    this.off = proc.onStderr((line) => {
+      this.pending.push(line);
+      this.pendingSize += line.length;
+      while (this.pendingSize > PENDING_STDERR_MAX && this.pending.length > 1) this.pendingSize -= this.pending.shift()!.length;
+    }, runSecrets(input));
+  }
+
+  /** Events for the stderr lines seen so far, then for the stdout `line` when there is one. */
+  events(line?: unknown): FunnelEvent[] {
+    const out = this.pending.splice(0).map((l) => rawEvent(this.provider, "stderr", l, this.input));
+    this.pendingSize = 0;
+    if (line !== undefined) out.push(rawEvent(this.provider, "stdout", line, this.input));
+    return out;
+  }
+
+  /**
+   * Waits SETTLE_MS, then returns the events for the stderr lines seen so far. Call it before a terminal event. The
+   * timer stays referenced: the CLI may exit meanwhile, and the run must still reach its terminal event.
+   */
+  async settle(): Promise<FunnelEvent[]> {
+    await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+    return this.events();
+  }
+
+  close(): void {
+    this.off();
+  }
+}
+
+/** A `RawTap` when the run is verbose, else undefined, so a normal run pays nothing. */
+export const rawTap = (provider: ProviderId, input: RunInput, proc: Pick<Streamed, "onStderr">): RawTap | undefined =>
+  input.verbose ? new RawTap(provider, input, proc) : undefined;
+
 /** Folds events into an API-shaped result one at a time, so a caller never has to keep the events themselves. */
 export interface RunFolder {
   /** Throws on an `error` event. */
@@ -261,6 +332,8 @@ export function createRunFolder(input: RunInput): RunFolder {
           result.text += e.text;
           break;
         case "tool.start": {
+          // A subagent's tool call is not one of the run's own.
+          if (e.parentId) break;
           const call = { id: e.id, name: e.name, input: e.input };
           tools.set(e.id, call);
           result.toolCalls.push(call);

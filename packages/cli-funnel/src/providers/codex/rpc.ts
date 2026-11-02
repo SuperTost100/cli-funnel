@@ -3,6 +3,8 @@ import type { Streamed } from "../../util/process.js";
 type Message = { id?: string | number; method?: string; params?: any; result?: any; error?: { code: number; message: string } };
 
 export interface RpcHandlers {
+  /** Called with every line the app-server prints, before it is handled. */
+  line?(raw: unknown): void;
   notification(method: string, params: any): void;
   request(id: string | number, method: string, params: any): void;
   /** Called once when the stream ends. */
@@ -18,6 +20,7 @@ export class RpcClient {
     void (async () => {
       try {
         for await (const raw of proc.lines) {
+          handlers.line?.(raw);
           const m = raw as Message;
           if (m.method && m.id !== undefined) handlers.request(m.id, m.method, m.params);
           else if (m.method) handlers.notification(m.method, m.params);

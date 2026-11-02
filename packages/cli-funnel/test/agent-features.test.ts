@@ -297,6 +297,20 @@ echo '${result}'`,
     expect(readFileSync(`${out}.args`, "utf8")).not.toContain("--api-key");
   });
 
+  it("emits every line as a raw event with verbose, with the API key masked", async () => {
+    fakeAgent('{"isAuthenticated": false}', '{"type":"result","subtype":"success","result":"echo key_live_abc123","usage":{}}');
+    const events = await run({ apiKey: "key_live_abc123", verbose: true });
+    const raw = events.filter((e) => e.type === "raw");
+    expect(raw.map((e) => [e.provider, e.source, (e.data as { type: string }).type])).toEqual([
+      ["agent", "stdout", "system"],
+      ["agent", "stdout", "result"],
+    ]);
+    expect(raw[1]).toMatchObject({ data: { result: "echo [redacted]" } });
+    expect(events.findIndex((e) => e.type === "raw" && (e.data as { type: string }).type === "result")).toBeLessThan(events.findIndex((e) => e.type === "done"));
+    fakeAgent('{"isAuthenticated": false}');
+    expect((await run({})).some((e) => e.type === "raw")).toBe(false);
+  });
+
   it("leaves the environment alone without a key", async () => {
     fakeAgent('{"isAuthenticated": true}');
     const before = process.env.CURSOR_API_KEY;

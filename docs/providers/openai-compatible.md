@@ -61,6 +61,10 @@ Ids are passed through as `/models` returns them, the same exception to the no-a
 - `authStatus()` is signed out on 401 or 403, and signed in otherwise.
 - `login()`, `logout()` and `update()` change nothing. The key lives in your configuration.
 
+## Subagents
+
+There are none: the server answers one request and runs no agent, so `forwardSubagentTools` and `forwardSubagentText` have nothing to forward. Like every provider, it sends `raw` events with `verbose`, one for the response and one per body chunk. See [Verbose output](../run-options.md#verbose-output).
+
 ## Through the cli-funnel server
 
 The `cli-funnel` command reads endpoints from `CLI_FUNNEL_OPENAI_COMPATIBLE`, a JSON list in the same shape as `openaiCompatible`:

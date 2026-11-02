@@ -1,6 +1,6 @@
 import { parseArguments, pendingMessages, runMessages } from "../messages.js";
 import { readSSE } from "../util/sse.js";
-import { fetchRetrying, httpError, jsonHeaders, truncated, type RetryOptions } from "./http.js";
+import { fetchRetrying, httpError, httpTap, jsonHeaders, truncated, type RetryOptions } from "./http.js";
 import { responsesInput, responsesToolChoice, responsesTools } from "./wire.js";
 import type { FinishReason, FunnelEvent, RunInput, Usage } from "../types.js";
 import { joinUrl } from "../util/url.js";
@@ -124,6 +124,8 @@ export function responsesEvents() {
 /** Streams one Responses turn. The `session` event carries the new response id, which continues the conversation. */
 export async function* streamResponses(opts: ResponsesOptions, input: RunInput): AsyncGenerator<FunnelEvent> {
   const cancelled: FunnelEvent = { type: "done", text: "", finishReason: "cancelled" };
+  const headers = jsonHeaders(opts.key, opts.headers);
+  const tap = httpTap(input, headers, opts.key);
   let res: Response;
   try {
     res = yield* fetchRetrying(
@@ -131,10 +133,11 @@ export async function* streamResponses(opts: ResponsesOptions, input: RunInput):
       {
         method: "POST",
         signal: input.signal,
-        headers: jsonHeaders(opts.key, opts.headers),
+        headers,
         body: JSON.stringify(responsesBody(input, opts.strictSchema)),
       },
       opts.retry,
+      tap,
     );
   } catch (err) {
     if (input.signal?.aborted) return yield cancelled;
@@ -147,6 +150,7 @@ export async function* streamResponses(opts: ResponsesOptions, input: RunInput):
       return yield* httpError(opts.label, res);
     }
     for await (const { data } of readSSE(res)) {
+      if (tap) yield tap.sse(data);
       if (data === "[DONE]") break;
       yield* fold.add(JSON.parse(data));
       if (fold.finished) return;

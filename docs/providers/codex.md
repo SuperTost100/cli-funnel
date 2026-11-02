@@ -23,6 +23,8 @@ Protocol flow:
 | `item/agentMessage/delta` | `text.delta`. This includes the short notes Codex writes between tool calls (`phase: "commentary"`). |
 | `item/reasoning/summaryTextDelta`, `item/reasoning/textDelta` | `reasoning.delta` |
 | `item/started` and `item/completed` for `commandExecution`, `fileChange`, `mcpToolCall`, `dynamicToolCall`, `webSearch`, `imageView`, `collabAgentToolCall` | `tool.start`, `tool.end` |
+| `item/started` and `item/completed` for a `subAgentActivity` with `kind: "started"` | `tool.start` named `agent:spawnAgent`, `tool.end` |
+| notifications for a subagent's thread | dropped, or `tool.start`, `tool.end` and `subagent.text` with the forward options (see [Subagents](#subagents)) |
 | `item/completed` for an `agentMessage` | the text becomes `result.text`, unless its `phase` is `commentary`. Commentary is streamed as `text.delta` but is not part of `result.text`. |
 | `item/commandExecution/requestApproval`, `item/fileChange/requestApproval`, `mcpServer/elicitation/request` | `approval.request`, then the reply to the server |
 | `thread/tokenUsage/updated` | `usage` (sum of the per-call `last` breakdown, so a resumed thread reports only this turn) |
@@ -135,10 +137,26 @@ With `apiKey` the app-server starts with `-c cli_auth_credentials_store="ephemer
 | `ephemeral: boolean` | `ephemeral` on `thread/start`. Refused with `sessionId`, since `thread/resume` has no such param | all |
 | `webSearch: "disabled" \| "cached" \| "indexed" \| "live"` | config `web_search` | `"disabled"` at all levels, `"cached"` and `"indexed"` from `supervised` up, `"live"` at `auto` and `full` only |
 | `approvalPolicy: "untrusted" \| "on-request" \| "never"` | `approvalPolicy`, in place of the level's own | see below |
+| `forwardSubagentText: boolean` | none, the translator keeps the messages | all |
+| `forwardSubagentTools: boolean` | none, the translator keeps the calls | all |
 
 `approvalPolicy` may ask more often than the access level, never less. From most to fewest questions the order is `untrusted`, `on-request`, `never`. `none`, `supervised` and `accept-edits` use `untrusted`, so they accept only `untrusted`. `auto` uses `on-request` and also accepts `untrusted`. `full` accepts all three. The granular policy object is refused. At `none` every approval is still answered `deny`, whatever the policy.
 
 All three options were run live on 0.160 at `auto`.
+
+## Subagents
+
+Codex 0.166 starts a subagent with the `spawn_agent` tool and reports it as a `subAgentActivity` item with `kind: "started"`, the subagent's `agentThreadId` and its `agentPath`, such as `/root/list_files`. cli-funnel shows it as a `tool.start` named `agent:spawnAgent`, which ends right away because the subagent runs on its own. The `wait` call that follows is `agent:wait`. Codex before 0.166 sent a `collabAgentToolCall` with `tool: "spawnAgent"` instead, and its `receiverThreadIds` name the new threads.
+
+The subagent works in its own thread, and the app-server sends that thread's notifications on the same connection, with the subagent's thread id. By default cli-funnel drops them, as before. The forward options keep some of them:
+
+| What the subagent's thread sends | Default | With the option |
+| --- | --- | --- |
+| tool items (`commandExecution`, `fileChange`, `mcpToolCall` and the rest) | dropped | `tool.start` and `tool.end` with `parentId` and `agent`, with `forwardSubagentTools` |
+| a finished `agentMessage` | dropped | `subagent.text` with `parentId` and `agent`, with `forwardSubagentText` |
+| `turn/started`, `turn/completed`, usage, plans, message deltas | dropped | dropped |
+
+`parentId` is the id of the `agent:spawnAgent` call, and `agent` is the last part of `agentPath`. A subagent's file edits produce no `file.change`, and its turn never ends the run. Its approval requests reach `onApproval` as before. `test/fixtures/codex/sub-agent-0.166.ndjson` is a recorded run on 0.166 with paths replaced. `test/fixtures/codex/sub-agent.ndjson` has the older `spawnAgent` shape.
 
 ## Models, effort and fast
 

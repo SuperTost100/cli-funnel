@@ -3,9 +3,9 @@
 // are not installed, unless DRIFT_REQUIRE names them (comma-separated ids), in which case a missing CLI counts as a
 // failure. Exits 1 when something disappeared.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, readSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { CHECKS } from "./drift-checks.mjs";
 
 const required = (process.env.DRIFT_REQUIRE ?? "").split(",").map((s) => s.trim()).filter(Boolean);
@@ -67,6 +67,36 @@ function checkCodexSchema() {
   }
 }
 
+/**
+ * Antigravity subagent transcripts are read from `<brain>/<conversation id>/.system_generated/logs/transcript.jsonl`,
+ * and their tool calls are `PLANNER_RESPONSE` steps. agy has no command that prints the layout, so the binary is
+ * searched for the names, in 16 MB pieces so a large binary is never read whole.
+ */
+function checkAgyTranscript(bin) {
+  const dir = (process.env.PATH ?? "").split(delimiter).find((d) => d && existsSync(join(d, bin)));
+  if (!dir) return report("the agy binary on PATH", "transcript check");
+  const needles = [".system_generated", "transcript.jsonl", "PLANNER_RESPONSE", "brain"].map((n) => Buffer.from(n));
+  const found = new Set();
+  const fd = openSync(realpathSync(join(dir, bin)), "r");
+  try {
+    const size = 16 * 1024 * 1024;
+    const overlap = Math.max(...needles.map((n) => n.length));
+    const buf = Buffer.alloc(size + overlap);
+    let kept = 0;
+    for (;;) {
+      const read = readSync(fd, buf, kept, size, null);
+      if (!read) break;
+      const chunk = buf.subarray(0, kept + read);
+      for (const n of needles) if (chunk.includes(n)) found.add(n.toString());
+      kept = Math.min(overlap, chunk.length);
+      chunk.copy(buf, 0, chunk.length - kept);
+    }
+  } finally {
+    closeSync(fd);
+  }
+  for (const n of needles) if (!found.has(n.toString())) report(n.toString(), "the agy binary (subagent transcripts)");
+}
+
 for (const [id, { bin, help }] of Object.entries(CHECKS)) {
   const version = spawnSync(bin, ["--version"], { encoding: "utf8" });
   if (version.error) {
@@ -85,5 +115,6 @@ for (const [id, { bin, help }] of Object.entries(CHECKS)) {
     for (const needle of needles) if (!text.includes(needle)) report(needle, `"${bin} ${args.join(" ")}"`);
   }
   if (id === "codex") checkCodexSchema();
+  if (id === "antigravity") checkAgyTranscript(bin);
 }
 process.exit(missing ? 1 : 0);

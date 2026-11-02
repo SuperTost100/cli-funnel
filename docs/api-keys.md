@@ -82,6 +82,8 @@ Usage on the Anthropic API counts cache reads and cache writes in `inputTokens`,
 
 Error messages never carry a key. The configured key, `Bearer` values, `sk-` and `AIza` tokens and URL query strings are removed from them.
 
+They have no subagents, since the API runs no agent, so `forwardSubagentTools` and `forwardSubagentText` do not apply. With `verbose: true` a run sends a `raw` event for each response, with its status and headers, and one for every SSE event of the body, with the key masked. See [Verbose output](run-options.md#verbose-output).
+
 Conversation history for `sessionId` lives in the process memory by default, one store per `createFunnel()`. It is gone after a restart, and only the 500 most recently used sessions are kept. A turn that fails, is cancelled or ends early is not added, so the next turn in the session sends the same history again. A stream that closes before the vendor's end marker (`message_stop`, `[DONE]` or a finish reason) ends with an `error` event with code `stream-truncated`, and its partial text is not stored.
 
 A session belongs to the provider that started it. The same `sessionId` on another provider starts a new conversation, because each provider stores messages in its own format. Turns on one session run one after another, and a turn is stored before its `done` event is yielded.

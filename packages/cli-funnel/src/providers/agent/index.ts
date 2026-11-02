@@ -1,11 +1,11 @@
 import { existsSync } from "node:fs";
 import { manifestModels } from "../../catalog/manifest.js";
 import { exec, spawnStream } from "../../util/process.js";
-import { detectInstallation, exitedEarly, findBinary, runLogout, runUpdate, spawnLogin } from "../base.js";
+import { detectInstallation, exitedEarly, findBinary, isTerminal, rawTap, runLogout, runUpdate, spawnLogin } from "../base.js";
 import { FunnelError, type AuthStatus, type FunnelEvent, type ModelInfo, type Provider, type ProviderContext, type RunInput } from "../../types.js";
 import { requireMachine } from "../../selection.js";
 import { composePrompt } from "../prompt.js";
-import { dirList, flag, mcpServersFor, oneOf, optionsFor, requireAccess } from "../options.js";
+import { bool, dirList, flag, mcpServersFor, oneOf, optionsFor, requireAccess } from "../options.js";
 import { redactErrors } from "../../util/redact.js";
 import { ownedWorkspace } from "../../util/workspace.js";
 import { attachMcp } from "./mcp.js";
@@ -87,7 +87,9 @@ export const buildPrompt = (input: RunInput) => composePrompt(input, { system: t
 
 /** Flags for `providerOptions.agent`. Throws `invalid-selection` when an option would widen `selection.access`. */
 function optionArgs(input: RunInput): string[] {
-  const o = optionsFor(input, "agent", ["addDirs", "sandbox", "mode"]);
+  const o = optionsFor(input, "agent", ["addDirs", "sandbox", "mode", "forwardSubagentText"]);
+  // Read by the stream mapper. Checked here so a bad value fails like the other options.
+  bool(o.forwardSubagentText, "forwardSubagentText");
   const { access } = requireMachine(input.selection);
   const args: string[] = [];
   const dirs = dirList(o.addDirs, "addDirs");
@@ -158,16 +160,25 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   const env = { ...input.env, ...mcp?.env, ...(apiKey ? keyEnv(apiKey) : {}) };
   // agent reads the prompt from stdin when argv has none.
   const proc = spawnStream(path, args, { cwd, env, signal: input.signal, input: buildPrompt(input) });
-  const mapper = new StreamMapper({ exists: existsSync });
+  const mapper = new StreamMapper({ exists: existsSync, forwardSubagentText: input.providerOptions?.agent?.forwardSubagentText === true });
   let finished = false;
+  const tap = rawTap("agent", input, proc);
   try {
     for await (const line of proc.lines) {
-      for (const event of mapper.map(line)) {
-        if (event.type === "done" || event.type === "error") finished = true;
+      const events = mapper.map(line);
+      // Nothing goes out after the terminal event.
+      if (tap && !finished) {
+        if (events.some(isTerminal)) yield* await tap.settle();
+        yield* tap.events(line);
+      }
+      for (const event of events) {
+        if (isTerminal(event)) finished = true;
         yield event;
       }
     }
+    if (tap && !finished) yield* tap.events();
   } finally {
+    tap?.close();
     // Runs too when the caller stops reading early. The CLI must not keep working unattended.
     proc.kill();
   }

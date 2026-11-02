@@ -2,11 +2,12 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { getEventListeners } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { claudeProvider } from "../src/providers/claude/index.js";
 import { Channel } from "../src/util/channel.js";
 import { readNDJSON } from "../src/util/ndjson.js";
-import { spawnStream, STDERR_KEEP, terminate } from "../src/util/process.js";
+import { spawnStream, STDERR_KEEP, STDERR_LINE_MAX, terminate } from "../src/util/process.js";
+import { PENDING_STDERR_MAX, RawTap } from "../src/providers/base.js";
 import { readSSE } from "../src/util/sse.js";
 import { fakeNodeCli, fakeShCli, sh } from "./fake-cli.js";
 import type { FunnelEvent, RunInput } from "../src/types.js";
@@ -91,6 +92,84 @@ setInterval(() => {}, 1000);`,
       await proc.exited;
     }
     expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+  });
+
+  it("hands stderr to listeners line by line, with a last line that has no line break", async () => {
+    const proc = spawnStream(script(`printf 'one\\r\\ntw' >&2; sleep 0.1; printf 'o\\nthree' >&2`), []);
+    const lines: string[] = [];
+    proc.onStderr((l) => lines.push(l));
+    await proc.exited;
+    expect(lines).toEqual(["one", "two", "three"]);
+  });
+
+  it("cuts a stderr line longer than STDERR_LINE_MAX into pieces", async () => {
+    const proc = spawnStream(script(`head -c 70000 /dev/zero | tr '\\0' x >&2; printf '\\nend' >&2`), []);
+    const lines: string[] = [];
+    proc.onStderr((l) => lines.push(l));
+    await proc.exited;
+    expect(lines.map((l) => l.length)).toEqual([STDERR_LINE_MAX, 70_000 - STDERR_LINE_MAX, 3]);
+  });
+
+  describe("a secret across the STDERR_LINE_MAX boundary", () => {
+    const secret = "sk-test-straddle-0123456789";
+    const pad = STDERR_LINE_MAX - 10;
+    const rawStderr = async (body: string) => {
+      const proc = spawnStream(script(body), []);
+      const tap = new RawTap("claude", { selection: { provider: "claude", model: "m" }, prompt: "x", apiKey: secret }, proc);
+      await proc.exited;
+      return tap.events().map((e) => (e as { data: string }).data);
+    };
+
+    it("is masked whole in a complete line", async () => {
+      const pieces = await rawStderr(`head -c ${pad} /dev/zero | tr '\\0' x >&2; printf '${secret}\\n' >&2`);
+      expect(pieces.join("")).toBe("x".repeat(pad) + "[redacted]");
+      expect(pieces.join("\n")).not.toMatch(/0123456789|sk-test/);
+    });
+
+    it("is masked whole in a long line that arrives in parts", async () => {
+      const pieces = await rawStderr(`head -c ${pad} /dev/zero | tr '\\0' x >&2; printf 'sk-test-str' >&2; sleep 0.2; printf 'addle-0123456789 end' >&2; sleep 0.2; head -c ${STDERR_LINE_MAX} /dev/zero | tr '\\0' y >&2; printf '\\n' >&2`);
+      expect(pieces.join("")).toBe("x".repeat(pad) + "[redacted] end" + "y".repeat(STDERR_LINE_MAX));
+      expect(pieces.join("\n")).not.toMatch(/0123456789|sk-test/);
+      expect(Math.max(...pieces.map((p) => p.length))).toBeLessThanOrEqual(STDERR_LINE_MAX);
+    });
+  });
+
+  it("masks each line of a multiline env secret the CLI prints on stderr", async () => {
+    const secret = "-----BEGIN TEST KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEF\n-----END TEST KEY-----";
+    const env = { PRIVATE_KEY: secret };
+    const proc = spawnStream(script(`printf 'key:\\n%s\\n' "$PRIVATE_KEY" >&2`), [], { env });
+    const tap = new RawTap("claude", { selection: { provider: "claude", model: "m" }, prompt: "x", env }, proc);
+    await proc.exited;
+    const lines = tap.events().map((e) => (e as { data: string }).data);
+    expect(lines).toEqual(["key:", "[redacted]", "[redacted]", "[redacted]"]);
+  });
+
+  it("keeps at most PENDING_STDERR_MAX of stderr waiting in a raw tap, dropping the oldest lines", () => {
+    let listener!: (line: string) => void;
+    const tap = new RawTap("claude", { selection: { provider: "claude", model: "m" }, prompt: "x" }, { onStderr: (l) => ((listener = l), () => undefined) });
+    const big = (c: string) => c.repeat(PENDING_STDERR_MAX * 0.6);
+    for (const c of ["a", "b", "c"]) listener(big(c));
+    expect(tap.events().map((e) => (e as { data: string }).data[0])).toEqual(["c"]);
+    listener("small");
+    expect(tap.events().map((e) => (e as { data: string }).data)).toEqual(["small"]);
+  });
+
+  it("keeps the raw tap's settle timer referenced, so the run still ends when the CLI has exited", async () => {
+    const tap = new RawTap("claude", { selection: { provider: "claude", model: "m" }, prompt: "x" }, { onStderr: () => () => undefined });
+    const timers: NodeJS.Timeout[] = [];
+    const real = globalThis.setTimeout;
+    const spy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void, ms?: number) => {
+      const t = real(fn, ms);
+      timers.push(t);
+      return t;
+    }) as typeof setTimeout);
+    try {
+      const settled = tap.settle();
+      expect(timers.map((t) => t.hasRef())).toEqual([true]);
+      await settled;
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("keeps only the end of stderr", async () => {

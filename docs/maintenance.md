@@ -29,7 +29,7 @@ CLI_FUNNEL_LIVE=1 npm test
 
 The job does not cover everything:
 
-- Antigravity has no documented non-interactive installer, so the job skips it. Its flags are checked only when you run the script on a machine that has `agy`.
+- Antigravity has no documented non-interactive installer, so the job skips it. Its flags are checked only when you run the script on a machine that has `agy`. There the script also searches the `agy` binary for the names of the subagent transcript layout (`.system_generated`, `transcript.jsonl`, `PLANNER_RESPONSE`, `brain`), since agy has no command that prints it.
 - The flags to check are listed in `scripts/drift-checks.mjs`. A test fails when a provider passes a `"--flag"` that the list does not have, so add the flag there when you add it to a provider.
 - It cannot sign in, so it cannot run the live tests. Run those locally before a release.
 

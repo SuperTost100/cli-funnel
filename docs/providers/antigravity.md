@@ -64,6 +64,8 @@ The CLI has no system prompt flag, so `system` goes in front of the prompt insid
 | --- | --- | --- |
 | `addDirs: string[]` | `--add-dir=<dir>`, absolute paths | `accept-edits`, `full` |
 | `printTimeoutSec: number` | `--print-timeout=<n>s` | all |
+| `forwardSubagentText: boolean` | none, read from the subagent's transcript | all |
+| `forwardSubagentTools: boolean` | none, read from the subagent's transcript | all |
 
 At `none` the run happens in a folder that holds only the deny hook, so `addDirs` is refused there.
 
@@ -152,6 +154,27 @@ The `--model` string is the base id plus `--effort <effort>`. Passing a full id 
 `logout()` throws an `unsupported` error. `agy` has no sign-out command. Sign out from the interactive screen.
 
 `update()` runs `agy update`.
+
+## Subagents
+
+The agent starts a subagent with `invoke_subagent`. It shows as a `tool.start` and `tool.end` named `invoke_subagent`. The step starts as a `tool` step and ends as a `subagent` step, and the `tool.end` output lists the subagents it started, each with its `type`, `role`, `prompt` and `conversationId`.
+
+The subagent works in a conversation of its own, and its steps are not in the stream. agy writes them to `<brain>/<conversation id>/.system_generated/logs/transcript.jsonl`, where `<brain>` is `~/.gemini/antigravity-cli/brain` in the home folder the run uses (the API-key home when the run has `apiKey`). With `forwardSubagentTools` or `forwardSubagentText`, cli-funnel reads that one file:
+
+1. The `subagent` step that ends `invoke_subagent` names the subagent's conversation id. Only an id of letters, digits and dashes is used, and no other file in the brain folder is read.
+2. The file is read every 500 ms while the run goes on, from where the last read stopped.
+3. Before the run's `done` or `error`, it is read once more, including a last line without a line break.
+
+| Transcript step | What cli-funnel emits |
+| --- | --- |
+| `PLANNER_RESPONSE` with `tool_calls` | one `tool.start` per call, with `forwardSubagentTools`. The calls have no ids, so each gets `<conversation id>:<step>:<n>` |
+| the `GENERIC` step after a call | its `tool.end`, with the step's `content` as the output, in call order |
+| `PLANNER_RESPONSE` with `content` | `subagent.text`, with `forwardSubagentText` |
+| `SYSTEM_MESSAGE` (the prompt), other types, lines that are not JSON | nothing |
+
+Every event carries `parentId`, the id of the `invoke_subagent` call, and `agent`, the subagent's `type_name` (such as `self`). Tool arguments in the transcript are JSON written as strings, and they are decoded. A missing or unreadable file gives no events and does not fail the run. A subagent that is still working when the run ends leaves its last calls without a `tool.end`. The events are not part of `result.toolCalls`, and the run's secrets are masked in them.
+
+This follows agy 1.4.12, which documents none of it. `scripts/check-drift.mjs` checks that the agy binary still contains `.system_generated`, `transcript.jsonl`, `PLANNER_RESPONSE` and `brain`. `test/fixtures/antigravity/subagent.ndjson` is a recorded run with paths replaced and the tool list cut, and `subagent-transcript.jsonl` is that subagent's transcript, with paths and user names replaced.
 
 ## Limits
 

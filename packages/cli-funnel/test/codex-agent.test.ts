@@ -269,7 +269,17 @@ process.stdin.on("data", (d) => {
         else if (prompt === "deny") {
           send({ method: "item/started", params: { threadId: thread, item: { type: "fileChange", id: "fc", status: "inProgress", changes: [{ path: "x.txt", kind: { type: "add" }, diff: "hi" }] } } });
           send({ id: "srv-1", method: "item/fileChange/requestApproval", params: { threadId: thread, turnId: turn, itemId: "fc" } });
+        } else if (prompt === "sub") {
+          const spawn = { type: "subAgentActivity", kind: "started", id: "spawn-1", agentThreadId: "child-1", agentPath: "/root/lister" };
+          send({ method: "item/started", params: { threadId: thread, turnId: turn, item: spawn } });
+          send({ method: "item/completed", params: { threadId: thread, turnId: turn, item: spawn } });
+          send({ method: "item/started", params: { threadId: "child-1", item: { type: "commandExecution", id: "c1", command: "ls", cwd: "/w", status: "inProgress" } } });
+          send({ method: "item/completed", params: { threadId: "child-1", item: { type: "commandExecution", id: "c1", command: "ls", status: "completed", exitCode: 0, aggregatedOutput: "a.txt" } } });
+          send({ method: "item/completed", params: { threadId: "child-1", item: { type: "agentMessage", id: "m1", text: "a.txt", phase: "final_answer" } } });
+          send({ method: "turn/completed", params: { threadId: "child-1", turn: { id: "child-turn", status: "completed" } } });
+          done("ok");
         } else if (prompt === "fail") {
+          process.stderr.write("auth failed for " + process.env.FAKE_KEY + "\\n");
           send({ method: "turn/completed", params: { threadId: thread, turn: { id: turn, status: "failed", error: { message: "Incorrect API key provided: " + process.env.FAKE_KEY } } } });
         } else done("ok");
         break;
@@ -359,6 +369,39 @@ describe("codex agent features through the app-server", () => {
   it("declines without a steer when there is no message", async () => {
     await run("deny", { onApproval: () => "deny" });
     expect(entries().some((e) => e.method === "turn/steer")).toBe(false);
+  });
+
+  it("emits every app-server line with verbose, with the API key masked", async () => {
+    const key = "sk-test-0123456789abcdef";
+    process.env.FAKE_KEY = key;
+    await run("fail", { apiKey: key, verbose: true }).catch(() => undefined);
+    const raw = events.filter((e) => e.type === "raw");
+    expect(raw.every((e) => e.provider === "codex")).toBe(true);
+    const methods = raw.flatMap((e) => (e.source === "stdout" && (e.data as { method?: string }).method) || []);
+    expect(methods).toEqual(["turn/started", "turn/completed"]);
+    // Answers to the funnel's own requests come through too.
+    expect(raw.some((e) => (e.data as { result?: { thread?: unknown } }).result?.thread)).toBe(true);
+    expect(raw.filter((e) => e.source === "stderr").map((e) => e.data)).toEqual(["auth failed for [redacted]"]);
+    expect(JSON.stringify(events)).not.toContain(key);
+  });
+
+  it("forwards a subagent's work with providerOptions.codex, and keeps it out of the result", async () => {
+    const providerOptions = { codex: { forwardSubagentText: true, forwardSubagentTools: true } };
+    const { res, events } = await run("sub", { providerOptions, onApproval: () => "deny" });
+    expect(events.filter((e) => "parentId" in e)).toEqual([
+      { type: "tool.start", id: "c1", name: "command", input: { command: "ls", cwd: "/w" }, parentId: "spawn-1", agent: "lister" },
+      { type: "tool.end", id: "c1", output: "a.txt", parentId: "spawn-1", agent: "lister" },
+      { type: "subagent.text", parentId: "spawn-1", text: "a.txt", agent: "lister" },
+    ]);
+    expect(res.toolCalls.map((c) => c.name)).toEqual(["agent:spawnAgent"]);
+    expect(res.text).toBe("ok");
+    const off = await run("sub", { onApproval: () => "deny" });
+    expect(off.events.some((e) => "parentId" in e)).toBe(false);
+  });
+
+  it("emits no raw events without verbose", async () => {
+    const { events } = await run("hi");
+    expect(events.some((e) => e.type === "raw")).toBe(false);
   });
 
   it("logs in with the API key before the thread starts and redacts it from errors", async () => {

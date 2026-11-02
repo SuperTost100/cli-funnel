@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildArgs, claudeProvider } from "../src/providers/claude/index.js";
-import { parseClaudeMessage } from "../src/providers/claude/parser.js";
+import { newClaudeTrack, parseClaudeMessage } from "../src/providers/claude/parser.js";
 import { collect } from "./helpers.js";
 import type { FunnelEvent, RunInput, Selection } from "../src/types.js";
 
@@ -51,7 +51,7 @@ describe("claude parser", () => {
     readFileSync(new URL("./fixtures/claude/subagent-text.ndjson", import.meta.url), "utf8")
       .split("\n")
       .filter(Boolean)
-      .flatMap((l) => parseClaudeMessage(JSON.parse(l), forward));
+      .flatMap((l) => parseClaudeMessage(JSON.parse(l), { text: forward }));
 
   it("drops subagent messages by default", () => {
     const ev = subagentRun(false);
@@ -68,6 +68,81 @@ describe("claude parser", () => {
     expect(ev.filter((e) => e.type === "subagent.text")).toEqual([{ type: "subagent.text", parentId: (call as { id: string }).id, text: "42", agent: "calc" }]);
     // The main thread reads the same as without the flag.
     expect(ev.filter((e) => e.type !== "subagent.text")).toEqual(subagentRun(false));
+  });
+
+  // Recorded from claude 2.1.316 without --forward-subagent-text: a background subagent that makes one Read call.
+  const toolsFixture = readFileSync(new URL("./fixtures/claude/subagent-tools.ndjson", import.meta.url), "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+  const toolsRun = (forward: { text?: boolean; tools?: boolean }) => {
+    const track = newClaudeTrack();
+    return toolsFixture.flatMap((l) => parseClaudeMessage(l, forward, track));
+  };
+  const AGENT_CALL = "toolu_0000000000000000000001";
+
+  it("drops subagent tool calls unless forwardSubagentTools is on", () => {
+    const off = toolsRun({});
+    expect(off.some((e) => "parentId" in e)).toBe(false);
+    expect(off.filter((e) => e.type === "tool.start").map((e) => (e as { name: string }).name)).toEqual(["Agent"]);
+  });
+
+  it("forwards a subagent's tool calls with the id of the call that started it", () => {
+    const ev = toolsRun({ tools: true });
+    const sub = ev.filter((e) => "parentId" in e);
+    expect(sub).toEqual([
+      { type: "tool.start", id: "toolu_0000000000000000000002", name: "Read", input: { file_path: "/home/user/project/note.txt" }, parentId: AGENT_CALL, agent: "reader" },
+      { type: "tool.end", id: "toolu_0000000000000000000002", output: "1\tthe secret number is 7\n2\t", parentId: AGENT_CALL, agent: "reader" },
+    ]);
+    expect(ev.find((e) => e.type === "tool.start")).toMatchObject({ id: AGENT_CALL, name: "Agent" });
+    // The subagent's text stays out without forwardSubagentText, and the main thread reads as before.
+    expect(ev.some((e) => e.type === "subagent.text")).toBe(false);
+    expect(ev.filter((e) => !("parentId" in e))).toEqual(toolsRun({}));
+  });
+
+  it("forwards text and tool calls together in the order they came", () => {
+    const ev = toolsRun({ text: true, tools: true }).filter((e) => "parentId" in e);
+    expect(ev.map((e) => e.type)).toEqual(["tool.start", "tool.end", "subagent.text"]);
+  });
+
+  it("keeps subagent tool calls out of the result's tool calls", async () => {
+    const result = await collect(
+      (async function* () {
+        yield* toolsRun({ tools: true });
+      })(),
+      { selection: sel(), prompt: "x" },
+    );
+    expect(result.toolCalls.map((c) => c.name)).toEqual(["Agent"]);
+    expect(result.text).toMatch(/^I've launched the reader subagent/);
+  });
+
+  it("keeps a subagent's plan and task calls out of the run's plan", () => {
+    const track = newClaudeTrack();
+    const from = { parent_tool_use_id: AGENT_CALL, subagent_type: "reader" };
+    const todo = { type: "tool_use", id: "t1", name: "TodoWrite", input: { todos: [{ content: "a", status: "pending" }] } };
+    const task = { type: "tool_use", id: "t2", name: "TaskCreate", input: { subject: "b" } };
+    const ev = [
+      { type: "assistant", message: { content: [todo, task] }, ...from },
+      { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t2", content: "Task #1 created" }] }, tool_use_result: { task: { id: "1" } }, ...from },
+    ].flatMap((l) => parseClaudeMessage(l, { tools: true }, track));
+    expect(ev.map((e) => e.type)).toEqual(["tool.start", "tool.start", "tool.end"]);
+    expect(track.tasks).toEqual([]);
+    expect(track.taskCalls.size).toBe(0);
+  });
+
+  it("keeps the parent on a subagent call the result lists as denied", () => {
+    const track = newClaudeTrack();
+    const from = { parent_tool_use_id: AGENT_CALL, subagent_type: "reader" };
+    const ev = [
+      { type: "assistant", message: { content: [{ type: "tool_use", id: "b1", name: "Bash", input: { command: "rm x" } }] }, ...from },
+      { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "b1", content: "not allowed", is_error: true }] }, ...from },
+      { type: "result", subtype: "success", is_error: false, result: "ok", permission_denials: [{ tool_name: "Bash", tool_use_id: "b1", tool_input: {} }] },
+    ].flatMap((l) => parseClaudeMessage(l, { tools: true }, track));
+    expect(ev.filter((e) => e.type === "tool.end")).toEqual([
+      { type: "tool.end", id: "b1", error: "not allowed", parentId: AGENT_CALL, agent: "reader" },
+      { type: "tool.end", id: "b1", error: "denied: Bash was not allowed", parentId: AGENT_CALL, agent: "reader" },
+    ]);
+    expect(track.subagentCalls.size).toBe(0);
   });
 
   it("keeps subagent text out of the result", async () => {
