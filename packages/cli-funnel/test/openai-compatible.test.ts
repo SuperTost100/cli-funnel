@@ -199,3 +199,35 @@ describe.skipIf(process.env.CLI_FUNNEL_LIVE !== "1" || !LIVE_URL || !LIVE_MODEL)
     expect(c.structured).toMatchObject({ a: expect.any(Number) });
   }, 120_000);
 });
+
+describe("openai-compatible transport safety", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("redacts the key from the parse error of a malformed stream", async () => {
+    stubFetch(() => sse("data: sk-test-0123456789abcdef is not json\n\n"));
+    let caught: any;
+    try {
+      await drain(local({ apiKey: "sk-test-0123456789abcdef" }).run(input()));
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect(String(caught.message) + String(caught.stack)).not.toContain("sk-test-0123456789abcdef");
+  });
+
+  it("does not follow a redirect and reports its status", async () => {
+    const seen: (RequestInit | undefined)[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        seen.push(init);
+        return new Response("", { status: 308, headers: { location: "http://127.0.0.1:4747/codex/logout" } });
+      }),
+    );
+    const out = await drain(local().run(input()));
+    expect(seen[0]).toMatchObject({ redirect: "manual" });
+    const error = out.find((e) => e.type === "error") as Extract<FunnelEvent, { type: "error" }>;
+    expect(error.message).toContain("308");
+    expect(error.message).not.toContain("4747");
+  });
+});

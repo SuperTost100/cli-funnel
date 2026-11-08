@@ -3,7 +3,7 @@ import { redactErrors } from "../../util/redact.js";
 import { compareVersions } from "../../util/process.js";
 import { FunnelError, type AuthStatus, type FunnelEvent, type Installation, type ModelInfo, type Provider, type PullEvent, type RunInput, type ToolCall } from "../../types.js";
 import { runWithHistory } from "../history.js";
-import { bearer, httpAccount, httpCapabilities, httpTap, jsonHeaders, truncated } from "../http.js";
+import { bearer, httpAccount, httpCapabilities, httpTap, jsonHeaders, redirectMessage, truncated } from "../http.js";
 import { chatTools, newCallId, ollamaCalls, ollamaMessages, type Msg } from "../wire.js";
 import { mapChatLine, mapPullLine, normalizeBaseUrl, parseTags, thinkValue } from "./parser.js";
 import { joinUrl } from "../../util/url.js";
@@ -51,6 +51,29 @@ export function chatBody(input: RunInput, messages: Msg[], keepAlive?: string | 
   };
 }
 
+/** The server URL without userinfo, query or fragment. A gateway may carry a credential in any of them. */
+function displayUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    u.username = u.password = u.search = u.hash = "";
+    return u.toString().replace(/\/+$/, "");
+  } catch {
+    return "the configured server";
+  }
+}
+
+/** Provider requests never follow a redirect, so a server cannot send them on to an address of its choosing. */
+const noRedirect = { redirect: "manual" } as const;
+
+/** What an error message says about a failed answer: the redirect hint for a 3xx, otherwise the server's own text. */
+async function failure(res: Response): Promise<string> {
+  if (res.status >= 300 && res.status < 400) {
+    await res.body?.cancel().catch(() => {});
+    return redirectMessage("Ollama", res.status);
+  }
+  return `Ollama ${res.status}: ${await errorText(res)}`;
+}
+
 async function errorText(res: Response): Promise<string> {
   const text = await res.text();
   try {
@@ -64,29 +87,30 @@ async function errorText(res: Response): Promise<string> {
 export function createOllamaProvider(options: OllamaOptions = {}): Provider {
   const base = () => normalizeBaseUrl(options.baseUrl ?? process.env.OLLAMA_HOST ?? "127.0.0.1:11434");
   const headers = (json = false): Record<string, string> => (json ? jsonHeaders(options.apiKey) : bearer(options.apiKey));
-  const get = (path: string, timeoutMs = PROBE_MS * 5) => fetch(joinUrl(base(), path), { headers: headers(), signal: AbortSignal.timeout(timeoutMs) });
-  const notRunning = () => `Ollama is not running at ${base()}. Start it with \`ollama serve\`, or set OLLAMA_HOST.`;
+  const shown = () => displayUrl(base());
+  const get = (path: string, timeoutMs = PROBE_MS * 5) => fetch(joinUrl(base(), path), { ...noRedirect, headers: headers(), signal: AbortSignal.timeout(timeoutMs) });
+  const notRunning = () => `Ollama is not running at ${shown()}. Start it with \`ollama serve\`, or set OLLAMA_HOST.`;
 
   async function detect(): Promise<Installation> {
     const res = await get("/api/version", PROBE_MS).catch(() => undefined);
     if (!res) return { installed: false, testedRange: TESTED, detail: notRunning() };
-    if (res.status === 401 || res.status === 403) return { installed: true, path: base(), testedRange: TESTED };
+    if (res.status === 401 || res.status === 403) return { installed: true, path: shown(), testedRange: TESTED };
     const version = res.ok ? ((await res.json().catch(() => ({}))) as { version?: unknown }).version : undefined;
-    if (typeof version !== "string") return { installed: false, testedRange: TESTED, detail: `${base()} does not answer like an Ollama server.` };
-    return { installed: true, path: base(), version, testedRange: TESTED, withinTestedRange: compareVersions(version, TESTED.min) >= 0 };
+    if (typeof version !== "string") return { installed: false, testedRange: TESTED, detail: `${shown()} does not answer like an Ollama server.` };
+    return { installed: true, path: shown(), version, testedRange: TESTED, withinTestedRange: compareVersions(version, TESTED.min) >= 0 };
   }
 
   async function authStatus(): Promise<AuthStatus> {
     const res = await get("/api/tags", PROBE_MS).catch(() => undefined);
     if (!res) return { loggedIn: false, detail: notRunning() };
-    if (res.status === 401 || res.status === 403) return { loggedIn: false, detail: `${base()} refused the request. Check the apiKey passed to createFunnel({ ollama }).` };
+    if (res.status === 401 || res.status === 403) return { loggedIn: false, detail: `${shown()} refused the request. Check the apiKey passed to createFunnel({ ollama }).` };
     return res.ok ? { loggedIn: true, method: options.apiKey ? "API key" : "Local server" } : { loggedIn: false, detail: `Ollama returned ${res.status}.` };
   }
 
   async function models(): Promise<ModelInfo[]> {
     const res = await get("/api/tags").catch(() => undefined);
     if (!res) throw new FunnelError(notRunning(), "not-installed");
-    if (!res.ok) throw new FunnelError(`Ollama returned ${res.status}: ${await errorText(res)}`, "cli-failed");
+    if (!res.ok) throw new FunnelError(res.status >= 300 && res.status < 400 ? await failure(res) : `Ollama returned ${res.status}: ${await errorText(res)}`, "cli-failed");
     return parseTags(await res.json());
   }
 
@@ -101,9 +125,9 @@ export function createOllamaProvider(options: OllamaOptions = {}): Provider {
     let raw: string | undefined;
     try {
       const tap = httpTap(input, headers(true), options.apiKey);
-      const res = await fetch(joinUrl(base(), "/api/chat"), { method: "POST", signal: input.signal, headers: headers(true), body: JSON.stringify(chatBody(input, messages, options.keepAlive)) });
+      const res = await fetch(joinUrl(base(), "/api/chat"), { ...noRedirect, method: "POST", signal: input.signal, headers: headers(true), body: JSON.stringify(chatBody(input, messages, options.keepAlive)) });
       if (tap) yield tap.response(res);
-      if (!res.ok) return yield { type: "error", message: `Ollama ${res.status}: ${await errorText(res)}`, code: "cli-failed" };
+      if (!res.ok) return yield { type: "error", message: await failure(res), code: "cli-failed" };
       for await (const line of readNDJSON(res)) {
         if (tap) yield tap.json(line);
         if (line && typeof line === "object" && "__raw" in line) {
@@ -130,8 +154,8 @@ export function createOllamaProvider(options: OllamaOptions = {}): Provider {
 
   async function* pullModel(name: string, opts: { signal?: AbortSignal } = {}): AsyncGenerator<PullEvent> {
     try {
-      const res = await fetch(joinUrl(base(), "/api/pull"), { method: "POST", signal: opts.signal, headers: headers(true), body: JSON.stringify({ model: name, stream: true }) });
-      if (!res.ok) return yield { type: "error", message: `Ollama ${res.status}: ${await errorText(res)}` };
+      const res = await fetch(joinUrl(base(), "/api/pull"), { ...noRedirect, method: "POST", signal: opts.signal, headers: headers(true), body: JSON.stringify({ model: name, stream: true }) });
+      if (!res.ok) return yield { type: "error", message: await failure(res) };
       for await (const line of readNDJSON(res)) {
         const e = mapPullLine(line);
         if (!e) continue;
@@ -146,10 +170,10 @@ export function createOllamaProvider(options: OllamaOptions = {}): Provider {
   }
 
   async function deleteModel(name: string): Promise<void> {
-    const res = await fetch(joinUrl(base(), "/api/delete"), { method: "DELETE", headers: headers(true), body: JSON.stringify({ model: name }) }).catch(() => undefined);
+    const res = await fetch(joinUrl(base(), "/api/delete"), { ...noRedirect, method: "DELETE", headers: headers(true), body: JSON.stringify({ model: name }) }).catch(() => undefined);
     if (!res) throw new FunnelError(notRunning(), "not-installed");
     if (res.status === 404) throw new FunnelError(`${name} is not on the Ollama server.`, "invalid-selection");
-    if (!res.ok) throw new FunnelError(`Ollama ${res.status}: ${await errorText(res)}`, "cli-failed");
+    if (!res.ok) throw new FunnelError(await failure(res), "cli-failed");
   }
 
   return {

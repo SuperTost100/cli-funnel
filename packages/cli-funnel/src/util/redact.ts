@@ -25,12 +25,19 @@ export function redact(text: string, secrets: (string | undefined)[] = []): stri
     .replace(/\bxox[abprs]-[A-Za-z0-9-]{20,}/g, MASK);
 }
 
-/** Redacts the message of every `error` event and the detail of every `limit` event. Both can quote the server's answer. */
+/**
+ * Redacts the message of every `error` event and the detail of every `limit` event. Both can quote the server's answer.
+ * An exception the stream throws is redacted the same way, since a parse error quotes the text it choked on.
+ */
 export async function* redactErrors(events: AsyncIterable<FunnelEvent>, secrets: (string | undefined)[]): AsyncGenerator<FunnelEvent> {
-  for await (const e of events) {
-    if (e.type === "error") yield { ...e, message: redact(e.message, secrets) };
-    else if (e.type === "limit") yield { ...e, detail: redact(e.detail, secrets) };
-    else yield e;
+  try {
+    for await (const e of events) {
+      if (e.type === "error") yield { ...e, message: redact(e.message, secrets) };
+      else if (e.type === "limit") yield { ...e, detail: redact(e.detail, secrets) };
+      else yield e;
+    }
+  } catch (err) {
+    throw transformError(err, (text) => redact(text, secrets));
   }
 }
 
@@ -64,42 +71,85 @@ export function runSecrets(input: Pick<RunInput, "apiKey" | "mcpServers" | "env"
 
 const maskText = (text: string, secrets: string[]) => secrets.reduce((s, secret) => s.replaceAll(secret, MASK), text);
 
-/** `value` with every secret masked, in strings and object keys at any depth. Other values come back as they are. */
-export function mask(value: unknown, secrets: string[]): unknown {
-  if (typeof value === "string") return maskText(value, secrets);
-  if (Array.isArray(value)) return value.map((v) => mask(v, secrets));
-  if (typeof value === "object" && value !== null) return Object.fromEntries(Object.entries(value).map(([k, v]) => [maskText(k, secrets), mask(v, secrets)]));
+/** `value` with `f` applied to every string and object key at any depth. Other values come back as they are. */
+function mapStrings(value: unknown, f: (text: string) => string): unknown {
+  if (typeof value === "string") return f(value);
+  if (Array.isArray(value)) return value.map((v) => mapStrings(v, f));
+  if (typeof value === "object" && value !== null) return Object.fromEntries(Object.entries(value).map(([k, v]) => [f(k), mapStrings(v, f)]));
   return value;
 }
 
+/** `value` with every secret masked, in strings and object keys at any depth. Other values come back as they are. */
+export function mask(value: unknown, secrets: string[]): unknown {
+  return mapStrings(value, (text) => maskText(text, secrets));
+}
+
 /**
- * `err` with the secrets masked in its message, stack, cause and other own properties. The same object comes back,
- * so its class and `code` stay. A thrown value that is not an Error is masked like an event value.
+ * `err` with `f` applied to its message, stack, cause and other own properties. The same object comes back,
+ * so its class and `code` stay. A thrown value that is not an Error is treated like an event value.
  */
-function maskError(err: unknown, secrets: string[], depth = 0): unknown {
-  if (!(err instanceof Error)) return mask(err, secrets);
+function transformError(err: unknown, f: (text: string) => string, depth = 0): unknown {
+  if (!(err instanceof Error)) return mapStrings(err, f);
   if (depth > 3) return err;
   for (const key of Object.getOwnPropertyNames(err)) {
     const value = (err as unknown as Record<string, unknown>)[key];
     // `AggregateError.errors` holds Errors, whose message and stack are not enumerable, so they go through here too.
-    const one = (v: unknown) => (v instanceof Error ? maskError(v, secrets, depth + 1) : mask(v, secrets));
+    const one = (v: unknown) => (v instanceof Error ? transformError(v, f, depth + 1) : mapStrings(v, f));
     const masked = Array.isArray(value) ? value.map(one) : one(value);
     if (masked !== value) Object.defineProperty(err, key, { value: masked, writable: true, configurable: true, enumerable: Object.prototype.propertyIsEnumerable.call(err, key) });
   }
   return err;
 }
 
+/** How many characters at the end of `text` could still be the start of a secret, so they have to wait for the next chunk. */
+function pendingTail(text: string, secrets: string[]): number {
+  let n = 0;
+  for (const secret of secrets) {
+    for (let k = Math.min(secret.length - 1, text.length); k > n; k--) {
+      if (text.endsWith(secret.slice(0, k))) {
+        n = k;
+        break;
+      }
+    }
+  }
+  return n;
+}
+
 /**
  * Masks the run's secrets in every event, and in the message of an error the stream throws. An agent can print its own
  * environment, so an API key or a header value can show up in tool output, text or tool input. Only the exact values
- * are masked: the patterns `redact` adds would change ordinary URLs in the agent's output. shortcut: a secret split
- * across two `text.delta` chunks is not caught; buffer the stream if that ever matters.
+ * are masked: the patterns `redact` adds would change ordinary URLs in the agent's output.
+ *
+ * A secret can arrive split across two `text.delta` events. Only the end of a chunk that could still become the start
+ * of a secret is held back and joined to the next chunk. The rest goes out at once, and the held text is released
+ * (masked) before any other event, at the end of the stream and before a thrown error.
  */
 export async function* redactSecrets(events: AsyncIterable<FunnelEvent>, secrets: string[]): AsyncGenerator<FunnelEvent> {
   if (!secrets.length) return yield* events;
+  let held = "";
+  const release = function* (): Generator<FunnelEvent> {
+    if (!held) return;
+    const text = held;
+    held = "";
+    yield { type: "text.delta", text };
+  };
   try {
-    for await (const e of events) yield mask(e, secrets) as FunnelEvent;
+    for await (const e of events) {
+      if (e.type !== "text.delta") {
+        yield* release();
+        yield mask(e, secrets) as FunnelEvent;
+        continue;
+      }
+      // Masking the joined text first means no whole secret is left in it, so the held tail is plain text.
+      const text = maskText(held + e.text, secrets);
+      const keep = pendingTail(text, secrets);
+      held = text.slice(text.length - keep);
+      const out = text.slice(0, text.length - keep);
+      if (out) yield { ...e, text: out };
+    }
+    yield* release();
   } catch (err) {
-    throw maskError(err, secrets);
+    yield* release();
+    throw transformError(err, (text) => maskText(text, secrets));
   }
 }

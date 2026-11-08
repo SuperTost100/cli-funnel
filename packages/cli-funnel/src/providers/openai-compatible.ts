@@ -61,7 +61,7 @@ export function createOpenAICompatibleProvider(endpoint: OpenAICompatibleEndpoin
   const shown = redact(base, [endpoint.apiKey]);
   const efforts: EffortOption[] = (endpoint.efforts ?? []).map((e) => ({ id: e, label: e.charAt(0).toUpperCase() + e.slice(1) }));
   const headers = (): Record<string, string> => mergeHeaders(bearer(endpoint.apiKey), endpoint.headers);
-  const listing = (timeoutMs = PROBE_MS) => fetch(joinUrl(base, "/models"), { headers: headers(), signal: AbortSignal.timeout(timeoutMs) }).catch(() => undefined);
+  const listing = (timeoutMs = PROBE_MS) => fetch(joinUrl(base, "/models"), { redirect: "manual", headers: headers(), signal: AbortSignal.timeout(timeoutMs) }).catch(() => undefined);
   const notReachable = () => `${endpoint.name} is not reachable at ${shown}.`;
   const configured = (): ModelInfo[] =>
     (endpoint.models ?? []).map((m) => ({ id: m, name: m, provider: id, efforts, contextWindows: [], fast: false, source: "manifest" as const }));

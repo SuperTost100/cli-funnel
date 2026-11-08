@@ -351,3 +351,53 @@ describe("ollama controls", () => {
     await expect(funnel.run(input({ selection: sel({ contextWindow: 999999 }) }))).rejects.toMatchObject({ code: "invalid-selection" });
   });
 });
+
+describe("ollama credentials in the server URL", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const URL_WITH_KEY = "http://user:pw-secret@box:11434/gw?token=tok-secret#frag";
+
+  it("shows the server without userinfo, query or fragment, and still requests the real URL", async () => {
+    const calls = stubFetch(() => {
+      throw new Error("connect refused");
+    });
+    const p = createOllamaProvider({ baseUrl: URL_WITH_KEY });
+    const install = await p.detect();
+    const auth = await p.authStatus();
+    const err = await p.models().catch((e) => e);
+    const run = await drain(p.run(input({ selection: { provider: "ollama", model: "m", cwd: "/tmp", access: "full" } })));
+    const shown = JSON.stringify([install, auth, String(err), run]);
+    expect(shown).not.toContain("pw-secret");
+    expect(shown).not.toContain("tok-secret");
+    expect(shown).not.toContain("frag");
+    expect(shown).toContain("http://box:11434/gw");
+    expect(calls[0]!.url).toContain("pw-secret");
+  });
+
+  it("reports the installation path without the credentials", async () => {
+    stubFetch(() => new Response(JSON.stringify({ version: "0.35.1" })));
+    const install = await createOllamaProvider({ baseUrl: URL_WITH_KEY }).detect();
+    expect(install.path).toBe("http://box:11434/gw");
+  });
+
+  it("does not follow redirects on any request", async () => {
+    const seen: (RequestInit | undefined)[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        seen.push(init);
+        return new Response("", { status: 307, headers: { location: "http://127.0.0.1:4747/x" } });
+      }),
+    );
+    const p = createOllamaProvider({ baseUrl: "http://box:11434" });
+    await p.detect();
+    await p.models().catch(() => {});
+    const run = await drain(p.run(input()));
+    for await (const _ of p.pullModel!("m"));
+    await p.deleteModel!("m").catch(() => {});
+    expect(seen.length).toBeGreaterThanOrEqual(5);
+    for (const init of seen) expect(init).toMatchObject({ redirect: "manual" });
+    const error = run.find((e) => e.type === "error") as Extract<FunnelEvent, { type: "error" }>;
+    expect(error.message).toContain("307");
+    expect(error.message).not.toContain("4747");
+  });
+});
