@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -8,8 +8,7 @@ import { parseLoginStatus } from "../src/providers/codex/auth.js";
 import { type ForwardSubagents, Translator } from "../src/providers/codex/events.js";
 import { codexProvider, INITIALIZE_PARAMS } from "../src/providers/codex/index.js";
 import { parseCatalog } from "../src/providers/codex/models.js";
-import { declaredServers, noToolsConfig } from "../src/providers/codex/tools.js";
-import { fakeNodeCli } from "./fake-cli.js";
+import { configServers, declaredServers, noToolsConfig } from "../src/providers/codex/tools.js";
 import { collect } from "./helpers.js";
 import type { FunnelEvent } from "../src/types.js";
 
@@ -273,20 +272,20 @@ describe("codex none: configured MCP servers", () => {
     expect(declaredServers(`[profiles.probe]\nmodel = "x"\n[tools]\nprobe = true`, ["probe"])).toEqual([]);
   });
 
-  it("reads the run's CODEX_HOME and runs mcp list in the run's cwd and env", async () => {
-    const home = mkdtempSync(join(tmpdir(), "cf-codex-home-"));
-    const cwd = mkdtempSync(join(tmpdir(), "cf-codex-cwd-"));
-    writeFileSync(join(home, "config.toml"), `[mcp_servers.'probe']\ncommand = "sh"\n`);
-    // A fake codex that answers `mcp list --json` from the CODEX_HOME it was started with, and logs its cwd.
-    const bin = fakeNodeCli(
-      join(cwd, "codex"),
-      `const fs = require("node:fs");
-const home = process.env.CODEX_HOME;
-fs.writeFileSync(home + "/cwd", process.cwd());
-console.log(fs.existsSync(home + "/config.toml") ? '[{"name":"probe","enabled":true}]' : "[]");`,
-    );
-    const config = await noToolsConfig(bin, cwd, { CODEX_HOME: home });
-    expect(config["mcp_servers.probe.enabled"]).toBe(false);
-    expect(realpathSync(readFileSync(join(home, "cwd"), "utf8").trim())).toBe(realpathSync(cwd));
+  it("lists the servers of config/read and refuses an answer without the table", () => {
+    // The shape codex 0.166 answers for a config.toml with "mcp_servers".quoted.command and "mcp_servers"."esc\u0061ped".command.
+    const res = { config: { model: null, mcp_servers: { quoted: { command: "echo", enabled: true }, escaped: { command: "echo", enabled: true } } }, origins: {} };
+    expect(configServers(res)).toEqual(["quoted", "escaped"]);
+    expect(configServers({ config: { mcp_servers: {} } })).toEqual([]);
+    for (const bad of [undefined, null, {}, { config: {} }, { config: { mcp_servers: null } }, { config: { mcp_servers: ["a"] } }]) {
+      expect(() => configServers(bad)).toThrow(/mcp_servers/);
+    }
+  });
+
+  it("switches the servers off in a nested table, so a dotted name stays one server", () => {
+    const config = noToolsConfig(["a.b", "plain"]);
+    expect(config.mcp_servers).toEqual({ "a.b": { enabled: false }, plain: { enabled: false } });
+    expect(Object.keys(config).some((k) => k.startsWith("mcp_servers."))).toBe(false);
+    expect(noToolsConfig([])).not.toHaveProperty("mcp_servers");
   });
 });

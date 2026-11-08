@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { exec } from "../../util/process.js";
 
 /**
  * Feature flags that add tools or side effects. `none` turns them off. Checked against
@@ -55,16 +54,16 @@ function readConfig(file: string): string {
 }
 
 /**
- * Enabled MCP servers declared in the user's or the project's Codex config. Servers that plugins and
- * features add are left out: switching the feature off removes them, and an `enabled` override for a
- * server that no config file defines makes Codex reject the whole configuration.
- * `env` is the run's environment, so a run pointed at another `CODEX_HOME` reads that home's servers.
+ * The MCP servers in the effective config, from the app-server's answer to `config/read` with the thread's `cwd`.
+ * Codex parses every config layer itself, so every TOML spelling counts, and so do the system and project layers.
+ * Servers that plugins and features add are not in it: switching the feature off removes them, and an `enabled`
+ * override for a server that no config file defines makes Codex reject the whole configuration. Throws when the
+ * answer has no `mcp_servers` table, so a `none` thread never starts with a server it could not see.
  */
-async function configMcpServers(bin: string, cwd: string, env?: Record<string, string>): Promise<string[]> {
-  const res = await exec(bin, ["mcp", "list", "--json"], { cwd, env, timeoutMs: 20_000 });
-  if (res.code !== 0) throw new Error(`codex mcp list failed: ${(res.stderr || res.stdout).trim().slice(0, 200)}`);
-  const enabled = (JSON.parse(res.stdout) as { name: string; enabled?: boolean }[]).filter((s) => s.enabled !== false).map((s) => s.name);
-  return configDeclares(enabled, cwd, env);
+export function configServers(res: unknown): string[] {
+  const servers = (res as { config?: { mcp_servers?: unknown } } | null)?.config?.mcp_servers;
+  if (!servers || typeof servers !== "object" || Array.isArray(servers)) throw new Error("config/read returned no mcp_servers table.");
+  return Object.keys(servers);
 }
 
 /**
@@ -82,15 +81,16 @@ export function configDeclares(names: string[], cwd: string, env?: Record<string
 /**
  * Per-thread config overrides for `none`, in the dotted form `codex -c` takes.
  * Measured: a one-line prompt drops from about 19,000 input tokens to about 11,900, and the model
- * reports no shell tool. Config MCP servers are switched off by name, since an empty table does not replace them.
+ * reports no shell tool. `servers` are the config's MCP servers, from `configServers`. They are switched off by name,
+ * since an empty table does not replace them. The names go in a nested table, because a dotted key cannot spell a
+ * name with a dot: `mcp_servers.a.b.enabled` is server `a`. Codex merges the table into the config, checked on 0.166.
  */
-export async function noToolsConfig(bin: string, cwd: string, env?: Record<string, string>): Promise<Record<string, unknown>> {
-  const servers = await configMcpServers(bin, cwd, env);
+export function noToolsConfig(servers: string[]): Record<string, unknown> {
   return Object.fromEntries([
     ...TOOL_FEATURES.map((f) => [`features.${f}`, false]),
     ["web_search", "disabled"],
     ["include_apply_patch_tool", false],
     ["tools.view_image", false],
-    ...servers.map((name) => [`mcp_servers.${name}.enabled`, false]),
+    ...(servers.length ? [["mcp_servers", Object.fromEntries(servers.map((name) => [name, { enabled: false }]))]] : []),
   ]);
 }

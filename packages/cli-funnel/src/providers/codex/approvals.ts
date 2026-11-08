@@ -47,14 +47,13 @@ function mcpTool(call: McpCall | undefined): { tool: string; input?: unknown } {
 }
 
 /**
- * The call an MCP approval elicitation is about. The elicitation names the server but not the call, so with several
- * calls in flight on one server it is matched by its `_meta.tool_params`. Undefined when no single call matches: the
- * approval then shows the elicitation itself rather than another call's tool and arguments.
+ * The call an MCP approval elicitation is about. The elicitation names its thread and server but not the call, so the
+ * call must be on that thread and server and have the same arguments as `_meta.tool_params`, even when it is the only
+ * one there. Undefined when no single call matches: the approval then shows the elicitation itself rather than
+ * another call's tool and arguments.
  */
-function elicitedCall(calls: Map<string, McpCall>, server: unknown, params: unknown): McpCall | undefined {
-  const onServer = [...calls.values()].filter((c) => c.server === server);
-  if (onServer.length <= 1) return onServer[0];
-  const matches = onServer.filter((c) => isDeepStrictEqual(c.arguments ?? null, params ?? null));
+function elicitedCall(calls: Map<string, McpCall>, thread: unknown, server: unknown, params: unknown): McpCall | undefined {
+  const matches = [...calls.values()].filter((c) => c.thread === thread && c.server === server && isDeepStrictEqual(c.arguments ?? null, params ?? null));
   return matches.length === 1 ? matches[0] : undefined;
 }
 
@@ -78,7 +77,7 @@ export function toApprovalRequest(req: ServerRequest, ctx: ApprovalContext): App
       };
     case "mcpServer/elicitation/request": {
       if (p._meta?.codex_approval_kind === MCP_APPROVAL_KIND) {
-        const { tool, input } = mcpTool(elicitedCall(ctx.mcpCalls, p.serverName, p._meta?.tool_params));
+        const { tool, input } = mcpTool(elicitedCall(ctx.mcpCalls, p.threadId, p.serverName, p._meta?.tool_params));
         return { id: String(req.id), tool, input: input ?? p._meta?.tool_params ?? p, description: p.message ?? undefined };
       }
       return { id: String(req.id), tool: "mcp", input: p, description: p.message ?? undefined };

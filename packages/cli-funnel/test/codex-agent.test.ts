@@ -146,7 +146,7 @@ describe("codex approvals with a message", () => {
   it("answers an MCP approval that Codex routes through request_user_input", () => {
     const req = { id: 2, method: "item/tool/requestUserInput", params: { itemId: "call-1", questions: [{ id: "mcp_tool_call_approval_call-1", question: "Allow?", options: [] }] } };
     expect(isQuestion(req)).toBe(false);
-    const ctx = { items: new Map(), mcpCalls: new Map([["call-1", { id: "call-1", server: "srv", tool: "t", arguments: { q: 1 } }]]) };
+    const ctx = { items: new Map(), mcpCalls: new Map([["call-1", { id: "call-1", thread: "thr", server: "srv", tool: "t", arguments: { q: 1 } }]]) };
     expect(toApprovalRequest(req, ctx)).toEqual({ id: "call-1", tool: "mcp:srv/t", input: { q: 1 }, description: "Allow?" });
     expect(toReply(req, "allow")).toEqual({ result: { answers: { "mcp_tool_call_approval_call-1": { answers: ["Allow"] } } } });
     expect(toReply(req, "deny")).toEqual({ result: { answers: { "mcp_tool_call_approval_call-1": { answers: ["Cancel"] } } } });
@@ -154,11 +154,11 @@ describe("codex approvals with a message", () => {
 });
 
 describe("codex MCP approvals with calls in flight", () => {
-  const call = (id: string, tool: string, args: unknown) => [id, { id, server: "srv", tool, arguments: args }] as const;
+  const call = (id: string, tool: string, args: unknown) => [id, { id, thread: "main", server: "srv", tool, arguments: args }] as const;
   const elicit = (params: unknown) => ({
     id: 9,
     method: "mcpServer/elicitation/request",
-    params: { serverName: "srv", message: "Allow?", _meta: { codex_approval_kind: "mcp_tool_call", tool_params: params } },
+    params: { threadId: "main", serverName: "srv", message: "Allow?", _meta: { codex_approval_kind: "mcp_tool_call", tool_params: params } },
   });
 
   it("matches the elicitation to the call with the same arguments", () => {
@@ -172,6 +172,34 @@ describe("codex MCP approvals with calls in flight", () => {
   it("falls back to the generic mcp tool when no single call matches", () => {
     const ctx = { items: new Map(), mcpCalls: new Map([call("a", "read", { q: 1 }), call("b", "write", { q: 1 })]) };
     expect(toApprovalRequest(elicit({ q: 1 }), ctx)).toMatchObject({ tool: "mcp", input: { q: 1 } });
+  });
+
+  it("does not take the identity of a sole call whose arguments differ", () => {
+    const ctx = { items: new Map(), mcpCalls: new Map([call("a", "read", { q: 1 })]) };
+    expect(toApprovalRequest(elicit({ path: "/etc" }), ctx)).toMatchObject({ tool: "mcp", input: { path: "/etc" } });
+  });
+
+  it("binds a subagent's elicitation to the subagent's call when tool events are not forwarded", () => {
+    const t = new Translator("main");
+    const started = (threadId: string, id: string, tool: string, args: unknown) =>
+      t.handle("item/started", { threadId, item: { type: "mcpToolCall", id, server: "srv", tool, arguments: args } });
+    const spawn = { type: "subAgentActivity", kind: "started", id: "spawn-1", agentThreadId: "child", agentPath: "/root/helper" };
+    t.handle("item/started", { threadId: "main", item: spawn });
+    started("main", "m1", "read", { q: 1 });
+    started("child", "c1", "delete", { path: "/etc" });
+    const fromChild = { ...elicit({ path: "/etc" }), params: { ...elicit({ path: "/etc" }).params, threadId: "child" } };
+    expect(toApprovalRequest(fromChild, t)).toMatchObject({ tool: "mcp:srv/delete", input: { path: "/etc" } });
+    // Same arguments on another thread: the main thread's elicitation names its own call only.
+    started("child", "c2", "read", { q: 1 });
+    expect(toApprovalRequest(elicit({ q: 1 }), t)).toMatchObject({ tool: "mcp:srv/read" });
+    t.handle("item/completed", { threadId: "main", item: { type: "mcpToolCall", id: "m1", status: "completed" } });
+    expect(toApprovalRequest(elicit({ q: 1 }), t)).toMatchObject({ tool: "mcp" });
+  });
+
+  it("does not retain calls from threads that are not this run's subagents", () => {
+    const t = new Translator("main");
+    t.handle("item/started", { threadId: "stranger", item: { type: "mcpToolCall", id: "x", server: "srv", tool: "t", arguments: {} } });
+    expect(t.mcpCalls.size).toBe(0);
   });
 });
 
@@ -258,6 +286,10 @@ process.stdin.on("data", (d) => {
       case "initialize": send({ id: m.id, result: {} }); break;
       case "account/login/start": send({ id: m.id, result: { type: "apiKey" } }); break;
       case "account/read": send({ id: m.id, result: { account: { type: "chatgpt", email: null, planType: "plus" }, requiresOpenaiAuth: true } }); break;
+      case "config/read":
+        if (process.env.FAKE_MCP === "error") send({ id: m.id, error: { code: -32601, message: "unknown method" } });
+        else send({ id: m.id, result: { config: { model: null, mcp_servers: JSON.parse(process.env.FAKE_MCP || "{}") }, origins: {} } });
+        break;
       case "thread/start": send({ id: m.id, result: { thread: { id: thread }, model: p.model, cwd: p.cwd } }); break;
       case "turn/steer": send({ id: m.id, result: { turnId: turn } }); break;
       case "turn/start":
@@ -269,6 +301,8 @@ process.stdin.on("data", (d) => {
         else if (prompt === "deny") {
           send({ method: "item/started", params: { threadId: thread, item: { type: "fileChange", id: "fc", status: "inProgress", changes: [{ path: "x.txt", kind: { type: "add" }, diff: "hi" }] } } });
           send({ id: "srv-1", method: "item/fileChange/requestApproval", params: { threadId: thread, turnId: turn, itemId: "fc" } });
+        } else if (prompt === "cmd") {
+          send({ id: "srv-1", method: "item/commandExecution/requestApproval", params: { threadId: thread, turnId: turn, itemId: "c", command: "rm -r build" } });
         } else if (prompt === "sub") {
           const spawn = { type: "subAgentActivity", kind: "started", id: "spawn-1", agentThreadId: "child-1", agentPath: "/root/lister" };
           send({ method: "item/started", params: { threadId: thread, turnId: turn, item: spawn } });
@@ -320,6 +354,7 @@ describe("codex agent features through the app-server", () => {
     delete process.env.CLI_FUNNEL_CODEX_BIN;
     delete process.env.FAKE_LOG;
     delete process.env.FAKE_KEY;
+    delete process.env.FAKE_MCP;
   });
 
   it("emits question.request, awaits onQuestion and sends the answers", async () => {
@@ -434,6 +469,52 @@ describe("codex agent features through the app-server", () => {
     mkdirSync(home, { recursive: true });
     writeFileSync(join(home, "config.toml"), "[mcp_servers.app]\nurl = 'http://x'\n");
     await expect(run("plain", { mcpServers: { app: http() }, env: { CODEX_HOME: home } })).rejects.toMatchObject({ code: "invalid-selection" });
+  });
+
+  it("at none switches off every MCP server the app-server's config/read reports, dotted names too", async () => {
+    process.env.FAKE_MCP = JSON.stringify({ "a.b": { command: "x", enabled: true }, under: { command: "y" }, off: { command: "z", enabled: false } });
+    await run("plain", { selection: { provider: "codex", model: "m", cwd, access: "none" } });
+    expect(entries().find((e) => e.method === "config/read").params).toEqual({ cwd });
+    const config = entries().find((e) => e.method === "thread/start").params.config;
+    expect(config.mcp_servers).toEqual({ "a.b": { enabled: false }, under: { enabled: false }, off: { enabled: false } });
+    expect(Object.keys(config).filter((k) => k.startsWith("mcp_servers."))).toEqual([]);
+    expect(config["features.shell_tool"]).toBe(false);
+  });
+
+  it("refuses to start a none thread when the config cannot be read", async () => {
+    process.env.FAKE_MCP = "error";
+    const failed = await run("plain", { selection: { provider: "codex", model: "m", cwd, access: "none" } }).then(
+      () => undefined,
+      (e: Error) => e,
+    );
+    expect(failed?.message).toMatch(/MCP servers/);
+    expect(entries().some((e) => e.method === "thread/start")).toBe(false);
+  });
+
+  it("does not read the config above none", async () => {
+    await run("plain");
+    expect(entries().some((e) => e.method === "config/read")).toBe(false);
+  });
+
+  it("asks onApproval at full when the caller chose a stricter approvalPolicy", async () => {
+    const full = (prompt: string, onApproval?: RunInput["onApproval"]) => {
+      const asked: string[] = [];
+      const extra: Partial<RunInput> = {
+        selection: { provider: "codex", model: "m", cwd, access: "full" },
+        providerOptions: { codex: { approvalPolicy: "untrusted" } },
+        ...(onApproval ? { onApproval: (r) => (asked.push(r.tool), onApproval(r)) } : {}),
+      };
+      return run(prompt, extra).then(({ res }) => ({ decision: JSON.parse(res.text).decision, asked }));
+    };
+    expect(await full("cmd", () => "deny")).toEqual({ decision: "decline", asked: ["command"] });
+    expect(await full("deny", () => "deny")).toEqual({ decision: "decline", asked: ["file_change"] });
+    expect(await full("cmd", () => "allow")).toEqual({ decision: "accept", asked: ["command"] });
+    expect(await full("cmd")).toEqual({ decision: "decline", asked: [] });
+    // The level's own policy, or none given, keeps full answering by itself.
+    const plain = await run("cmd", { selection: { provider: "codex", model: "m", cwd, access: "full" }, providerOptions: { codex: { approvalPolicy: "never" } } });
+    expect(JSON.parse(plain.res.text).decision).toBe("accept");
+    const unset = await run("cmd", { selection: { provider: "codex", model: "m", cwd, access: "full" } });
+    expect(JSON.parse(unset.res.text).decision).toBe("accept");
   });
 });
 

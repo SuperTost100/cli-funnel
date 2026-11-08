@@ -11,18 +11,19 @@ import { Translator } from "./events.js";
 import { BINARY, INITIALIZE_PARAMS } from "./index.js";
 import { agentConfig, codexForward, threadOptions } from "./options.js";
 import { RpcClient } from "./rpc.js";
-import { configDeclares, noToolsConfig } from "./tools.js";
+import { configDeclares, configServers, noToolsConfig } from "./tools.js";
 
 /**
  * Settings for `thread/start` and `thread/resume`, with `providerOptions.codex` and the agent features applied. At
- * `none` the no-tools config goes last, so nothing else can switch a tool back on.
+ * `none` the no-tools config goes last, so nothing else can switch a tool back on. `servers` are the config's MCP
+ * servers, which `none` switches off.
  */
-async function threadSettings(path: string, input: RunInput, agent: Record<string, unknown>) {
+function threadSettings(input: RunInput, agent: Record<string, unknown>, servers: string[]) {
   const sel = input.selection;
   const machine = requireMachine(sel);
   const plan = planAccess(machine.access);
   const extra = threadOptions(input);
-  const config = { ...extra.config, ...agent, ...(sel.access === "none" ? await noToolsConfig(path, machine.cwd, input.env) : {}) };
+  const config = { ...extra.config, ...agent, ...(sel.access === "none" ? noToolsConfig(servers) : {}) };
   return {
     model: sel.model,
     cwd: sel.cwd,
@@ -42,6 +43,19 @@ async function threadSettings(path: string, input: RunInput, agent: Record<strin
  */
 export function appServerArgs(input: RunInput): string[] {
   return input.apiKey ? ["app-server", "-c", 'cli_auth_credentials_store="ephemeral"'] : ["app-server"];
+}
+
+/**
+ * The MCP servers in the effective Codex config as seen from `cwd`, for `none` to switch off. When Codex cannot list
+ * them the thread does not start, since it would start with those servers on.
+ */
+async function configMcpServers(rpc: RpcClient, cwd: string): Promise<string[]> {
+  try {
+    return configServers(await rpc.request("config/read", { cwd }));
+  } catch (e) {
+    const why = e instanceof Error ? e.message : String(e);
+    throw new FunnelError(`Could not list the MCP servers in the Codex config, so access "none" cannot switch them off. ${why}`, "cli-failed");
+  }
 }
 
 /** Asks the caller's `onQuestion` and builds the reply. Without a handler the agent gets no answers. */
@@ -66,19 +80,24 @@ function turnParams(input: RunInput, threadId: string) {
 }
 
 /**
- * The answer to one approval request. Levels below `supervised` answer without asking. Otherwise `push` gets the
- * `approval.request` event and the caller's `onApproval` decides.
+ * The answer to one approval request. `none` denies without asking, `full` allows, and `accept-edits` allows file
+ * changes. Otherwise `push` gets the `approval.request` event and the caller's `onApproval` decides, and without a
+ * handler the answer is deny. `stricter` is set when `providerOptions.codex.approvalPolicy` asks more often than the
+ * level's own policy. Codex then raises requests the level would not, and those go to `onApproval` too.
  */
 async function decideApproval(
   req: ServerRequest,
   request: ApprovalRequest,
   input: RunInput,
+  stricter: boolean,
   push: (e: FunnelEvent) => void,
 ): Promise<ApprovalDecision> {
   const access = input.selection.access;
   if (access === "none") return "deny";
-  if (req.method === "item/fileChange/requestApproval" && planAccess(requireMachine(input.selection).access).autoAllowFileChanges) return "allow";
-  if (access === "full") return "allow";
+  if (!stricter) {
+    if (req.method === "item/fileChange/requestApproval" && planAccess(requireMachine(input.selection).access).autoAllowFileChanges) return "allow";
+    if (access === "full") return "allow";
+  }
   push({ type: "approval.request", request });
   return askApproval(input, request);
 }
@@ -148,7 +167,9 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
   const path = findBinary(BINARY);
   if (!path) throw new FunnelError("codex is not installed.", "not-installed");
   // Refuses options that would widen access before a process starts. `start` holds the params only `thread/start` takes.
-  const { start } = threadOptions(first);
+  const { start, approvalPolicy } = threadOptions(first);
+  // threadOptions refuses a policy that asks less often than the level's, so a different one asks more often.
+  const stricter = approvalPolicy !== undefined && approvalPolicy !== planAccess(requireMachine(first.selection).access).approvalPolicy;
   const agent = agentConfig(first);
   const forward = codexForward(first);
   const taken = configDeclares(Object.keys(first.mcpServers ?? {}), requireMachine(first.selection).cwd, first.env);
@@ -230,7 +251,7 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
         rpc.respond(id, toReply(req, "deny"));
         return;
       }
-      void decideApproval(req, request, live.input, (e) => emit(live, e)).then(async (d) => {
+      void decideApproval(req, request, live.input, stricter, (e) => emit(live, e)).then(async (d) => {
         const reply = effectiveReply(d);
         // A decline has no reason field. The message goes first as a user message in the same turn, so the model reads
         // it together with the refusal.
@@ -267,7 +288,8 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
         AUTH_WAIT_MS,
       );
     }
-    const settings = await threadSettings(path, first, agent);
+    const servers = first.selection.access === "none" ? await configMcpServers(rpc, cwd) : [];
+    const settings = threadSettings(first, agent, servers);
     const started = first.sessionId
       ? await rpc.request("thread/resume", { threadId: first.sessionId, ...settings })
       : await rpc.request("thread/start", { ...settings, ...start });
