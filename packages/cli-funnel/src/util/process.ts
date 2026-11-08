@@ -80,8 +80,18 @@ const CMD_META = /([()\][%!^"`<>&|;, *?])/g;
 
 /** Quotes one argument for `cmd.exe /d /s /c`, the way cross-spawn does. */
 export function cmdQuote(arg: string): string {
-  let out = arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, "$1$1");
-  out = `"${out}"`;
+  // One pass: a run of backslashes is doubled when a quote or the end of the argument follows it, and a quote gets a backslash.
+  let out = "";
+  let run = 0;
+  for (const ch of arg) {
+    if (ch === "\\") {
+      run++;
+      continue;
+    }
+    out += ch === '"' ? "\\".repeat(run * 2) + '\\"' : "\\".repeat(run) + ch;
+    run = 0;
+  }
+  out = `"${out}${"\\".repeat(run * 2)}"`;
   return out.replace(CMD_META, "^$1");
 }
 

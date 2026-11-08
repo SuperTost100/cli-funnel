@@ -23,6 +23,21 @@ export function composePrompt(
 /** Parses a JSON answer, tolerating a surrounding code fence. Throws when the text is not JSON. */
 export function parseJsonAnswer(text: string): unknown {
   const trimmed = text.trim();
-  const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n?```$/i.exec(trimmed);
-  return JSON.parse(fenced ? fenced[1]! : trimmed);
+  return JSON.parse(unfence(trimmed) ?? trimmed);
+}
+
+/**
+ * The text inside a code fence that spans the whole input: an opening ``` with an optional `json` tag and a line
+ * break, and a closing ``` at the end. Plain string operations, so a long unterminated fence costs linear time.
+ */
+function unfence(text: string): string | undefined {
+  if (text.length < 6 || !text.startsWith("```") || !text.endsWith("```")) return undefined;
+  let body = text.slice(3, -3);
+  if (body.slice(0, 4).toLowerCase() === "json") body = body.slice(4);
+  // The opening line ends at the last line break of the whitespace that follows the tag.
+  let lineEnd = -1;
+  for (let i = 0; i < body.length && /\s/.test(body[i]!); i++) if (body[i] === "\n") lineEnd = i;
+  if (lineEnd < 0) return undefined;
+  body = body.slice(lineEnd + 1);
+  return body.endsWith("\n") ? body.slice(0, -1) : body;
 }

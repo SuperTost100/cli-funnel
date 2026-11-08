@@ -86,15 +86,20 @@ export function chatMessages(messages: Message[]): Msg[] {
 
 /** Collects Chat Completions tool call deltas, which arrive in pieces keyed by `index`. A pure fold, so it can be tested on fixtures. */
 export function chatToolCalls(newId: () => string = newCallId) {
-  const calls: { id: string; name: string; args: string }[] = [];
+  // By index, in a Map: the index comes from the server, and a huge one must not become a huge array.
+  const calls = new Map<number, { id: string; name: string; args: string }>();
+  let next = 0;
   return {
     /** Takes `delta.tool_calls` of one chunk and returns a `tool_call.delta` for each piece of arguments. */
     add(deltas: unknown): FunnelEvent[] {
       if (!Array.isArray(deltas)) return [];
       const out: FunnelEvent[] = [];
       for (const d of deltas as { index?: number; id?: string; function?: { name?: string; arguments?: string } }[]) {
-        const i = typeof d.index === "number" ? d.index : calls.length;
-        const call = (calls[i] ??= { id: d.id || newId(), name: "", args: "" });
+        const i = typeof d.index === "number" ? d.index : next;
+        if (!Number.isSafeInteger(i) || i < 0) continue;
+        next = Math.max(next, i + 1);
+        let call = calls.get(i);
+        if (!call) calls.set(i, (call = { id: d.id || newId(), name: "", args: "" }));
         if (d.function?.name) call.name = d.function.name;
         const piece = d.function?.arguments;
         if (typeof piece === "string" && piece) {
@@ -105,7 +110,8 @@ export function chatToolCalls(newId: () => string = newCallId) {
       return out;
     },
     /** The finished calls, in order, with parsed arguments. */
-    finish: (): ToolCall[] => calls.filter(Boolean).map((c) => ({ id: c.id, name: c.name, input: parseArguments(c.args) })),
+    finish: (): ToolCall[] =>
+      [...calls].sort((a, b) => a[0] - b[0]).map(([, c]) => ({ id: c.id, name: c.name, input: parseArguments(c.args) })),
   };
 }
 
