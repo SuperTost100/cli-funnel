@@ -71,7 +71,7 @@ At `none` the run happens in a folder that holds only the deny hook, so `addDirs
 
 ## File changes
 
-Each finished file write becomes a `file.change` event after its `tool.end`, with the absolute path and the status `done`, `failed` or `declined` (a hook or the permission check refused it).
+Each finished file write becomes a `file.change` event after its `tool.end`, with the absolute path and the status `done`, `failed` or `declined` (a hook or the permission check refused it). A `declined` write is always an `add` and the file system is not asked about it, so the event does not tell the caller whether a path the model chose exists on the host.
 
 | What the agent does | `kind` |
 | --- | --- |

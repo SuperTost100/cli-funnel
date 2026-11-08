@@ -129,8 +129,8 @@ function mcpConfig(input: RunInput): Record<string, unknown> | undefined {
 /**
  * `systemFile` carries a long system prompt. Without it the prompt goes inline. `schemaOnStdin` leaves out
  * `--json-schema` when the schema goes in the `initialize` request instead (see `schemaInit`). `mcpFile` holds the MCP
- * config when `mcpServers` is set, since its headers and env can carry secrets that argv would show to other users.
- * Without it the config goes inline.
+ * config, from `mcpServers` or `providerOptions.claude.mcpConfig`, since its headers and env can carry secrets that argv
+ * would show to other users. Without it the config goes inline, which only a caller that reads the arguments should do.
  */
 export function buildArgs(input: RunInput, systemFile?: string, schemaOnStdin = schemaInit(input) !== undefined, mcpFile?: string): string[] {
   const { selection } = input;
@@ -251,7 +251,7 @@ export const userMessage = (input: RunInput): string =>
 
 /**
  * Checks the run and starts Claude Code. A long system prompt would hit the argv size limit, so it goes through a
- * private temp file; so does the MCP config of `mcpServers`, which can carry secrets. The CLI reads both at startup,
+ * private temp file; so does the MCP config, which can carry secrets. The CLI reads both at startup,
  * and the caller runs `removeFiles` once the first turn ends. `apiKey` goes in the CLI's environment, never in argv.
  * `signal` stops the process. A live session leaves it out: its process outlives the turn.
  */
@@ -270,7 +270,9 @@ export async function launchClaude(input: RunInput, signal?: AbortSignal): Promi
   try {
     const systemFile = input.system && needsArgFile(input.system) ? await writeArgFile("system-prompt.txt", input.system) : undefined;
     if (systemFile) files.push(systemFile);
-    const mcp = mcpServersFor(input, MCP_KINDS).length ? await writeArgFile("mcp.json", JSON.stringify(mcpConfig(input))) : undefined;
+    // Whichever option supplied the config, its headers and env can carry secrets, so it never goes inline.
+    const merged = mcpConfig(input);
+    const mcp = merged ? await writeArgFile("mcp.json", JSON.stringify(merged)) : undefined;
     if (mcp) files.push(mcp);
     const args = buildArgs(input, systemFile?.path, init !== undefined, mcp?.path);
     // In print mode Claude Code uses ANTHROPIC_API_KEY from its environment over the saved login, with no approval step.

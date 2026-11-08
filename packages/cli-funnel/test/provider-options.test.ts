@@ -10,6 +10,7 @@ import { parseOpts, UsageError } from "../src/bin/run-input.js";
 import { createFunnel } from "../src/funnel.js";
 import { createHandler } from "../src/server/handler.js";
 import { resolveOptionDirs } from "../src/server/openai.js";
+import { createCwdGuard } from "../src/util/fs-roots.js";
 import { validateProviderOptions } from "../src/selection.js";
 import { ACCESS_LEVELS, FunnelError, type AccessLevel, type FunnelEvent, type Provider, type ProviderOptions, type RunInput } from "../src/types.js";
 
@@ -298,8 +299,8 @@ describe("providerOptions through the server", () => {
     expect(seen.at(-1)).toEqual({ claude: { addDirs: [inner] } });
     expect((await chat([join(root, "alias")])).status).toBe(200);
     expect(seen.at(-1)).toEqual({ claude: { addDirs: [inner] } });
-    expect(resolveOptionDirs({ claude: { addDirs: ["relative"] } }, () => true)).toBeNull();
-    expect(resolveOptionDirs(undefined, () => false)).toBeUndefined();
+    expect(resolveOptionDirs({ claude: { addDirs: ["relative"] } }, createCwdGuard([root]))).toBeNull();
+    expect(resolveOptionDirs(undefined, () => undefined)).toBeUndefined();
   });
 
   it("answers 400 for providerOptions keyed by a provider that takes none", async () => {

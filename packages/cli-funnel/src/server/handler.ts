@@ -140,9 +140,9 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
   const readBody = (req: Request) => readJson(req, maxBody);
 
   // Checks the real path, so a symlink inside a root cannot point a run or the picker outside it.
-  const cwdAllowed = createCwdGuard(roots);
+  const cwdGuard = createCwdGuard(roots);
   const openai: OpenAIDefaults = options.openai?.cwd ? { ...options.openai, cwd: resolve(options.openai.cwd) } : (options.openai ?? {});
-  if (openai.cwd && !cwdAllowed(openai.cwd)) {
+  if (openai.cwd && !cwdGuard(openai.cwd)) {
     throw new Error(`openai.cwd ${openai.cwd} does not exist or is outside fsRoots. Add it to fsRoots or choose another folder.`);
   }
   // A Host that is a domain name we do not know means DNS rebinding. An Origin on another host means another website.
@@ -177,10 +177,14 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
     };
     // Providers with no access levels (Ollama, API providers) have no machine to protect, so cwd means nothing to them.
     const provider = funnel.providers[body.selection?.provider];
-    if ((!provider || provider.capabilities.access.length > 0) && !cwdAllowed(body.selection?.cwd ?? "")) {
-      return json({ error: "cwd does not exist or is outside the allowed roots. Set fsRoots on the handler." }, 403);
+    let selection = body.selection;
+    if (!provider || provider.capabilities.access.length > 0) {
+      // The run gets the checked real path, so a symlink swapped in after the check cannot point it elsewhere.
+      const cwd = cwdGuard(selection?.cwd ?? "");
+      if (!cwd) return json({ error: "cwd does not exist or is outside the allowed roots. Set fsRoots on the handler." }, 403);
+      selection = { ...selection, cwd };
     }
-    const providerOptions = resolveOptionDirs(body.providerOptions, cwdAllowed);
+    const providerOptions = resolveOptionDirs(body.providerOptions, cwdGuard);
     if (providerOptions === null) {
       return json({ error: "An addDirs entry in providerOptions does not exist or is outside the allowed roots. Set fsRoots on the handler." }, 403);
     }
@@ -225,7 +229,7 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
     tracked.signal.addEventListener("abort", settleAll, { once: true });
     const input: RunRequest = {
       runId,
-      selection: body.selection,
+      selection,
       prompt: body.prompt,
       messages: body.messages,
       tools: body.tools,
@@ -327,8 +331,8 @@ export function createHandler(funnel: Funnel, options: HandlerOptions = {}) {
       const seg = path.split("/").filter(Boolean);
       const m = req.method;
 
-      if (path === "/v1/responses") return await handleResponses(funnel, req, openai, cwdAllowed, maxBody, startRun);
-      if (path.startsWith("/v1/")) return await handleOpenAI(funnel, req, path, openai, cwdAllowed, maxBody, startRun);
+      if (path === "/v1/responses") return await handleResponses(funnel, req, openai, cwdGuard, maxBody, startRun);
+      if (path.startsWith("/v1/")) return await handleOpenAI(funnel, req, path, openai, cwdGuard, maxBody, startRun);
 
       if (m === "GET" && path === "/providers") return json(await funnel.overview());
       if (m === "GET" && path === "/fs") return await listDirs(url);

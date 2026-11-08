@@ -139,7 +139,7 @@ export function createMcpServer(options: McpServerOptions) {
   const { funnel } = options;
   const maxAccess = options.maxAccess ?? "none";
   const rank = (a: string) => ACCESS_LEVELS.indexOf(a as AccessLevel);
-  const cwdAllowed = createCwdGuard(options.fsRoots);
+  const cwdGuard = createCwdGuard(options.fsRoots);
   const defaultCwd = options.cwd ?? process.cwd();
   const log = options.log ?? (() => {});
   const inFlight = new Map<Id, AbortController>();
@@ -179,11 +179,15 @@ export function createMcpServer(options: McpServerOptions) {
         `Access "${access}" is above this server's --max-access "${maxAccess}". Ask for "${maxAccess}" or lower, or restart the server with a higher --max-access.`,
       );
     }
-    const cwd = selection.cwd ?? defaultCwd;
-    if (typeof cwd !== "string") throw new ToolFailure("selection.cwd must be a string.");
+    const asked = selection.cwd ?? defaultCwd;
+    if (typeof asked !== "string") throw new ToolFailure("selection.cwd must be a string.");
+    let cwd = asked;
     // Providers with no access levels (Ollama, API providers) have no machine to protect, so cwd means nothing to them.
-    if (funnel.providers[provider]!.capabilities.access.length > 0 && !cwdAllowed(cwd)) {
-      throw new ToolFailure("cwd does not exist or is outside the allowed folders. Start the server with --fs-root to allow more.");
+    if (funnel.providers[provider]!.capabilities.access.length > 0) {
+      // The run gets the checked real path, so a symlink swapped in after the check cannot point it elsewhere.
+      const checked = cwdGuard(cwd);
+      if (!checked) throw new ToolFailure("cwd does not exist or is outside the allowed folders. Start the server with --fs-root to allow more.");
+      cwd = checked;
     }
 
     const input: RunInput = {

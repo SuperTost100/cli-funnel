@@ -60,7 +60,7 @@ Chat completions cannot carry a folder or an access level, so the server takes t
 
 The response carries `x_funnel.sessionId`, `toolCalls` and `deniedActions`. A streamed response carries them on the chunk with `finish_reason`. Send the session id back to continue the conversation.
 
-The folder is checked against the server's `fsRoots` on every request, the default one included. Providers with no access levels (Ollama, API providers, OpenAI-compatible servers) ignore it.
+The folder is checked against the server's `fsRoots` on every request, the default one included. The run gets the resolved real path. Providers with no access levels (Ollama, API providers, OpenAI-compatible servers) ignore it.
 
 `x_funnel.runId` names the run. A streaming response has it in the first chunk. `POST /runs/<runId>/cancel` stops the run, as described in [Run options](run-options.md#cancel-a-run).
 

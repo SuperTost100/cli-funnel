@@ -438,6 +438,17 @@ describe("claude control requests (fake CLI)", () => {
     expect(start.args.join(" ")).not.toContain("Bearer");
   });
 
+  it("keeps providerOptions.claude.mcpConfig out of argv too, in a private file", async () => {
+    replay([{ type: "system", subtype: "init", session_id: "s", model: "m" }, { type: "result", subtype: "success", is_error: false, result: "ok" }]);
+    const mcpConfig = { mcpServers: { legacy: { type: "http", url: "http://127.0.0.1:7779/mcp", headers: { Authorization: "Bearer sekrit-token" } } } };
+    await run({ selection: sel({ cwd: dir, access: "full" }), prompt: "x", providerOptions: { claude: { mcpConfig } } });
+    const start = logged()[0];
+    expect(start.mcp.inline).toBeUndefined();
+    if (process.platform !== "win32") expect(start.mcp.mode).toBe(0o600);
+    expect(start.mcp.content).toEqual(mcpConfig);
+    expect(start.args.join(" ")).not.toContain("sekrit-token");
+  });
+
   it("runs on the API key from the run, through the environment", async () => {
     replay([{ type: "system", subtype: "init", session_id: "s", model: "m", apiKeySource: "ANTHROPIC_API_KEY" }, { type: "result", subtype: "success", is_error: false, result: "ok" }]);
     const result = await collect(claudeProvider.run({ selection: sel({ cwd: dir, access: "auto" }), prompt: "x", apiKey: "sk-ant-test", env: { ANTHROPIC_API_KEY: "other" } }), input("auto"));
