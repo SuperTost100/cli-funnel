@@ -6,7 +6,7 @@ import { parseJsonAnswer } from "../src/providers/prompt.js";
 import { chatToolCalls } from "../src/providers/wire.js";
 import { cmdQuote } from "../src/util/process.js";
 import { readNDJSON } from "../src/util/ndjson.js";
-import { MAX_FRAME_CHARS } from "../src/util/frames.js";
+import { frameSplitter, MAX_FRAME_CHARS } from "../src/util/frames.js";
 import { readSSE } from "../src/util/sse.js";
 import type { FunnelEvent } from "../src/types.js";
 
@@ -360,5 +360,24 @@ describe("readNDJSON", () => {
         for await (const _ of readNDJSON(body));
       })(),
     ).rejects.toThrow(/16 MiB/);
+  });
+});
+
+describe("frameSplitter", () => {
+  it("keeps every character of a frame sent one character at a time, across many blocks", () => {
+    const lines = frameSplitter(/\n/, 0, "A line");
+    const sent = Array.from({ length: 5000 }, (_, i) => String.fromCharCode(97 + (i % 26)));
+    for (const ch of sent) expect(lines.push(ch)).toEqual([]);
+    expect(lines.rest()).toBe(sent.join(""));
+    expect(lines.push("!\nnext")).toEqual([sent.join("") + "!"]);
+    expect(lines.rest()).toBe("next");
+  });
+
+  it("finds a delimiter split between a full block and the next chunk", () => {
+    const frames = frameSplitter(/\r?\n\r?\n/, 3, "An event");
+    for (let i = 0; i < 1023; i++) frames.push("x");
+    expect(frames.push("\r\n")).toEqual([]);
+    expect(frames.push("\r\nafter")).toEqual(["x".repeat(1023)]);
+    expect(frames.rest()).toBe("after");
   });
 });
