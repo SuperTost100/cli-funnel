@@ -2,7 +2,7 @@ import { FunnelError, type AuthStatus, type EffortOption, type Installation, typ
 import { streamChatCompletions, type Turn } from "./api.js";
 import { redact, redactErrors } from "../util/redact.js";
 import { runWithHistory } from "./history.js";
-import { bearer, httpAccount, httpCapabilities, mergeHeaders } from "./http.js";
+import { bearer, httpAccount, httpCapabilities, mergeHeaders, redirectMessage } from "./http.js";
 import { streamResponses } from "./responses.js";
 import { chatMessages, type Msg } from "./wire.js";
 import { joinUrl } from "../util/url.js";
@@ -88,6 +88,7 @@ export function createOpenAICompatibleProvider(endpoint: OpenAICompatibleEndpoin
     if (listed.length) return listed.map((m) => ({ ...m, apis }));
     if (endpoint.models?.length) return configured().map((m) => ({ ...m, apis }));
     if (!res) throw new FunnelError(notReachable(), "not-installed");
+    if (res.status >= 300 && res.status < 400) throw new FunnelError(redirectMessage(endpoint.name, res.status), "cli-failed");
     throw new FunnelError(`${endpoint.name} lists no models at ${shown}/models. Pass models: [...] for this endpoint.`, "cli-failed");
   }
 

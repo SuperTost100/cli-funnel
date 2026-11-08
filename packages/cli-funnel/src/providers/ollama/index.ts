@@ -1,5 +1,5 @@
 import { readNDJSON } from "../../util/ndjson.js";
-import { redactErrors } from "../../util/redact.js";
+import { redact, redactErrors } from "../../util/redact.js";
 import { compareVersions } from "../../util/process.js";
 import { FunnelError, type AuthStatus, type FunnelEvent, type Installation, type ModelInfo, type Provider, type PullEvent, type RunInput, type ToolCall } from "../../types.js";
 import { runWithHistory } from "../history.js";
@@ -110,7 +110,7 @@ export function createOllamaProvider(options: OllamaOptions = {}): Provider {
   async function models(): Promise<ModelInfo[]> {
     const res = await get("/api/tags").catch(() => undefined);
     if (!res) throw new FunnelError(notRunning(), "not-installed");
-    if (!res.ok) throw new FunnelError(res.status >= 300 && res.status < 400 ? await failure(res) : `Ollama returned ${res.status}: ${await errorText(res)}`, "cli-failed");
+    if (!res.ok) throw new FunnelError(res.status >= 300 && res.status < 400 ? await failure(res) : `Ollama returned ${res.status}: ${redact(await errorText(res), [options.apiKey])}`, "cli-failed");
     return parseTags(await res.json());
   }
 

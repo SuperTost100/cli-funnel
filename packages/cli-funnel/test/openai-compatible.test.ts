@@ -231,3 +231,15 @@ describe("openai-compatible transport safety", () => {
     expect(error.message).not.toContain("4747");
   });
 });
+
+describe("openai-compatible model listing redirects", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("says the model list answered with a redirect instead of saying it lists no models", async () => {
+    stubFetch(() => new Response("", { status: 301, headers: { location: "http://127.0.0.1:4747/models" } }));
+    const err = await local().models().catch((e) => e);
+    expect(String(err.message)).toContain("301");
+    expect(String(err.message)).toContain("Redirects are not followed");
+    expect(String(err.message)).not.toContain("4747");
+  });
+});

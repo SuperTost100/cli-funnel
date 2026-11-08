@@ -325,3 +325,22 @@ describe("prompt caching", () => {
     await expect(funnel.run(input("openai-api", "gpt-5.5", { cache: true }))).rejects.toMatchObject({ code: "unsupported" });
   });
 });
+
+describe("model listings and redirects", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("lists models without following a redirect, so the key header stays with the configured host", async () => {
+    const seen: (RequestInit | undefined)[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        seen.push(init);
+        return new Response("", { status: 307, headers: { location: "https://elsewhere.example.com/models" } });
+      }),
+    );
+    const p = providers();
+    for (const id of ["anthropic-api", "openai-api", "gemini-api"] as const) await p[id].models().catch(() => {});
+    expect(seen).toHaveLength(3);
+    for (const init of seen) expect(init).toMatchObject({ redirect: "manual" });
+  });
+});

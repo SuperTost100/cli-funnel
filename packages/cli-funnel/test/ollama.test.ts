@@ -401,3 +401,15 @@ describe("ollama credentials in the server URL", () => {
     expect(error.message).not.toContain("4747");
   });
 });
+
+describe("ollama model listing errors", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("masks the key and URL queries a proxy echoes in its error body", async () => {
+    stubFetch(() => new Response(JSON.stringify({ error: "bad request to /api/tags?token=tok-secret with key ollama-key-123456" }), { status: 500 }));
+    const err = await createOllamaProvider({ baseUrl: "http://box:11434", apiKey: "ollama-key-123456" }).models().catch((e) => e);
+    expect(String(err.message)).toContain("500");
+    expect(String(err.message)).not.toContain("tok-secret");
+    expect(String(err.message)).not.toContain("ollama-key-123456");
+  });
+});
