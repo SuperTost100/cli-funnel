@@ -41,7 +41,7 @@ function checkCodexSchema() {
     if (!schema("GetAccountRateLimitsResponse").properties?.rateLimits) report("rateLimits", "GetAccountRateLimitsResponse");
     for (const key of ["threadId", "turnId"]) if (!schema("TurnInterruptParams").properties?.[key]) report(key, "TurnInterruptParams");
     const methods = readFileSync(join(dir, "ClientRequest.json"), "utf8");
-    for (const m of ["thread/list", "thread/fork", "account/rateLimits/read", "turn/interrupt", "turn/steer", "account/login/start", "account/read"]) if (!methods.includes(`"${m}"`)) report(m, "ClientRequest");
+    for (const m of ["thread/list", "thread/fork", "account/rateLimits/read", "turn/interrupt", "turn/steer", "account/login/start", "account/read", "config/read"]) if (!methods.includes(`"${m}"`)) report(m, "ClientRequest");
     const bundle = JSON.parse(readFileSync(join(dir, "codex_app_server_protocol.v2.schemas.json"), "utf8"));
     if (!bundle.definitions?.Config?.properties?.web_search) report("web_search", "Config");
     const modes = bundle.definitions?.WebSearchMode?.enum ?? [];
