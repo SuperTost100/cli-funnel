@@ -2,7 +2,7 @@ import { FunnelError, type AuthStatus, type EffortOption, type Installation, typ
 import { streamChatCompletions, type Turn } from "./api.js";
 import { redact, redactErrors } from "../util/redact.js";
 import { runWithHistory } from "./history.js";
-import { bearer, httpAccount, httpCapabilities, mergeHeaders } from "./http.js";
+import { bearer, httpAccount, httpCapabilities, mergeHeaders, redirectMessage } from "./http.js";
 import { streamResponses } from "./responses.js";
 import { chatMessages, type Msg } from "./wire.js";
 import { joinUrl } from "../util/url.js";
@@ -61,7 +61,7 @@ export function createOpenAICompatibleProvider(endpoint: OpenAICompatibleEndpoin
   const shown = redact(base, [endpoint.apiKey]);
   const efforts: EffortOption[] = (endpoint.efforts ?? []).map((e) => ({ id: e, label: e.charAt(0).toUpperCase() + e.slice(1) }));
   const headers = (): Record<string, string> => mergeHeaders(bearer(endpoint.apiKey), endpoint.headers);
-  const listing = (timeoutMs = PROBE_MS) => fetch(joinUrl(base, "/models"), { headers: headers(), signal: AbortSignal.timeout(timeoutMs) }).catch(() => undefined);
+  const listing = (timeoutMs = PROBE_MS) => fetch(joinUrl(base, "/models"), { redirect: "manual", headers: headers(), signal: AbortSignal.timeout(timeoutMs) }).catch(() => undefined);
   const notReachable = () => `${endpoint.name} is not reachable at ${shown}.`;
   const configured = (): ModelInfo[] =>
     (endpoint.models ?? []).map((m) => ({ id: m, name: m, provider: id, efforts, contextWindows: [], fast: false, source: "manifest" as const }));
@@ -88,6 +88,7 @@ export function createOpenAICompatibleProvider(endpoint: OpenAICompatibleEndpoin
     if (listed.length) return listed.map((m) => ({ ...m, apis }));
     if (endpoint.models?.length) return configured().map((m) => ({ ...m, apis }));
     if (!res) throw new FunnelError(notReachable(), "not-installed");
+    if (res.status >= 300 && res.status < 400) throw new FunnelError(redirectMessage(endpoint.name, res.status), "cli-failed");
     throw new FunnelError(`${endpoint.name} lists no models at ${shown}/models. Pass models: [...] for this endpoint.`, "cli-failed");
   }
 

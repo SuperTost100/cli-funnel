@@ -20,7 +20,7 @@ await funnel.run({
 | --- | --- |
 | `id` | Lowercase letters, digits and dashes. The provider id is `openai-compatible:<id>`. A bad or repeated id throws `invalid-selection`. |
 | `name` | Shown in pickers. |
-| `baseUrl` | What you would give an OpenAI SDK, usually ending in `/v1`. cli-funnel adds `/models` and `/chat/completions`. |
+| `baseUrl` | What you would give an OpenAI SDK, usually ending in `/v1`. cli-funnel adds `/models` and `/chat/completions`. A redirect answer is not followed and ends the run with an error that names the status, so give the final address. |
 | `apiKey` | Optional. Sent as `Authorization: Bearer`. |
 | `headers` | Optional. Sent with every request, for example a gateway's own auth header. |
 | `retries` | Optional. Extra attempts after a 429 or 5xx before any output. Default 2. See [API keys](../api-keys.md#retries). |

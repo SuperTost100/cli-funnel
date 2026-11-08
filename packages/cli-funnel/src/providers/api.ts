@@ -148,7 +148,7 @@ const anthropic: ApiSpec = {
     let after = "";
     // The list is short today, but it is paged, so follow `has_more`. The cap stops a server that never ends.
     for (let page = 0; page < 20; page++) {
-      const res = await fetch(joinUrl(ctx.baseUrl, `/v1/models?limit=1000${after ? `&after_id=${encodeURIComponent(after)}` : ""}`), { headers: ctx.headers });
+      const res = await fetch(joinUrl(ctx.baseUrl, `/v1/models?limit=1000${after ? `&after_id=${encodeURIComponent(after)}` : ""}`), { redirect: "manual", headers: ctx.headers });
       if (!res.ok) throw new FunnelError(`Anthropic API returned ${res.status}.`, "cli-failed");
       const body = (await res.json()) as { data: { id: string; display_name?: string }[]; has_more?: boolean; last_id?: string };
       for (const m of body.data) out.push({ id: m.id, name: m.display_name ?? m.id, provider: "anthropic-api", efforts: anthropicEfforts(m.id), ...MODEL_BASE });
@@ -397,7 +397,7 @@ const openai: ApiSpec = {
   cache: false,
   authHeaders: (key) => bearer(key),
   async listModels(ctx) {
-    const res = await fetch(joinUrl(ctx.baseUrl, "/models"), { headers: ctx.headers });
+    const res = await fetch(joinUrl(ctx.baseUrl, "/models"), { redirect: "manual", headers: ctx.headers });
     if (!res.ok) throw new FunnelError(`OpenAI API returned ${res.status}.`, "cli-failed");
     const body = (await res.json()) as { data: { id: string }[] };
     const models = body.data.flatMap((m) => {
@@ -438,6 +438,7 @@ const gemini: ApiSpec = {
     let page = "";
     do {
       const res = await fetch(joinUrl(ctx.baseUrl, `/models?pageSize=1000${page ? `&pageToken=${encodeURIComponent(page)}` : ""}`), {
+        redirect: "manual",
         headers: ctx.headers,
       });
       if (!res.ok) throw new FunnelError(`Gemini API returned ${res.status}.`, "cli-failed");

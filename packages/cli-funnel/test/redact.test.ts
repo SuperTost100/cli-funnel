@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { redact, redactErrors } from "../src/util/redact.js";
+import { redact, redactErrors, redactSecrets } from "../src/util/redact.js";
 import type { FunnelEvent } from "../src/types.js";
 
 const GH = "ghp_" + "a1B2c3D4e5".repeat(4);
@@ -48,5 +48,76 @@ describe("redactErrors", () => {
       { type: "error", message: "denied for [redacted]", code: "cli-failed" },
       { type: "limit", kind: "rate", detail: "slow down [redacted]" },
     ]);
+  });
+});
+
+describe("redactErrors with a thrown error", () => {
+  it("masks the key in the message, stack and cause of an exception from the stream", async () => {
+    const KEY = "sk-live-0123456789abcdef";
+    async function* broken(): AsyncGenerator<FunnelEvent> {
+      yield { type: "text.delta", text: "hi" };
+      throw Object.assign(new SyntaxError(`Unexpected token in "${KEY}" at https://gw.test/v1?key=${KEY}`), { cause: new Error(`inner ${KEY}`), body: KEY });
+    }
+    const seen: FunnelEvent[] = [];
+    let caught: any;
+    try {
+      for await (const e of redactErrors(broken(), [KEY])) seen.push(e);
+    } catch (err) {
+      caught = err;
+    }
+    expect(seen).toEqual([{ type: "text.delta", text: "hi" }]);
+    expect(caught).toBeInstanceOf(SyntaxError);
+    for (const text of [caught.message, caught.stack, caught.cause.message, caught.body]) expect(text).not.toContain(KEY);
+    expect(caught.message).toContain("[redacted]");
+    expect(caught.message).not.toContain("?key=");
+  });
+});
+
+describe("redactSecrets across text.delta events", () => {
+  const SECRET = "tok-abcdef123456";
+  const texts = async (chunks: string[], extra: FunnelEvent[] = []) => {
+    const out = await drain(redactSecrets(events(...chunks.map((text) => ({ type: "text.delta" as const, text })), ...extra), [SECRET]));
+    return out;
+  };
+  const joined = (out: FunnelEvent[]) => out.map((e) => (e.type === "text.delta" ? e.text : `<${e.type}>`)).join("");
+
+  it("masks a secret split across two chunks", async () => {
+    const out = await texts(["the key is tok-abc", "def123456 ok"]);
+    expect(joined(out)).toBe("the key is [redacted] ok");
+  });
+
+  it("masks a secret split over many tiny chunks", async () => {
+    const out = await texts([..."a tok-abcdef123456 b"]);
+    expect(joined(out)).toBe("a [redacted] b");
+  });
+
+  it("releases ordinary text at once", async () => {
+    const out = await drain(redactSecrets(events({ type: "text.delta", text: "hello world" }), [SECRET]));
+    expect(out).toEqual([{ type: "text.delta", text: "hello world" }]);
+    const first = redactSecrets(events({ type: "text.delta", text: "hello " }, { type: "text.delta", text: "world" }), [SECRET])[Symbol.asyncIterator]();
+    expect(await first.next()).toEqual({ done: false, value: { type: "text.delta", text: "hello " } });
+  });
+
+  it("flushes a held tail before another event and at the end", async () => {
+    const out = await texts(["almost tok-abc"], [{ type: "done", text: "", finishReason: "stop" }]);
+    expect(joined(out)).toBe("almost tok-abc<done>");
+    const end = await texts(["almost tok-abc"]);
+    expect(joined(end)).toBe("almost tok-abc");
+  });
+
+  it("flushes a held tail before a thrown error", async () => {
+    async function* broken(): AsyncGenerator<FunnelEvent> {
+      yield { type: "text.delta", text: "tok-abcdef" };
+      throw new Error("boom tok-abcdef123456");
+    }
+    const seen: string[] = [];
+    let caught: any;
+    try {
+      for await (const e of redactSecrets(broken(), [SECRET])) seen.push(e.type === "text.delta" ? e.text : e.type);
+    } catch (err) {
+      caught = err;
+    }
+    expect(seen.join("")).toBe("tok-abcdef");
+    expect(caught.message).toBe("boom [redacted]");
   });
 });

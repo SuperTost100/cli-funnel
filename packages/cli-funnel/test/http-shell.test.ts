@@ -46,3 +46,23 @@ describe("httpError", () => {
     expect(events).toEqual([{ type: "error", message: "Test API 400: nope", code: "cli-failed" }]);
   });
 });
+
+describe("redirects", () => {
+  it("sends provider requests without following redirects", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response("ok"));
+    vi.stubGlobal("fetch", fetchMock);
+    await drive(fetchRetrying("http://x", { method: "POST" }));
+    expect(fetchMock.mock.calls[0]![1]).toMatchObject({ redirect: "manual" });
+  });
+
+  it("turns a 3xx answer into an error that names the status and not the Location", async () => {
+    const res = new Response("", { status: 307, headers: { location: "http://127.0.0.1:4747/codex/logout?x=secret" } });
+    const { events } = await drive(httpError("Test API", res));
+    expect(events).toHaveLength(1);
+    const error = events[0] as Extract<FunnelEvent, { type: "error" }>;
+    expect(error.message).toContain("307");
+    expect(error.message).toContain("redirect");
+    expect(error.message).not.toContain("4747");
+    expect(error.message).not.toContain("secret");
+  });
+});

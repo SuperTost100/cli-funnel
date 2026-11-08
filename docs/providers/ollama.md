@@ -10,7 +10,7 @@ The provider uses the first of these that is set:
 2. `OLLAMA_HOST`, read the way Ollama reads it: no scheme means `http`, no port means `11434`, and `0.0.0.0` means this machine
 3. `http://127.0.0.1:11434`
 
-For a server behind a proxy that checks a token, pass `ollama: { baseUrl, apiKey }`. The key goes in an `Authorization: Bearer` header.
+For a server behind a proxy that checks a token, pass `ollama: { baseUrl, apiKey }`. The key goes in an `Authorization: Bearer` header. A redirect answer from the server is not followed and gives an error that names the status, so give the final address. Messages and the installation path show the URL without its user, password, query and fragment.
 
 To keep a model loaded between turns on a shared server, pass `ollama: { keepAlive: "30m" }`. See [Keep alive](#keep-alive).
 

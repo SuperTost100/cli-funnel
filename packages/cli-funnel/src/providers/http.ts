@@ -91,8 +91,11 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
  * each wait and returns the final response, which may still be an error. Nothing is read from a response that
  * is sent again, and a response that is returned is untouched, so a caller that starts reading text never retries.
  * Network errors and aborts throw as `fetch` does. With a `tap`, each response's status and headers go out as `raw`.
+ * Redirects are never followed, because a configured server could use one to send the request, with its body, to an
+ * address of its choosing. A 3xx answer comes back as it is, and `httpError` reports it.
  */
 export async function* fetchRetrying(url: string, init: RequestInit, options: RetryOptions = {}, tap?: HttpTap): AsyncGenerator<FunnelEvent, Response> {
+  init = { ...init, redirect: "manual" };
   const retries = Math.max(0, options.retries ?? 2);
   const base = options.retryDelayMs ?? 500;
   for (let attempt = 1; ; attempt++) {
@@ -124,8 +127,16 @@ export const jsonHeaders = (key?: string, extra?: Record<string, string>): Recor
 /** How much of an error body goes into a message. A proxy page or a debug dump can be megabytes. */
 const MAX_ERROR_BODY = 2000;
 
+/** The error for a redirect answer. It names the status and leaves out the `Location`, which the server chose. */
+export const redirectMessage = (label: string, status: number): string =>
+  `${label} answered ${status}, a redirect. Redirects are not followed. Set the base URL to the final address.`;
+
 /** A failed response as events: a `limit` first when the API answered 429, then the error. */
 export async function* httpError(label: string, res: Response): AsyncGenerator<FunnelEvent> {
+  if (res.status >= 300 && res.status < 400) {
+    await res.body?.cancel().catch(() => {});
+    return yield { type: "error", message: redirectMessage(label, res.status), code: "cli-failed" };
+  }
   const body = await res.text();
   const limit = parseHttpLimit(res.status, res.headers, body);
   if (limit) yield limit;
