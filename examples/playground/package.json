@@ -8,18 +8,18 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "cli-funnel-react": "*",
     "@fontsource-variable/bricolage-grotesque": "^5.2.0",
     "@fontsource/ibm-plex-mono": "^5.2.0",
     "@fontsource/ibm-plex-sans": "^5.2.0",
     "cli-funnel": "*",
+    "cli-funnel-react": "*",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "@vitejs/plugin-react": "^5.0.0",
-    "vite": "^7.0.0"
+    "@vitejs/plugin-react": "^6.2.1",
+    "vite": "^8.3.6"
   }
 }
