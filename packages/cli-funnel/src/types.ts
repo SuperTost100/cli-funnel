@@ -707,6 +707,12 @@ export interface ClaudeOptions {
    * call that started the subagent. They do not count toward the run's file changes, plan or `RunResult.toolCalls`.
    */
   forwardSubagentTools?: boolean;
+  /**
+   * Run without saving the session to disk. It cannot be resumed afterwards. Refused with `sessionId`, since a resume needs
+   * the saved session. In a live session (`sessions.keepAlive`) the process keeps the conversation in memory, so later
+   * turns still see it, but a turn that cannot reach that process cannot resume it either.
+   */
+  ephemeral?: boolean;
   /** Beta headers. Only API key logins use them. */
   betas?: string[];
 }

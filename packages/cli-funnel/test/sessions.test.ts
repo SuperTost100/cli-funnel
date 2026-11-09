@@ -221,6 +221,17 @@ describe("claude live sessions", () => {
     expect(f.sessions()).toMatchObject([{ provider: "claude", sessionId: a.sessionId, busy: false, steer: false }]);
   });
 
+  it("starts an ephemeral session with --no-session-persistence and keeps it for the next turn", async () => {
+    const f = make({ keepAlive: true });
+    const options = { providerOptions: { claude: { ephemeral: true } } };
+    const a = await f.run(claude("one", options));
+    // A turn with the same options reuses the process, so it needs no resume.
+    const b = await f.run(claude("two", { ...options, sessionId: a.sessionId }));
+    expect(spawns()).toHaveLength(1);
+    expect(spawns()[0]!.args).toContain("--no-session-persistence");
+    expect(b.text).toBe(`two#2@${spawns()[0]!.pid}`);
+  });
+
   it("passes a long system prompt through a file and removes it after the first turn", async () => {
     const f = make({ keepAlive: true });
     const system = "x".repeat(10_000);

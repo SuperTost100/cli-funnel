@@ -30,7 +30,7 @@ Runs the real `claude` binary in print mode and reads its stream-json output. Te
 | `control_request` `can_use_tool` | `approval.request`, or `question.request` for AskUserQuestion |
 | `result` | `usage`, then `done` (or `error` when `is_error`) |
 
-Usage has no `costUsd`. The CLI reports a list-price estimate, not what a subscription is charged. Subagent messages are dropped. See [Agent callbacks and events](#agent-callbacks-and-events) for `plan`, `file.change` and `question.request`.
+`usage` carries `cacheCreationInputTokens` (from `cache_creation_input_tokens`) and `reasoningTokens` (from `output_tokens_details.thinking_tokens`) when they are above zero. The CLI's `input_tokens` leaves out cache reads and writes, so `inputTokens` is the sum of all three, and `outputTokens` already includes the thinking tokens. Usage has no `costUsd`. The CLI reports a list-price estimate, not what a subscription is charged. Subagent messages are dropped. See [Agent callbacks and events](#agent-callbacks-and-events) for `plan`, `file.change` and `question.request`.
 
 ## Access mapping
 
@@ -133,6 +133,9 @@ The CLI sends the request at every level with tools: it was checked live at `byp
 | `forwardSubagentText: boolean` | `--forward-subagent-text` | all |
 | `forwardSubagentTools: boolean` | none, the parser keeps the calls | all |
 | `betas: string[]` | `--betas=<header>` | all |
+| `ephemeral: boolean` | `--no-session-persistence`. Refused with `sessionId` | all |
+
+`ephemeral` runs without saving the session to disk, so it cannot be resumed. It works in live sessions too, checked on 2.1.319: one process with the flag answered two turns, and the second turn remembered a word from the first, because the process keeps the conversation in memory. Pass the same `ephemeral` on every turn of a live session, since a turn with other options starts a new process (see [Live sessions](../sessions.md)). That new process would have to resume a session that was never saved, and `ephemeral` with a `sessionId` is refused.
 
 `forkSession` works on live sessions: the fork gets its own process and the parent's stays up. See [Live sessions](../sessions.md#fork-a-session).
 

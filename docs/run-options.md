@@ -311,7 +311,7 @@ Options never give the agent more than `selection.access` allows. An option that
 | Claude Code | `allowedTools` | refused | refused | refused | refused | yes |
 | Claude Code | `mcpConfig` | refused | refused | refused | refused | yes |
 | Claude Code | `addDirs`, `agents` | refused | yes | yes | yes | yes |
-| Claude Code | `disallowedTools`, `fallbackModel`, `maxBudgetUsd`, `forkSession`, `forwardSubagentText`, `forwardSubagentTools`, `betas` | yes | yes | yes | yes | yes |
+| Claude Code | `disallowedTools`, `fallbackModel`, `maxBudgetUsd`, `forkSession`, `forwardSubagentText`, `forwardSubagentTools`, `betas`, `ephemeral` | yes | yes | yes | yes | yes |
 | Codex | `approvalPolicy` | `untrusted` | `untrusted` | `untrusted` | `untrusted`, `on-request` | any |
 | Codex | `webSearch` | `disabled` only | `disabled`, `cached`, `indexed` | `disabled`, `cached`, `indexed` | yes | yes |
 | Codex | `addDirs` | refused | yes | yes | yes | yes |

@@ -160,7 +160,7 @@ function schemaInit(input: RunInput): string | undefined {
   return JSON.stringify({ type: "control_request", request_id: "cli-funnel-init", request });
 }
 
-const OPTION_KEYS = ["allowedTools", "disallowedTools", "addDirs", "mcpConfig", "agents", "fallbackModel", "maxBudgetUsd", "forkSession", "forwardSubagentText", "forwardSubagentTools", "betas"];
+const OPTION_KEYS = ["allowedTools", "disallowedTools", "addDirs", "mcpConfig", "agents", "fallbackModel", "maxBudgetUsd", "forkSession", "forwardSubagentText", "forwardSubagentTools", "betas", "ephemeral"];
 const AGENT_KEYS = ["description", "prompt", "tools", "disallowedTools", "model"];
 const NOT_NONE = ACCESS_LEVELS.filter((a) => a !== "none");
 
@@ -218,6 +218,10 @@ function optionArgs(input: RunInput, mcpFile?: string): string[] {
   // Claude Code sends subagent tool calls without a flag. Checked here so a bad value fails like the other options.
   bool(o.forwardSubagentTools, "forwardSubagentTools");
   for (const b of stringList(o.betas, "betas") ?? []) args.push(flag("--betas", b));
+  if (bool(o.ephemeral, "ephemeral") !== undefined) {
+    if (input.sessionId) invalidOption("ephemeral applies to new sessions only. Leave it out when you pass sessionId.");
+    if (o.ephemeral) args.push("--no-session-persistence");
+  }
   return args;
 }
 

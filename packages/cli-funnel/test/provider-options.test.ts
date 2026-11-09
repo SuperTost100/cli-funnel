@@ -109,6 +109,18 @@ describe("claude providerOptions", () => {
     expect(outcome(() => args("full", "not an object"))).toBe("invalid-selection");
   });
 
+  it("passes --no-session-persistence for ephemeral at every level and nothing for false", () => {
+    expect(acceptedAt((a) => args(a, { ephemeral: true }))).toEqual([...ACCESS_LEVELS]);
+    expect(args("auto", { ephemeral: true })).toContain("--no-session-persistence");
+    expect(args("auto", { ephemeral: false })).toEqual(args("auto", undefined));
+  });
+
+  it("refuses ephemeral with a sessionId and a value that is not a boolean", () => {
+    expect(outcome(() => args("auto", { ephemeral: true }, { sessionId: "s1" }))).toBe("invalid-selection");
+    expect(outcome(() => args("auto", { ephemeral: false }, { sessionId: "s1" }))).toBe("invalid-selection");
+    expect(outcome(() => args("auto", { ephemeral: "yes" }))).toBe("invalid-selection");
+  });
+
   it("takes a single string where a list is expected", () => {
     expect(args("auto", { addDirs: "/srv" })).toContain("--add-dir=/srv");
   });
