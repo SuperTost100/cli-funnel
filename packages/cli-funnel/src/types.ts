@@ -719,6 +719,12 @@ export interface CodexOptions {
   webSearch?: "disabled" | "cached" | "indexed" | "live";
   /** Ask for approval at least as often as the access level does. A policy that asks less is refused. */
   approvalPolicy?: "untrusted" | "on-request" | "never";
+  /**
+   * More folders the `workspace-write` sandbox may write to, besides `cwd`. Absolute paths. They are added to the
+   * `writable_roots` of the user's Codex config. Refused at `none`. At `full` they apply only with `sandbox: true`,
+   * since the sandbox is off otherwise.
+   */
+  addDirs?: string[];
   /** Emit `subagent.text` events with the messages subagents write, tagged with the id of the item that started them. */
   forwardSubagentText?: boolean;
   /**

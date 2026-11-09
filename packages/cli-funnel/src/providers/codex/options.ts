@@ -1,5 +1,5 @@
 import type { RunInput } from "../../types.js";
-import { bool, invalidOption, mcpServersFor, oneOf, optionsFor, requireAccess } from "../options.js";
+import { bool, dirList, invalidOption, mcpServersFor, oneOf, optionsFor, requireAccess } from "../options.js";
 import { requireMachine } from "../../selection.js";
 import { planAccess, POLICIES, type ApprovalPolicy } from "./access.js";
 import type { ForwardSubagents } from "./events.js";
@@ -13,11 +13,13 @@ export interface CodexThreadOptions {
   start: { ephemeral?: boolean };
   /** Config overrides in the dotted form `codex -c` takes. */
   config: Record<string, unknown>;
+  /** Folders `workspace-write` may write to besides `cwd`. Set when the caller passes any, whatever the sandbox ends up as. */
+  addDirs?: string[];
 }
 
 /** Checks `providerOptions.codex` and turns it into app-server params. Throws `invalid-selection` when an option would widen access. */
 export function threadOptions(input: RunInput): CodexThreadOptions {
-  const o = optionsFor(input, "codex", ["ephemeral", "webSearch", "approvalPolicy", "forwardSubagentText", "forwardSubagentTools"]);
+  const o = optionsFor(input, "codex", ["ephemeral", "webSearch", "approvalPolicy", "addDirs", "forwardSubagentText", "forwardSubagentTools"]);
   const { access } = requireMachine(input.selection);
   const out: CodexThreadOptions = { start: {}, config: {} };
 
@@ -37,6 +39,13 @@ export function threadOptions(input: RunInput): CodexThreadOptions {
   else if (search && search !== "disabled") requireAccess(access, ["supervised", "accept-edits", "auto", "full"], `webSearch "${search}"`);
   // At `none` the tool config already sets web_search to "disabled".
   if (search && access !== "none") out.config.web_search = search;
+
+  const dirs = dirList(o.addDirs, "addDirs");
+  if (dirs) {
+    // The sandbox at `none` is read-only. Folders to write to would contradict it.
+    requireAccess(access, ["supervised", "accept-edits", "auto", "full"], "addDirs");
+    out.addDirs = dirs;
+  }
 
   const policy = oneOf(o.approvalPolicy, "approvalPolicy", POLICIES);
   if (policy) {

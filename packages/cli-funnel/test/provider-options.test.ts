@@ -153,6 +153,14 @@ describe("codex providerOptions", () => {
     expect(opts("auto", undefined)).toEqual({ start: {}, config: {} });
   });
 
+  it("takes addDirs as absolute paths, from the levels with a writable sandbox, and a single string as a list of one", () => {
+    expect(opts("auto", { addDirs: ["/srv/a", "/srv/b"] })).toEqual({ start: {}, config: {}, addDirs: ["/srv/a", "/srv/b"] });
+    expect(opts("auto", { addDirs: "/srv" }).addDirs).toEqual(["/srv"]);
+    expect(acceptedAt((a) => opts(a, { addDirs: ["/srv"] }))).toEqual(["supervised", "accept-edits", "auto", "full"]);
+    expect(outcome(() => opts("none", { addDirs: [] }))).toBe("invalid-selection");
+    for (const bad of [["relative/dir"], [1], [""], {}]) expect(outcome(() => opts("auto", { addDirs: bad }))).toBe("invalid-selection");
+  });
+
   it("only accepts approval policies that ask at least as often as the level", () => {
     expect(acceptedAt((a) => opts(a, { approvalPolicy: "untrusted" }))).toEqual([...ACCESS_LEVELS]);
     expect(acceptedAt((a) => opts(a, { approvalPolicy: "on-request" }))).toEqual(["auto", "full"]);
@@ -286,6 +294,24 @@ describe("providerOptions through the server", () => {
     expect((await responses(join(root, "escape"))).status).toBe(403);
     expect((await responses([root])).status).toBe(200);
     expect(seen.at(-1)).toEqual({ claude: { addDirs: [realpathSync(root)] } });
+  });
+
+  it("applies the same check to providerOptions.codex.addDirs on every route", async () => {
+    const codex = createHandler(createFunnel({ providers: { codex: { ...fake, id: "codex", models: async () => [{ id: "m", name: "M", provider: "codex", efforts: [], contextWindows: [], fast: false, source: "manifest" }] } } }), { fsRoots: [root], openai: { cwd: root } });
+    const send = (path: string, body: unknown) => codex(new Request(`http://x${path}`, { method: "POST", body: JSON.stringify(body) }));
+    const opts = (addDirs: unknown) => ({ codex: { addDirs } });
+    const run = (addDirs: unknown) => send("/run", { selection: { provider: "codex", model: "m", cwd: root, access: "full" }, prompt: "go", providerOptions: opts(addDirs) });
+    const chat = (addDirs: unknown) => send("/v1/chat/completions", { model: "codex/m", messages: [{ role: "user", content: "hi" }], x_funnel: { providerOptions: opts(addDirs) } });
+    const responses = (addDirs: unknown) => send("/v1/responses", { model: "codex/m", input: "hi", x_funnel: { providerOptions: opts(addDirs) } });
+    for (const call of [run, chat, responses]) {
+      expect((await call([outside])).status).toBe(403);
+      expect((await call(join(root, "escape"))).status).toBe(403);
+      expect((await call(["/definitely/missing"])).status).toBe(403);
+      const ok = await call([root]);
+      expect(ok.status).toBe(200);
+      await ok.text();
+      expect(seen.at(-1)).toEqual({ codex: { addDirs: [realpathSync(root)] } });
+    }
   });
 
   it("hands the provider the checked real path, not the symlink", async () => {

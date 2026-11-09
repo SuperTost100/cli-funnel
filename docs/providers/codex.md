@@ -149,12 +149,15 @@ With `apiKey` the app-server starts with `-c cli_auth_credentials_store="ephemer
 | `ephemeral: boolean` | `ephemeral` on `thread/start`. Refused with `sessionId`, since `thread/resume` has no such param | all |
 | `webSearch: "disabled" \| "cached" \| "indexed" \| "live"` | config `web_search` | `"disabled"` at all levels, `"cached"` and `"indexed"` from `supervised` up, `"live"` at `auto` and `full` only |
 | `approvalPolicy: "untrusted" \| "on-request" \| "never"` | `approvalPolicy`, in place of the level's own | see below |
+| `addDirs: string[]` | config `sandbox_workspace_write.writable_roots` | refused at `none`, accepted from `supervised` up (see below) |
 | `forwardSubagentText: boolean` | none, the translator keeps the messages | all |
 | `forwardSubagentTools: boolean` | none, the translator keeps the calls | all |
 
 `approvalPolicy` may ask more often than the access level, never less. From most to fewest questions the order is `untrusted`, `on-request`, `never`. `none`, `supervised` and `accept-edits` use `untrusted`, so they accept only `untrusted`. `auto` uses `on-request` and also accepts `untrusted`. `full` accepts all three. The granular policy object is refused. At `none` every approval is still answered `deny`, whatever the policy. A policy stricter than the level's sends the requests Codex then raises to `onApproval`, as at `supervised`, and denies them when there is no handler. So `full` with `untrusted` asks before commands and file changes instead of allowing them.
 
 All three options were run live on 0.160 at `auto`.
+
+`addDirs` takes absolute paths and lets the `workspace-write` sandbox write to those folders as well as `cwd`. It is sent as the thread config `sandbox_workspace_write.writable_roots`, and nothing else the caller passes can change that key. A thread config replaces the list in the user's `config.toml` instead of adding to it, so when `addDirs` is set cli-funnel first reads the effective config with `config/read` and sends the user's roots followed by yours, each folder once. If that read fails, the run fails with `cli-failed` before the thread starts. `none` refuses the option, because its sandbox is read-only. At `supervised`, `accept-edits` and `auto` it adds writable roots. At `full` the sandbox is `danger-full-access`, so the option is accepted and changes nothing, and cli-funnel does not read the config. With `sandbox: true` at `full` the sandbox is `workspace-write` and the folders apply. Checked on 0.166.0 with `thread/start` and no turn: the answer listed the folder under `sandbox.writableRoots` (empty without the option), a root in `config.toml` was dropped when the thread config set the key, and a `read-only` or `danger-full-access` thread listed no roots. Whether a command can write to such a folder was not run, since that needs a model turn. Through the HTTP server each folder must sit inside `fsRoots`, as for the other providers (see [Run options](../run-options.md)).
 
 ## Subagents
 

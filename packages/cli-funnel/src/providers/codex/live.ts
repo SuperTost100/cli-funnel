@@ -4,7 +4,7 @@ import { Channel } from "../../util/channel.js";
 import { spawnStream } from "../../util/process.js";
 import { redactErrors, runSecrets } from "../../util/redact.js";
 import { askApproval, askQuestion, findBinary, rawEvent, SETTLE_MS, stderrTail } from "../base.js";
-import { planAccess, startedAccess } from "./access.js";
+import { configWritableRoots, planAccess, sandboxFor, startedAccess } from "./access.js";
 import { denyNote, effectiveReply, isQuestion, toApprovalRequest, toQuestionReply, toQuestionRequest, toReply, type Reply, type ServerRequest } from "./approvals.js";
 import { authKind } from "./auth.js";
 import { Translator, warningText } from "./events.js";
@@ -16,21 +16,21 @@ import { configServers, noToolsConfig } from "./tools.js";
 /**
  * Settings for `thread/start` and `thread/resume`, with `providerOptions.codex` and the agent features applied. At
  * `none` the no-tools config goes last, so nothing else can switch a tool back on. `servers` are the config's MCP
- * servers, which `none` switches off.
+ * servers, which `none` switches off. `roots` are the sandbox's writable folders, which replace the config's list.
  */
-function threadSettings(input: RunInput, agent: Record<string, unknown>, servers: string[]) {
+function threadSettings(input: RunInput, agent: Record<string, unknown>, servers: string[], roots?: string[]) {
   const sel = input.selection;
   const machine = requireMachine(sel);
   const plan = planAccess(machine.access);
   const extra = threadOptions(input);
-  const config = { ...extra.config, ...agent, ...(sel.access === "none" ? noToolsConfig(servers) : {}) };
+  const config = { ...extra.config, ...agent, ...(sel.access === "none" ? noToolsConfig(servers) : {}), ...(roots ? { "sandbox_workspace_write.writable_roots": roots } : {}) };
   return {
     model: sel.model,
     cwd: sel.cwd,
     approvalPolicy: extra.approvalPolicy ?? plan.approvalPolicy,
     approvalsReviewer: plan.approvalsReviewer,
     // Below `full` commands already run in `workspace-write` or `read-only`. `sandbox` keeps `full` in it too.
-    sandbox: input.sandbox && plan.sandbox === "danger-full-access" ? "workspace-write" : plan.sandbox,
+    sandbox: sandboxFor(machine.access, input.sandbox),
     ...(sel.fast ? { serviceTier: "priority" } : {}),
     ...(input.system ? { developerInstructions: input.system } : {}),
     ...(Object.keys(config).length ? { config } : {}),
@@ -46,16 +46,16 @@ export function appServerArgs(input: RunInput): string[] {
 }
 
 /**
- * The MCP servers in the effective Codex config as seen from `cwd`, for `none` to switch off and for the caller's
- * servers to stay clear of. When Codex cannot list them the thread does not start.
+ * The effective Codex config as seen from `cwd`. `what` says what the run needs from it, for the error. When Codex
+ * cannot read it the thread does not start. The answer is the user's whole config, MCP server env and headers
+ * included, so it never goes out raw.
  */
-async function configMcpServers(rpc: RpcClient, cwd: string): Promise<string[]> {
+async function readConfig<T>(rpc: RpcClient, cwd: string, what: string, pick: (res: unknown) => T): Promise<T> {
   try {
-    // The answer is the user's whole Codex config, MCP server env and headers included, so it never goes out raw.
-    return configServers(await rpc.request("config/read", { cwd }, { hideAnswer: true }));
+    return pick(await rpc.request("config/read", { cwd }, { hideAnswer: true }));
   } catch (e) {
     const why = e instanceof Error ? e.message : String(e);
-    throw new FunnelError(`Could not list the MCP servers in the Codex config. ${why}`, "cli-failed");
+    throw new FunnelError(`Could not ${what} in the Codex config. ${why}`, "cli-failed");
   }
 }
 
@@ -168,7 +168,7 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
   const path = findBinary(BINARY);
   if (!path) throw new FunnelError("codex is not installed.", "not-installed");
   // Refuses options that would widen access before a process starts. `start` holds the params only `thread/start` takes.
-  const { start, approvalPolicy } = threadOptions(first);
+  const { start, approvalPolicy, addDirs } = threadOptions(first);
   // threadOptions refuses a policy that asks less often than the level's, so a different one asks more often.
   const stricter = approvalPolicy !== undefined && approvalPolicy !== planAccess(requireMachine(first.selection).access).approvalPolicy;
   const agent = agentConfig(first);
@@ -317,12 +317,23 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
     // config keys merge into a server of the same name.
     const callerServers = Object.keys(first.mcpServers ?? {});
     const none = first.selection.access === "none";
-    const servers = none || callerServers.length ? await configMcpServers(rpc, cwd) : [];
+    // Writable folders replace the ones in the user's config, so the config's own are read and kept. A sandbox that
+    // allows no writes outside `cwd` has no use for them.
+    const needServers = none || callerServers.length > 0;
+    const needRoots = addDirs !== undefined && sandboxFor(requireMachine(first.selection).access, first.sandbox) === "workspace-write";
+    let servers: string[] = [];
+    let roots: string[] | undefined;
+    if (needServers || needRoots) {
+      ({ servers, roots } = await readConfig(rpc, cwd, needServers ? "list the MCP servers" : "read the writable folders", (res) => ({
+        servers: needServers ? configServers(res) : [],
+        roots: needRoots ? [...new Set([...configWritableRoots(res), ...addDirs])] : undefined,
+      })));
+    }
     const taken = callerServers.filter((name) => servers.includes(name));
     if (taken.length) {
       throw new FunnelError(`MCP server ${taken.join(", ")} is already in the user's Codex config. Give the server another name.`, "invalid-selection");
     }
-    const settings = threadSettings(first, agent, none ? servers : []);
+    const settings = threadSettings(first, agent, none ? servers : [], roots);
     const started = first.sessionId
       ? await rpc.request("thread/resume", { threadId: first.sessionId, ...settings })
       : await rpc.request("thread/start", { ...settings, ...start });

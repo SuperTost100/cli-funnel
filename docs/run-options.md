@@ -314,6 +314,7 @@ Options never give the agent more than `selection.access` allows. An option that
 | Claude Code | `disallowedTools`, `fallbackModel`, `maxBudgetUsd`, `forkSession`, `forwardSubagentText`, `forwardSubagentTools`, `betas` | yes | yes | yes | yes | yes |
 | Codex | `approvalPolicy` | `untrusted` | `untrusted` | `untrusted` | `untrusted`, `on-request` | any |
 | Codex | `webSearch` | `disabled` only | `disabled`, `cached`, `indexed` | `disabled`, `cached`, `indexed` | yes | yes |
+| Codex | `addDirs` | refused | yes | yes | yes | yes |
 | Codex | `ephemeral`, `forwardSubagentText`, `forwardSubagentTools` | yes | yes | yes | yes | yes |
 | Cursor Agent | `addDirs` | refused | | | yes | yes |
 | Cursor Agent | `sandbox` | `enabled` only | | | `enabled` only | yes |
@@ -331,6 +332,7 @@ Why these lines:
 - `mcpConfig` starts each stdio MCP server as a command before any permission check, so it needs `full`.
 - `agents` accepts only `description`, `prompt`, `tools`, `disallowedTools` and `model` per subagent. Keys such as `permissionMode`, `mcpServers` and `hooks` are refused.
 - `addDirs` takes absolute paths. Through the HTTP server each one must sit inside the handler's `fsRoots`, the same check `cwd` gets, or the request fails with 403. The server passes the resolved real path to the CLI, so a symlink changed after the check cannot point the run elsewhere.
+- Codex `addDirs` becomes writable roots of the `workspace-write` sandbox, added to the roots in the user's Codex config. It is refused at `none`, whose sandbox is read-only. At `full` the sandbox is off, so the folders change nothing unless the run sets `sandbox: true`.
 - At `none` Cursor Agent and Antigravity run in an empty folder cli-funnel owns. Another directory would undo that, so `addDirs` is refused there. Cursor's plan mode is refused there too, since nobody has tested where it writes its plan.
 - Codex `webSearch: "live"` fetches pages and nobody approves it, so only `auto` and `full` accept it. `"cached"` and `"indexed"` search an index and are accepted from `supervised` up.
 - `fallbackModel` and a subagent's `model` go to the CLI unchecked. The catalog check that `selection.model` gets does not apply to them.

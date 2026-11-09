@@ -353,7 +353,7 @@ process.stdin.on("data", (d) => {
       case "account/read": send({ id: m.id, result: { account: { type: "chatgpt", email: null, planType: "plus" }, requiresOpenaiAuth: true } }); break;
       case "config/read":
         if (process.env.FAKE_MCP === "error") send({ id: m.id, error: { code: -32601, message: "unknown method" } });
-        else send({ id: m.id, result: { config: { model: null, mcp_servers: JSON.parse(process.env.FAKE_MCP || "{}") }, origins: {} } });
+        else send({ id: m.id, result: { config: { model: null, mcp_servers: JSON.parse(process.env.FAKE_MCP || "{}"), sandbox_workspace_write: JSON.parse(process.env.FAKE_SANDBOX_CONFIG || "null") }, origins: {} } });
         break;
       case "thread/start":
         for (const summary of JSON.parse(process.env.FAKE_WARNINGS || "[]")) send({ method: "configWarning", params: { summary, details: null } });
@@ -434,6 +434,7 @@ describe("codex agent features through the app-server", () => {
     delete process.env.FAKE_WARNINGS;
     delete process.env.FAKE_STARTED;
     delete process.env.FAKE_NOTES;
+    delete process.env.FAKE_SANDBOX_CONFIG;
   });
 
   it("reports a thread that started in a narrower sandbox, on the result and after session", async () => {
@@ -641,6 +642,58 @@ describe("codex agent features through the app-server", () => {
   it("does not read the config above none when the caller adds no MCP servers", async () => {
     await run("plain");
     expect(entries().some((e) => e.method === "config/read")).toBe(false);
+  });
+
+  describe("addDirs", () => {
+    const root = (name: string) => resolve("/", "srv", name);
+    const threadConfig = () => entries().find((e) => e.method === "thread/start").params.config ?? {};
+    const KEY = "sandbox_workspace_write.writable_roots";
+    const dirs = (access: AccessLevel, extra: Partial<RunInput> = {}) =>
+      run("plain", { selection: { provider: "codex", model: "m", cwd, access }, providerOptions: { codex: { addDirs: [root("a"), root("b")] } }, ...extra });
+
+    it("sets the writable roots where the sandbox is workspace-write, and sends nothing else for them", async () => {
+      for (const access of ["supervised", "accept-edits", "auto"] as const) {
+        await dirs(access);
+        expect(threadConfig()[KEY]).toEqual([root("a"), root("b")]);
+      }
+      await dirs("full", { sandbox: true });
+      expect(entries().filter((e) => e.method === "thread/start").at(-1).params).toMatchObject({ sandbox: "workspace-write", config: { [KEY]: [root("a"), root("b")] } });
+    });
+
+    it("changes nothing at full without a sandbox, where nothing limits writes", async () => {
+      await dirs("full");
+      expect(entries().find((e) => e.method === "thread/start").params).toMatchObject({ sandbox: "danger-full-access" });
+      expect(threadConfig()).not.toHaveProperty(KEY);
+      expect(entries().some((e) => e.method === "config/read")).toBe(false);
+    });
+
+    it("refuses addDirs at none before it starts a process", async () => {
+      await expect(dirs("none")).rejects.toMatchObject({ code: "invalid-selection", message: expect.stringContaining("addDirs") });
+      expect(existsSync(logFile)).toBe(false);
+    });
+
+    it("adds to the roots in the user's config and keeps each folder once", async () => {
+      process.env.FAKE_SANDBOX_CONFIG = JSON.stringify({ writable_roots: [root("user"), root("a")], network_access: false });
+      await dirs("auto");
+      expect(entries().find((e) => e.method === "config/read").params).toEqual({ cwd });
+      expect(threadConfig()[KEY]).toEqual([root("user"), root("a"), root("b")]);
+    });
+
+    it("sets the roots after every other config key and leaves the MCP servers to none", async () => {
+      process.env.FAKE_MCP = JSON.stringify({ srv: { command: "x" } });
+      await dirs("auto", { mcpServers: { app: http() } });
+      expect(threadConfig()).toMatchObject({ [KEY]: [root("a"), root("b")], "mcp_servers.app.url": "http://127.0.0.1:7777/mcp" });
+    });
+
+    it("fails the run before the thread starts when the config cannot be read", async () => {
+      process.env.FAKE_MCP = "error";
+      const failed = await dirs("auto").then(
+        () => undefined,
+        (e: Error) => e,
+      );
+      expect(failed?.message).toMatch(/Could not read the writable folders/);
+      expect(entries().some((e) => e.method === "thread/start")).toBe(false);
+    });
   });
 
   it("asks onApproval at full when the caller chose a stricter approvalPolicy", async () => {

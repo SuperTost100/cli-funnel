@@ -34,6 +34,18 @@ export function planAccess(access: AccessLevel): AccessPlan {
   }
 }
 
+/** The `sandbox` key of the app-server's `thread/start` and `thread/resume` for the run: `sandbox: true` keeps `full` in `workspace-write`. */
+export function sandboxFor(access: AccessLevel, sandbox: boolean | undefined): SandboxMode {
+  const mode = planAccess(access).sandbox;
+  return sandbox && mode === "danger-full-access" ? "workspace-write" : mode;
+}
+
+/** The `writable_roots` of `sandbox_workspace_write` in the answer to `config/read`, as the user's config sets them. */
+export function configWritableRoots(res: unknown): string[] {
+  const roots = (res as { config?: { sandbox_workspace_write?: { writable_roots?: unknown } | null } } | null)?.config?.sandbox_workspace_write?.writable_roots;
+  return Array.isArray(roots) ? roots.filter((r): r is string => typeof r === "string") : [];
+}
+
 /**
  * Compares what `thread/start` or `thread/resume` asked for with what the answer says the thread started with. A
  * requirements file or managed config can force a narrower sandbox or another approval policy without failing the
