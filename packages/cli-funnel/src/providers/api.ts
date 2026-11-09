@@ -174,18 +174,20 @@ const anthropic: ApiSpec = {
     let stopped = false;
     // The content blocks of the answer by index. A turn with tool calls goes back whole, thinking signatures included,
     // because the API wants the thinking that led to a tool call next to its result.
-    const blocks: Record<string, any>[] = [];
+    // A Map, because the index comes from the server and a huge one must not become a huge array.
+    const blocks = new Map<number, Record<string, any>>();
+    const validIndex = (i: unknown): i is number => typeof i === "number" && Number.isSafeInteger(i) && i >= 0;
     const calls: ToolCall[] = [];
     for await (const { data } of readSSE(res)) {
       if (tap) yield tap.sse(data);
       const e = JSON.parse(data);
-      const block = typeof e.index === "number" ? blocks[e.index] : undefined;
+      const block = validIndex(e.index) ? blocks.get(e.index) : undefined;
       if (e.type === "message_start") {
         inTok = e.message.usage?.input_tokens ?? 0;
         cached = e.message.usage?.cache_read_input_tokens ?? 0;
         created = e.message.usage?.cache_creation_input_tokens ?? 0;
-      } else if (e.type === "content_block_start" && typeof e.index === "number") {
-        blocks[e.index] = { ...e.content_block, ...(e.content_block?.type === "tool_use" ? { json: "" } : {}) };
+      } else if (e.type === "content_block_start" && validIndex(e.index)) {
+        blocks.set(e.index, { ...e.content_block, ...(e.content_block?.type === "tool_use" ? { json: "" } : {}) });
       } else if (e.type === "content_block_delta" && e.delta?.type === "text_delta") {
         if (block) block.text = (block.text ?? "") + e.delta.text;
         yield { type: "text.delta", text: e.delta.text };
@@ -213,7 +215,7 @@ const anthropic: ApiSpec = {
     }
     if (!stopped) return yield truncated("Anthropic API");
     // Empty text blocks are refused when sent back.
-    if (calls.length) turn.assistant = { role: "assistant", content: blocks.filter((b) => b && !(b.type === "text" && !b.text)) };
+    if (calls.length) turn.assistant = { role: "assistant", content: [...blocks].sort((a, b) => a[0] - b[0]).map(([, b]) => b).filter((b) => !(b.type === "text" && !b.text)) };
     // Cache reads and writes are input tokens the model processed, as in the Claude Code parser.
     const inputTokens = inTok + cached + created;
     yield {

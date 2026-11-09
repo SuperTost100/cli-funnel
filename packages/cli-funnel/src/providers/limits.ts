@@ -2,8 +2,12 @@ import type { FunnelEvent, Limit } from "../types.js";
 
 type LimitEvent = Extract<FunnelEvent, { type: "limit" }>;
 
+const MAX_DURATION_CHARS = 64;
+
 /** "30s", "1.5s", "6m0s", "200ms" or "1h2m3s" in milliseconds. OpenAI and Gemini write durations like this. */
 export function parseDuration(text: string): number | undefined {
+  // A real duration is a few characters. The cap keeps the regex from rescanning a long malformed value.
+  if (text.length > MAX_DURATION_CHARS) return undefined;
   const parts = [...text.trim().matchAll(/(\d+(?:\.\d+)?)(ms|h|m|s)/g)];
   if (!parts.length || parts.map((p) => p[0]).join("") !== text.trim()) return undefined;
   const unit = { ms: 1, s: 1000, m: 60_000, h: 3_600_000 } as const;
