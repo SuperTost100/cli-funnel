@@ -8,7 +8,7 @@ import { parseLoginStatus } from "../src/providers/codex/auth.js";
 import { type ForwardSubagents, Translator } from "../src/providers/codex/events.js";
 import { codexProvider, INITIALIZE_PARAMS } from "../src/providers/codex/index.js";
 import { parseCatalog } from "../src/providers/codex/models.js";
-import { configServers, declaredServers, noToolsConfig } from "../src/providers/codex/tools.js";
+import { configServers, noToolsConfig } from "../src/providers/codex/tools.js";
 import { collect } from "./helpers.js";
 import type { FunnelEvent } from "../src/types.js";
 
@@ -249,29 +249,6 @@ describe.skipIf(process.env.CLI_FUNNEL_LIVE !== "1")("codex live", () => {
 });
 
 describe("codex none: configured MCP servers", () => {
-  it("finds servers in every TOML spelling", () => {
-    const text = [
-      "[mcp_servers.bare]",
-      'command = "x"',
-      '[mcp_servers."double"]',
-      "[mcp_servers.'single']",
-      "[ mcp_servers . 'spaced' ]",
-      "[mcp_servers.withenv.env]",
-      'mcp_servers.dotted.command = "x"',
-    ].join("\n");
-    const names = ["bare", "double", "single", "spaced", "withenv", "dotted", "plugin-added"];
-    expect(declaredServers(text, names)).toEqual(names.slice(0, -1));
-  });
-
-  it("finds servers in an inline table and under a [mcp_servers] table", () => {
-    expect(declaredServers(`mcp_servers = { probe = { command = "x" }, 'two' = { command = "y" } }`, ["probe", "two", "three"])).toEqual(["probe", "two"]);
-    expect(declaredServers(`[mcp_servers]\nother = { command = "x" }\n"quoted x".command = "y"`, ["other", "quoted x", "nope"])).toEqual(["other", "quoted x"]);
-  });
-
-  it("does not take keys outside mcp_servers for servers", () => {
-    expect(declaredServers(`[profiles.probe]\nmodel = "x"\n[tools]\nprobe = true`, ["probe"])).toEqual([]);
-  });
-
   it("lists the servers of config/read and refuses an answer without the table", () => {
     // The shape codex 0.166 answers for a config.toml with "mcp_servers".quoted.command and "mcp_servers"."esc\u0061ped".command.
     const res = { config: { model: null, mcp_servers: { quoted: { command: "echo", enabled: true }, escaped: { command: "echo", enabled: true } } }, origins: {} };

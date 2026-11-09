@@ -192,6 +192,13 @@ export function createdSince(startedAt: number): (path: string) => boolean | und
   };
 }
 
+/**
+ * `MapperOptions.createdInRun` for a run. At `none` there is none, so the file system is never asked about a path the
+ * model chose: a run that may not read files must not learn which ones exist. Above `none` agy can read the folder.
+ */
+export const createdInRunFor = (input: RunInput, startedAt: number): ((path: string) => boolean | undefined) | undefined =>
+  input.selection.access === "none" ? undefined : createdSince(startedAt);
+
 /** Where agy keeps its settings and conversations, under a home folder. */
 const dataDir = (home: string) => join(home, ".gemini", "antigravity-cli");
 
@@ -329,7 +336,7 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   const brainDir = join(dataDir(home ?? homedir()), "brain");
   const mapper = createMapper({
     auth: home ? "api-key" : undefined,
-    createdInRun: createdSince(startedAt),
+    createdInRun: createdInRunFor(input, startedAt),
     brainDir,
     readText: readTaskList,
   });
