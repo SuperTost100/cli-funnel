@@ -11,7 +11,7 @@ import { Translator } from "./events.js";
 import { BINARY, INITIALIZE_PARAMS } from "./index.js";
 import { agentConfig, codexForward, threadOptions } from "./options.js";
 import { RpcClient } from "./rpc.js";
-import { configDeclares, configServers, noToolsConfig } from "./tools.js";
+import { configServers, noToolsConfig } from "./tools.js";
 
 /**
  * Settings for `thread/start` and `thread/resume`, with `providerOptions.codex` and the agent features applied. At
@@ -46,15 +46,16 @@ export function appServerArgs(input: RunInput): string[] {
 }
 
 /**
- * The MCP servers in the effective Codex config as seen from `cwd`, for `none` to switch off. When Codex cannot list
- * them the thread does not start, since it would start with those servers on.
+ * The MCP servers in the effective Codex config as seen from `cwd`, for `none` to switch off and for the caller's
+ * servers to stay clear of. When Codex cannot list them the thread does not start.
  */
 async function configMcpServers(rpc: RpcClient, cwd: string): Promise<string[]> {
   try {
-    return configServers(await rpc.request("config/read", { cwd }));
+    // The answer is the user's whole Codex config, MCP server env and headers included, so it never goes out raw.
+    return configServers(await rpc.request("config/read", { cwd }, { hideAnswer: true }));
   } catch (e) {
     const why = e instanceof Error ? e.message : String(e);
-    throw new FunnelError(`Could not list the MCP servers in the Codex config, so access "none" cannot switch them off. ${why}`, "cli-failed");
+    throw new FunnelError(`Could not list the MCP servers in the Codex config. ${why}`, "cli-failed");
   }
 }
 
@@ -172,10 +173,6 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
   const stricter = approvalPolicy !== undefined && approvalPolicy !== planAccess(requireMachine(first.selection).access).approvalPolicy;
   const agent = agentConfig(first);
   const forward = codexForward(first);
-  const taken = configDeclares(Object.keys(first.mcpServers ?? {}), requireMachine(first.selection).cwd, first.env);
-  if (taken.length) {
-    throw new FunnelError(`MCP server ${taken.join(", ")} is already in the user's Codex config. Give the server another name.`, "invalid-selection");
-  }
   // No abort signal here: the process outlives the turn. Each turn handles its own signal.
   const proc = spawnStream(path, appServerArgs(first), { cwd: first.selection.cwd, env: first.env });
   proc.hold(false);
@@ -288,8 +285,16 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
         AUTH_WAIT_MS,
       );
     }
-    const servers = first.selection.access === "none" ? await configMcpServers(rpc, cwd) : [];
-    const settings = threadSettings(first, agent, servers);
+    // `none` switches the config's servers off, and a caller's server must not reuse one of their names, because thread
+    // config keys merge into a server of the same name.
+    const callerServers = Object.keys(first.mcpServers ?? {});
+    const none = first.selection.access === "none";
+    const servers = none || callerServers.length ? await configMcpServers(rpc, cwd) : [];
+    const taken = callerServers.filter((name) => servers.includes(name));
+    if (taken.length) {
+      throw new FunnelError(`MCP server ${taken.join(", ")} is already in the user's Codex config. Give the server another name.`, "invalid-selection");
+    }
+    const settings = threadSettings(first, agent, none ? servers : []);
     const started = first.sessionId
       ? await rpc.request("thread/resume", { threadId: first.sessionId, ...settings })
       : await rpc.request("thread/start", { ...settings, ...start });
@@ -370,7 +375,8 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
         const res = await turnStart;
         if (res?.turn?.id) t.setTurnId(res.turn.id);
       } catch (e) {
-        finish(t, [{ type: "error", message: e instanceof Error ? e.message : String(e), code: "cli-failed" }]);
+        // A refusal before the thread starts, such as a server name the config already has, keeps its own code.
+        finish(t, [{ type: "error", message: e instanceof Error ? e.message : String(e), code: e instanceof FunnelError ? e.code : "cli-failed" }]);
       }
     })();
 

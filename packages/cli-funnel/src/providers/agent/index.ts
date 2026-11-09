@@ -9,7 +9,7 @@ import { bool, dirList, flag, mcpServersFor, oneOf, optionsFor, requireAccess } 
 import { redactErrors } from "../../util/redact.js";
 import { ownedWorkspace } from "../../util/workspace.js";
 import { attachMcp } from "./mcp.js";
-import { groupModels, parseModelList, parseStatus, StreamMapper, toCliModel } from "./parser.js";
+import { groupModels, parseModelList, parseStatus, StreamMapper, toCliModel, type MapperOptions } from "./parser.js";
 
 const BINARY = "agent";
 const TESTED_RANGE = { min: "2026.09.01" };
@@ -147,6 +147,16 @@ async function authStatus(): Promise<AuthStatus> {
   return parseStatus(text, about?.stdout);
 }
 
+/**
+ * The stream mapper's options for a run. At `none` the mapper gets no `exists`, so the file system is never asked
+ * about a path the model chose: a run that may not read files must not learn which ones exist. Above `none` the agent
+ * can read the folder anyway.
+ */
+export const mapperOptions = (input: RunInput): MapperOptions => ({
+  exists: input.selection.access === "none" ? undefined : existsSync,
+  forwardSubagentText: input.providerOptions?.agent?.forwardSubagentText === true,
+});
+
 async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   const path = findBinary(BINARY);
   if (!path) throw new FunnelError("agent is not installed.", "not-installed");
@@ -160,7 +170,7 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   const env = { ...input.env, ...mcp?.env, ...(apiKey ? keyEnv(apiKey) : {}) };
   // agent reads the prompt from stdin when argv has none.
   const proc = spawnStream(path, args, { cwd, env, signal: input.signal, input: buildPrompt(input) });
-  const mapper = new StreamMapper({ exists: existsSync, forwardSubagentText: input.providerOptions?.agent?.forwardSubagentText === true });
+  const mapper = new StreamMapper(mapperOptions(input));
   let finished = false;
   const tap = rawTap("agent", input, proc);
   try {

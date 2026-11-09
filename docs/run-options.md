@@ -261,7 +261,7 @@ for await (const e of funnel.stream({ selection, prompt, verbose: true })) {
 | Provider | What `raw` carries |
 | --- | --- |
 | Claude Code | every stream-json line, control requests included, and stderr |
-| Codex | every JSON-RPC message from `codex app-server` during the turn, the answers to cli-funnel's own requests and the subagents' threads included, and stderr |
+| Codex | every JSON-RPC message from `codex app-server` during the turn, the answers to cli-funnel's own requests and the subagents' threads included, and stderr. The answer to `config/read` is left out, because it is the user's whole Codex config, MCP server env and headers included |
 | Cursor Agent | every stream-json line, and stderr |
 | Antigravity | every JSON line, and stderr |
 | Anthropic API | each `/v1/messages` response, then every SSE event |

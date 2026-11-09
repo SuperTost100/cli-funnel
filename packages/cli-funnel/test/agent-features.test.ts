@@ -3,7 +3,7 @@ import { fakeShCli, sh } from "./fake-cli.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { agentProvider, buildArgs } from "../src/providers/agent/index.js";
+import { agentProvider, buildArgs, mapperOptions } from "../src/providers/agent/index.js";
 import { attachMcp, mcpPlugin } from "../src/providers/agent/mcp.js";
 import { StreamMapper, type MapperOptions } from "../src/providers/agent/parser.js";
 import { mcpServersFor } from "../src/providers/options.js";
@@ -120,6 +120,15 @@ describe("file changes", () => {
     const changes = (exists: boolean) => posix(ofType(replay("edit-denied.ndjson", { exists: () => exists }), "file.change"));
     expect(changes(true)).toEqual(changes(false));
     expect(changes(true).filter((c) => c.status === "declined" && c.kind !== "delete").map((c) => c.kind)).toEqual(["update", "update"]);
+  });
+
+  it("does not look up edited paths on the host at access none", () => {
+    const at = (access: RunInput["selection"]["access"]) => mapperOptions({ selection: sel({ access }), prompt: "x" });
+    expect(at("none").exists).toBeUndefined();
+    expect(at("supervised").exists).toBe(existsSync);
+    // Without the lookup a failed edit of a missing file is an update, the same as for a file that exists.
+    const kinds = ofType(replay("edit-failed.ndjson", at("none")), "file.change").map((c) => c.kind);
+    expect(kinds).toEqual(["update", "delete"]);
   });
 
   it("marks changes the operating system or the file refused as failed, not declined", () => {

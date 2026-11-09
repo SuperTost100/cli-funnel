@@ -9,7 +9,6 @@ import { fileChangeEvents, planEvent, Translator } from "../src/providers/codex/
 import { codexProvider } from "../src/providers/codex/index.js";
 import { appServerArgs } from "../src/providers/codex/live.js";
 import { agentConfig, mcpConfig } from "../src/providers/codex/options.js";
-import { configDeclares } from "../src/providers/codex/tools.js";
 import { collect } from "./helpers.js";
 import type { AccessLevel, FunnelEvent, McpServer, RunInput } from "../src/types.js";
 
@@ -236,12 +235,6 @@ describe("codex MCP servers and feature config", () => {
     expect(agentConfig(input("none", { onQuestion: () => null }))).toEqual({ "features.default_mode_request_user_input": true });
   });
 
-  it("finds caller server names that the user's config already declares", () => {
-    const home = mkdtempSync(join(tmpdir(), "cf-codex-home-"));
-    writeFileSync(join(home, "config.toml"), '[mcp_servers.taken]\ncommand = "x"\n');
-    expect(configDeclares(["taken", "free"], tmpdir(), { CODEX_HOME: home })).toEqual(["taken"]);
-    expect(configDeclares([], tmpdir(), { CODEX_HOME: home })).toEqual([]);
-  });
 });
 
 describe("codex API key and auth", () => {
@@ -434,6 +427,15 @@ describe("codex agent features through the app-server", () => {
     expect(off.events.some((e) => "parentId" in e)).toBe(false);
   });
 
+  it("keeps the config/read answer out of verbose raw events", async () => {
+    process.env.FAKE_MCP = JSON.stringify({ private: { command: "x", env: { TOKEN: "user-config-secret-123" } } });
+    await run("plain", { selection: { provider: "codex", model: "m", cwd, access: "none" }, verbose: true });
+    const raw = events.filter((e) => e.type === "raw");
+    expect(raw.length).toBeGreaterThan(0);
+    expect(JSON.stringify(raw)).not.toContain("user-config-secret-123");
+    expect(entries().some((e) => e.method === "config/read")).toBe(true);
+  });
+
   it("emits no raw events without verbose", async () => {
     const { events } = await run("hi");
     expect(events.some((e) => e.type === "raw")).toBe(false);
@@ -465,10 +467,11 @@ describe("codex agent features through the app-server", () => {
       "mcp_servers.app.url": "http://127.0.0.1:7777/mcp",
       "mcp_servers.app.default_tools_approval_mode": "approve",
     });
-    const home = mkdtempSync(join(tmpdir(), "cf-codex-home-"));
-    mkdirSync(home, { recursive: true });
-    writeFileSync(join(home, "config.toml"), "[mcp_servers.app]\nurl = 'http://x'\n");
-    await expect(run("plain", { mcpServers: { app: http() }, env: { CODEX_HOME: home } })).rejects.toMatchObject({ code: "invalid-selection" });
+    // The names come from config/read, so a spelling such as "mcp_servers"."app" in config.toml counts too.
+    process.env.FAKE_MCP = JSON.stringify({ app: { url: "http://x" } });
+    await expect(run("plain", { mcpServers: { app: http() } })).rejects.toMatchObject({ code: "invalid-selection" });
+    // Only the first run started a thread.
+    expect(entries().filter((e) => e.method === "thread/start")).toHaveLength(1);
   });
 
   it("at none switches off every MCP server the app-server's config/read reports, dotted names too", async () => {
@@ -491,7 +494,7 @@ describe("codex agent features through the app-server", () => {
     expect(entries().some((e) => e.method === "thread/start")).toBe(false);
   });
 
-  it("does not read the config above none", async () => {
+  it("does not read the config above none when the caller adds no MCP servers", async () => {
     await run("plain");
     expect(entries().some((e) => e.method === "config/read")).toBe(false);
   });

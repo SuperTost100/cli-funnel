@@ -84,7 +84,7 @@ The capabilities are `mcpServers: ["http", "stdio"]`, `apiKey`, `plan`, `fileCha
 
 ### MCP servers
 
-`mcpServers` goes to the thread's `config` as keys under `mcp_servers.<name>`. Only the caller's names get keys, so the servers in your `config.toml` stay as they are. A name that your or the project's `config.toml` already declares fails the run with `invalid-selection`, because thread config would merge into that server.
+`mcpServers` goes to the thread's `config` as keys under `mcp_servers.<name>`. Only the caller's names get keys, so the servers in your `config.toml` stay as they are. A name that the Codex config already declares fails the run with `invalid-selection`, because thread config would merge into that server. The names come from the app-server's `config/read`, so every config layer and TOML spelling counts.
 
 | Field | Codex config key |
 | --- | --- |

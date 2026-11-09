@@ -5,7 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { collect } from "./helpers.js";
-import { antigravityProvider, apiKeyEnv, buildArgs, createdSince, mcpConfig } from "../src/providers/antigravity/index.js";
+import { antigravityProvider, apiKeyEnv, buildArgs, createdInRunFor, createdSince, mcpConfig } from "../src/providers/antigravity/index.js";
 import { createMapper, parseRm, parseTaskList, type MapperOptions } from "../src/providers/antigravity/parser.js";
 import type { FunnelEvent, McpServer, RunInput } from "../src/types.js";
 
@@ -75,6 +75,11 @@ describe("antigravity file changes", () => {
     const e = events("file-hook-denied.ndjson", { createdInRun: (p) => (asked.push(p), false) });
     expect(changes(e)).toEqual([{ id: "00000000-0000-4000-8000-000000000001:2", path: "/tmp/agyt/hello.txt", kind: "add", status: "declined" }]);
     expect(asked).toEqual([]);
+  });
+
+  it("does not look up written paths on the host at access none", () => {
+    expect(createdInRunFor(input({ access: "none" }), Date.now())).toBeUndefined();
+    expect(createdInRunFor(input({ access: "supervised" }), Date.now())).toBeTypeOf("function");
   });
 
   it("maps a write refused by a permission check as declined, with the older TargetFile parameter", () => {
