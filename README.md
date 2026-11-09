@@ -197,7 +197,7 @@ The flags and the config file for `serve` are in [Run the server](docs/serve.md)
 
 ## Build from source
 
-You need npm and Node 22.22.2 or newer. On Node 24, use 24.15.0 or newer. These are the minimums of the locked dev dependencies, such as jsdom and tsup.
+You need npm and Node 22.22.2 or a later 22.x, 24.15.0 or a later 24.x, or Node 26 or newer. These are the minimums of the locked dev dependencies, such as jsdom and tsup.
 
 ```bash
 git clone https://github.com/SuperTost100/cli-funnel.git
