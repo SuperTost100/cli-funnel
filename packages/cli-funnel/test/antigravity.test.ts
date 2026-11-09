@@ -29,7 +29,7 @@ const events = (n: string): FunnelEvent[] => {
 };
 const input = (over: Partial<RunInput["selection"]> = {}): RunInput => ({
   prompt: "hi",
-  selection: { provider: "antigravity", model: "gemini-3.8-flash", effort: "low", cwd: "/tmp", access: "full", ...over },
+  selection: { provider: "antigravity", model: "gemini-3.8-flash", effort: "low", cwd: tmpdir(), access: "full", ...over },
 });
 
 describe("antigravity access.reduced", () => {
@@ -413,12 +413,12 @@ exit 3`);
 
   it("emits a warning with no line break that is written before the result, also when the process lingers", async () => {
     const dir = mkdtempSync(join(tmpdir(), "cf-agy-"));
-    process.env.CLI_FUNNEL_AGY_BIN = fakeShCli(
+    process.env.CLI_FUNNEL_AGY_BIN = fakeNodeCli(
       join(dir, "agy"),
-      `printf 'warning: unterminated' >&2
-echo '{"event":"init","conversation_id":"c1","init":{"model":"m","cwd":"/w","permission_mode":"always-proceed"}}'
-echo '{"event":"result","result":{"status":"SUCCESS","response":"ok"}}'
-sleep 30`,
+      `process.stderr.write("warning: unterminated");
+process.stdout.write('{"event":"init","conversation_id":"c1","init":{"model":"m","cwd":"/w","permission_mode":"always-proceed"}}\\n');
+process.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"ok"}}\\n');
+setInterval(() => {}, 1000);`,
     );
     const events = await drain(input());
     expect(types(events)).toEqual(["session", "warning", "done"]);

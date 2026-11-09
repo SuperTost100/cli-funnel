@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFunnel } from "../src/funnel.js";
 import { antigravityProvider } from "../src/providers/antigravity/index.js";
 import { parseRateLimits } from "../src/providers/antigravity/parser.js";
-import { fakeShCli, sh } from "./fake-cli.js";
+import { fakeNodeCli, fakeShCli, sh } from "./fake-cli.js";
 
 // The machine running the tests may have a real agy on PATH, so "not installed" is simulated.
 vi.mock("../src/providers/base.js", async (importOriginal) => {
@@ -168,7 +168,7 @@ exit 2`);
   });
 
   it("throws aborted when the signal is aborted", async () => {
-    fakeAgy("sleep 30");
+    process.env.CLI_FUNNEL_AGY_BIN = fakeNodeCli(join(mkdtempSync(join(tmpdir(), "cf-agy-")), "agy"), "setInterval(() => {}, 1000);");
     const ctl = new AbortController();
     const call = antigravityProvider.rateLimits!({ signal: ctl.signal });
     setTimeout(() => ctl.abort(), 200);
