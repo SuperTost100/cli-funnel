@@ -51,7 +51,8 @@ export function appServerArgs(input: RunInput): string[] {
  */
 async function configMcpServers(rpc: RpcClient, cwd: string): Promise<string[]> {
   try {
-    return configServers(await rpc.request("config/read", { cwd }));
+    // The answer is the user's whole Codex config, MCP server env and headers included, so it never goes out raw.
+    return configServers(await rpc.request("config/read", { cwd }, { hideAnswer: true }));
   } catch (e) {
     const why = e instanceof Error ? e.message : String(e);
     throw new FunnelError(`Could not list the MCP servers in the Codex config. ${why}`, "cli-failed");

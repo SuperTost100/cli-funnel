@@ -427,6 +427,15 @@ describe("codex agent features through the app-server", () => {
     expect(off.events.some((e) => "parentId" in e)).toBe(false);
   });
 
+  it("keeps the config/read answer out of verbose raw events", async () => {
+    process.env.FAKE_MCP = JSON.stringify({ private: { command: "x", env: { TOKEN: "user-config-secret-123" } } });
+    await run("plain", { selection: { provider: "codex", model: "m", cwd, access: "none" }, verbose: true });
+    const raw = events.filter((e) => e.type === "raw");
+    expect(raw.length).toBeGreaterThan(0);
+    expect(JSON.stringify(raw)).not.toContain("user-config-secret-123");
+    expect(entries().some((e) => e.method === "config/read")).toBe(true);
+  });
+
   it("emits no raw events without verbose", async () => {
     const { events } = await run("hi");
     expect(events.some((e) => e.type === "raw")).toBe(false);
