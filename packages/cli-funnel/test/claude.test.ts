@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildArgs, claudeProvider } from "../src/providers/claude/index.js";
-import { newClaudeTrack, parseClaudeMessage } from "../src/providers/claude/parser.js";
+import { newClaudeTrack, parseClaudeMessage, StderrWarnings } from "../src/providers/claude/parser.js";
 import { collect } from "./helpers.js";
 import type { FunnelEvent, RunInput, Selection } from "../src/types.js";
 
@@ -38,6 +38,72 @@ describe("claude parser", () => {
     // Zero values leave both fields out.
     const zero = parseClaudeMessage({ type: "result", subtype: "success", result: "", usage: { input_tokens: 5, cache_creation_input_tokens: 0, output_tokens: 2, output_tokens_details: { thinking_tokens: 0 } } });
     expect(zero.find((e) => e.type === "usage")).toEqual({ type: "usage", usage: { inputTokens: 5, outputTokens: 2, cachedInputTokens: 0, totalTokens: 7 } });
+  });
+
+  describe("warnings", () => {
+    // Captured byte-exact from Claude Code 2.1.319. The third one spans two lines, with an empty line before and after it.
+    const EFFORT = "Warning: Unknown --effort value 'bogus' — ignoring it and using the default effort. Valid values: low, medium, high, xhigh, max.";
+    const CONNECTORS = "⚠ claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set and takes precedence over your claude.ai login · Unset it to load your organization's connectors";
+    const SANDBOX = [
+      "",
+      "⚠ Sandbox disabled: sandbox is enabled but dependencies are missing: bubblewrap (bwrap) not installed, socat not installed · install missing tools (e.g. apt install bubblewrap socat) or see https://code.claude.com/docs/en/sandboxing",
+      "  Commands will run WITHOUT sandboxing. Network and filesystem restrictions will NOT be enforced.",
+      "",
+    ];
+    const read = (lines: string[]) => {
+      const w = new StderrWarnings();
+      for (const l of lines) w.push(l);
+      return w.take();
+    };
+
+    it("reads the text after the marker of each real stderr sample", () => {
+      expect(read([EFFORT, CONNECTORS])).toEqual([
+        "Unknown --effort value 'bogus' — ignoring it and using the default effort. Valid values: low, medium, high, xhigh, max.",
+        "claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set and takes precedence over your claude.ai login · Unset it to load your organization's connectors",
+      ]);
+      expect(read(SANDBOX)).toEqual([
+        "Sandbox disabled: sandbox is enabled but dependencies are missing: bubblewrap (bwrap) not installed, socat not installed · install missing tools (e.g. apt install bubblewrap socat) or see https://code.claude.com/docs/en/sandboxing Commands will run WITHOUT sandboxing. Network and filesystem restrictions will NOT be enforced.",
+      ]);
+    });
+
+    it("keeps a warning and its continuation apart from the next warning, and ignores other lines", () => {
+      expect(read([...SANDBOX, EFFORT, "Error: sandbox required but unavailable", "  not a continuation of a warning", "a plain line"])).toHaveLength(2);
+      // An indented line after a line that is not a warning belongs to nothing.
+      expect(read(["Error: x", "  Warning: y", "  more"])).toEqual([]);
+      // A warning followed directly by another one stays two.
+      expect(read(["Warning: a", "⚠ b"])).toEqual(["a", "b"]);
+      // A marker with no text gives nothing.
+      expect(read(["Warning: ", "⚠ "])).toEqual([]);
+    });
+
+    it("returns each warning once, the open one included", () => {
+      const w = new StderrWarnings();
+      w.push("Warning: a");
+      expect(w.take()).toEqual(["a"]);
+      expect(w.take()).toEqual([]);
+      w.push("Warning: b");
+      w.push("  c");
+      expect(w.take()).toEqual(["b c"]);
+    });
+
+    // The exact raw line was not kept. This message is built from the fields seen on 2.1.319, next to `uuid` and `session_id`.
+    const notification = (over: Record<string, unknown>) => ({
+      type: "system", subtype: "notification", key: "fast-mode-overage-rejected", text: "Fast mode disabled · usage credit limit reached",
+      priority: "immediate", color: "error", uuid: "u", session_id: "s", ...over,
+    });
+
+    it("maps a high or immediate notification to a warning", () => {
+      expect(parseClaudeMessage(notification({}))).toEqual([{ type: "warning", message: "Fast mode disabled · usage credit limit reached" }]);
+      expect(parseClaudeMessage(notification({ priority: "high" }))).toHaveLength(1);
+    });
+
+    it("leaves out low and medium notifications, and ones without text", () => {
+      expect(parseClaudeMessage(notification({ priority: "low" }))).toEqual([]);
+      expect(parseClaudeMessage(notification({ priority: "medium" }))).toEqual([]);
+      expect(parseClaudeMessage(notification({ priority: undefined }))).toEqual([]);
+      expect(parseClaudeMessage(notification({ text: "" }))).toEqual([]);
+      expect(parseClaudeMessage(notification({ text: 5 }))).toEqual([]);
+    });
   });
 
   it("maps tool calls and results", () => {

@@ -29,8 +29,19 @@ Runs the real `claude` binary in print mode and reads its stream-json output. Te
 | `user` `tool_result` block | `tool.end` (`error` when `is_error`), plus `plan` for TaskCreate and TaskUpdate and `file.change` for edit tools |
 | `control_request` `can_use_tool` | `approval.request`, or `question.request` for AskUserQuestion |
 | `result` | `usage`, then `done` (or `error` when `is_error`) |
+| `system` / `notification` with priority `high` or `immediate` | `warning` |
+| A `Warning: ` or `⚠ ` line on stderr | `warning` |
 
 `usage` carries `cacheCreationInputTokens` (from `cache_creation_input_tokens`) and `reasoningTokens` (from `output_tokens_details.thinking_tokens`) when they are above zero. The CLI's `input_tokens` leaves out cache reads and writes, so `inputTokens` is the sum of all three, and `outputTokens` already includes the thinking tokens. Usage has no `costUsd`. The CLI reports a list-price estimate, not what a subscription is charged. Subagent messages are dropped. See [Agent callbacks and events](#agent-callbacks-and-events) for `plan`, `file.change` and `question.request`.
+
+### Warnings
+
+Claude Code reports notices in two places, and both become `warning` events, which also fill `RunResult.warnings`.
+
+- **Stderr.** A line that starts with `Warning: ` or `⚠ ` starts a warning, and the message is the text after the marker. Lines right after it that start with whitespace belong to it, joined with one space. Examples from 2.1.319 are an unknown `--effort` value that the CLI ignores, the claude.ai connectors that an API key turns off, and a sandbox that cannot start because `bubblewrap` or `socat` is missing (a two-line notice). Lines that start with `Error:` are not warnings: they go into the error of a failed run. Every other line is ignored, unless the run is verbose, which sends all of stderr as `raw` events. The CLI prints these before `init` and keeps running.
+- **Stream.** A `system` message with `subtype: "notification"` and `priority` of `high` or `immediate` becomes a warning with its `text`, for example "Fast mode disabled · usage credit limit reached". `low` and `medium` notices are hints and are left out.
+
+Stderr is a separate pipe from stdout, so stderr warnings are held until the turn's `session` event (and `access.reduced`) have been sent, and come right after. A warning that arrives later comes after the next line the CLI prints, and a run that ends without a `session` event sends them just before its last event. Nothing follows `done` or `error`. The run's API key and other secrets are masked in the text. In a live session the process outlives the turn: warnings from startup belong to the first turn, and each warning is reported once.
 
 ## Access mapping
 

@@ -1,7 +1,7 @@
 import { FunnelError, type FunnelEvent, type LiveSession, type RunInput } from "../../types.js";
 import { Channel } from "../../util/channel.js";
 import { exitedEarly } from "../base.js";
-import { claudeTurn, forwardsSubagents, launchClaude, userMessage } from "./index.js";
+import { claudeTurn, forwardsSubagents, launchClaude, userMessage, watchStderr } from "./index.js";
 import { newClaudeTrack } from "./parser.js";
 
 /**
@@ -19,6 +19,8 @@ export async function openClaudeSession(first: RunInput): Promise<LiveSession> {
   const forward = forwardsSubagents(first);
   // The task list and the edit calls belong to the process, which spans the turns.
   const track = newClaudeTrack();
+  // Listens for the life of the process: startup warnings arrive before the first turn reads, and each turn takes what is held.
+  watchStderr(proc, first, track);
   proc.hold(false);
   let sessionId: string | undefined;
   let exited = false;

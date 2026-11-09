@@ -33,6 +33,8 @@ export interface ClaudeTrack {
   taskCalls: Map<string, { name: string; input: Obj }>;
   /** Forwarded subagent tool calls in this turn, by tool use id, so a denial in the `result` keeps their parent. */
   subagentCalls: Map<string, Subagent>;
+  /** The warnings the process printed on stderr and no turn has reported yet. The caller feeds it the stderr lines. */
+  notices: StderrWarnings;
 }
 
 /** The subagent a message belongs to: the id of the tool call that started it, and its type when the CLI names it. */
@@ -54,7 +56,47 @@ export const newClaudeTrack = (): ClaudeTrack => ({
   tasks: [],
   taskCalls: new Map(),
   subagentCalls: new Map(),
+  notices: new StderrWarnings(),
 });
+
+/** The most warnings kept while no turn reads them, so an idle live session cannot grow without bound. */
+const MAX_HELD_WARNINGS = 100;
+
+/**
+ * Finds the warnings in Claude Code's stderr. A line that starts with `Warning: ` or `⚠ ` starts one, and the message is
+ * the text after the marker. Lines that directly follow it and start with whitespace belong to it, joined with one space.
+ * Every other line, `Error:` lines included, is ignored: the provider puts those into the error of a failed run.
+ *
+ * `take` returns the warnings seen so far, the one still open included, so a warning is cut in two only when its
+ * continuation line arrives after the caller took the first line. The CLI writes both in one go.
+ */
+export class StderrWarnings {
+  private open: string | undefined;
+  private readonly done: string[] = [];
+
+  push(line: string): void {
+    const marker = line.match(/^(?:Warning: |⚠\uFE0F? )/)?.[0];
+    if (marker) {
+      this.close();
+      this.open = line.slice(marker.length).trim();
+    } else if (this.open !== undefined && /^\s/.test(line) && line.trim()) {
+      this.open += ` ${line.trim()}`;
+    } else {
+      this.close();
+    }
+  }
+
+  /** The warnings seen so far, oldest first. They are not returned again. */
+  take(): string[] {
+    this.close();
+    return this.done.splice(0);
+  }
+
+  private close(): void {
+    if (this.open && this.done.length < MAX_HELD_WARNINGS) this.done.push(this.open);
+    this.open = undefined;
+  }
+}
 
 /** Tools that write one file, and the input field that holds its path. Shell commands are not covered. */
 const EDIT_TOOLS: Record<string, string> = { Write: "file_path", Edit: "file_path", MultiEdit: "file_path", NotebookEdit: "notebook_path" };
@@ -206,6 +248,12 @@ export function parseClaudeMessage(raw: unknown, forward: ForwardSubagents = {},
   }
 
   if (type === "rate_limit_event" && isObj(raw.rate_limit_info)) return parseRateLimit(raw.rate_limit_info);
+
+  // The CLI's own user notice, such as "Fast mode disabled · usage credit limit reached". Low and medium ones are hints.
+  if (type === "system" && raw.subtype === "notification") {
+    const urgent = raw.priority === "high" || raw.priority === "immediate";
+    return urgent && typeof raw.text === "string" && raw.text ? [{ type: "warning", message: raw.text }] : [];
+  }
 
   // Subagent traffic carries a parent id. The main thread is surfaced as it is, the subagents' messages only on request.
   if (raw.parent_tool_use_id) return forward.text || forward.tools ? subagentEvents(raw, forward, track) : [];

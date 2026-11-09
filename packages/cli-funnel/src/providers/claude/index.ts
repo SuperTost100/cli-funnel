@@ -15,6 +15,7 @@ import {
 } from "../../types.js";
 import { askApproval, askQuestion, detectInstallation, exitedEarly, findBinary, rawTap, runLogout, runUpdate, spawnLogin, stderrTail } from "../base.js";
 import { bool, dirList, flag, invalidOption, mcpServersFor, object, optionsFor, positive, requireAccess, str, stringList } from "../options.js";
+import { runSecrets } from "../../util/redact.js";
 import { manifestModels } from "../../catalog/manifest.js";
 import { needsArgFile, writeArgFile, type ArgFile } from "../../util/argfile.js";
 import { exec, spawnStream, type Streamed } from "../../util/process.js";
@@ -288,6 +289,10 @@ export async function launchClaude(input: RunInput, signal?: AbortSignal): Promi
  * `state.finished` is set before a terminal event is yielded, since a consumer that stops at `done` never comes back.
  * `onResult` runs when `result` arrives, before its events are yielded. `track` lives as long as the process.
  * With `input.verbose` each line, and the stderr printed before it, is yielded as `raw` events first.
+ *
+ * Warnings the CLI printed on stderr (see `watchStderr`) are yielded as `warning` events after the turn's `session`
+ * event and its `access.reduced`, and later ones after the stdout line that follows them. Stderr comes through another
+ * pipe, so they are held until then. A run that ends without a `session` event yields them just before its last event.
  */
 export async function* claudeTurn(
   proc: Pick<Streamed, "write" | "exited" | "stderr" | "onStderr">,
@@ -300,6 +305,8 @@ export async function* claudeTurn(
 ): AsyncGenerator<FunnelEvent> {
   const { cwd, access } = requireMachine(input.selection);
   const tap = rawTap("claude", input, proc);
+  const warnings = (): FunnelEvent[] => track.notices.take().map((message) => ({ type: "warning", message }));
+  let started = false;
   try {
     for await (const raw of lines) {
       const msg = raw as Record<string, any>;
@@ -319,7 +326,11 @@ export async function* claudeTurn(
           const path = editPath(e.name, e.input, cwd);
           if (path) track.edits.set(e.id, { path, existed: existsSync(path) });
         }
-        if (e.type === "done" || e.type === "error") state.finished = true;
+        if (e.type === "done" || e.type === "error") {
+          yield* warnings();
+          state.finished = true;
+        }
+        if (e.type === "session") started = true;
         if (e.type === "error" && !msg.result) {
           // A run that fails before its first turn, such as a sandbox that cannot start, prints the reason on stderr.
           await Promise.race([proc.exited, new Promise((r) => setTimeout(r, 1000).unref())]);
@@ -331,23 +342,37 @@ export async function* claudeTurn(
         }
         yield e;
       }
+      if (started && !state.finished) yield* warnings();
       if (msg.type === "result") return;
     }
     // The CLI exited before its result. Its last stderr lines often say why.
     if (tap) yield* tap.events();
+    yield* warnings();
   } finally {
     tap?.close();
   }
+}
+
+/**
+ * Starts collecting the warnings in the process's stderr into `track.notices`, with the run's secrets masked. Call the
+ * returned function to stop. A one-shot run does that when it ends. A live session keeps listening, so the warnings
+ * the CLI prints at startup, before the first turn reads, wait for that turn and are reported once.
+ */
+export function watchStderr(proc: Pick<Streamed, "onStderr">, input: RunInput, track: ClaudeTrack): () => void {
+  return proc.onStderr((line) => track.notices.push(line), runSecrets(input));
 }
 
 async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   const { proc, removeFiles } = await launchClaude(input, input.signal);
   proc.write(userMessage(input));
   const state = { finished: false };
+  const track = newClaudeTrack();
+  const unwatch = watchStderr(proc, input, track);
   try {
     // Claude Code waits on stdin for another turn until it closes, so close it as soon as the result arrives.
-    yield* claudeTurn(proc, proc.lines, input, forwardsSubagents(input), state, newClaudeTrack(), () => proc.closeStdin());
+    yield* claudeTurn(proc, proc.lines, input, forwardsSubagents(input), state, track, () => proc.closeStdin());
   } finally {
+    unwatch();
     proc.closeStdin();
     // After a result Claude Code exits on its own once stdin closes. Give it a moment to save the session, then stop it.
     if (state.finished) setTimeout(() => proc.kill(), 2000).unref();

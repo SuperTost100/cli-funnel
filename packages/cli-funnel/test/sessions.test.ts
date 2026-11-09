@@ -16,6 +16,7 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] === "--version") { console.log("2.1.300 (Claude Code)"); process.exit(0); }
 fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ pid: process.pid, args }) + "\\n");
+if (process.env.FAKE_STDERR) process.stderr.write(process.env.FAKE_STDERR);
 const r = args.indexOf("--resume");
 const sid = args.includes("--fork-session") ? "fork-" + process.pid : r >= 0 ? args[r + 1] : "sess-" + process.pid;
 const send = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
@@ -230,6 +231,24 @@ describe("claude live sessions", () => {
     expect(spawns()).toHaveLength(1);
     expect(spawns()[0]!.args).toContain("--no-session-persistence");
     expect(b.text).toBe(`two#2@${spawns()[0]!.pid}`);
+  });
+
+  it("reports the startup warnings on stderr in the first turn only", async () => {
+    process.env.FAKE_STDERR = "Warning: startup notice\n  second line\n";
+    try {
+      const f = make({ keepAlive: true });
+      const warnings = async (i: RunInput) => {
+        const out: string[] = [];
+        for await (const e of f.stream(i)) if (e.type === "warning") out.push(e.message);
+        return out;
+      };
+      const first = await f.run(claude("one"));
+      expect(first.warnings).toEqual(["startup notice second line"]);
+      expect(await warnings(claude("two", { sessionId: first.sessionId }))).toEqual([]);
+      expect(spawns()).toHaveLength(1);
+    } finally {
+      delete process.env.FAKE_STDERR;
+    }
   });
 
   it("passes a long system prompt through a file and removes it after the first turn", async () => {

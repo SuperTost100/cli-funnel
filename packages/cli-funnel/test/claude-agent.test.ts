@@ -371,6 +371,54 @@ describe("claude control requests (fake CLI)", () => {
     });
   });
 
+  describe("warnings", () => {
+    const effort = "Warning: Unknown --effort value 'bogus' — ignoring it and using the default effort. Valid values: low, medium, high, xhigh, max.\n";
+    const sandbox = "\n⚠ Sandbox disabled: dependencies are missing\n  Commands will run WITHOUT sandboxing.\n\n";
+    const init = { type: "system", subtype: "init", session_id: "s", model: "m" };
+    const result = { type: "result", subtype: "success", is_error: false, result: "ok", session_id: "s" };
+
+    it("emits the stderr warnings after session, before done, and collects them in the result", async () => {
+      replay([{ __stderr: effort }, { __stderr: sandbox }, init, { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "hi" } } }, result]);
+      const i: RunInput = { selection: sel({ cwd: dir, access: "full" }), prompt: "x" };
+      const events = await run(i);
+      expect(events.map((e) => e.type)).toEqual(["session", "warning", "warning", "text.delta", "done"]);
+      const warnings = events.flatMap((e) => (e.type === "warning" ? [e.message] : []));
+      expect(warnings).toEqual([
+        "Unknown --effort value 'bogus' — ignoring it and using the default effort. Valid values: low, medium, high, xhigh, max.",
+        "Sandbox disabled: dependencies are missing Commands will run WITHOUT sandboxing.",
+      ]);
+      replay([{ __stderr: effort }, init, result]);
+      expect((await collect(claudeProvider.run(i), i)).warnings).toEqual([warnings[0]]);
+    });
+
+    it("emits them after access.reduced", async () => {
+      replay([{ __stderr: effort }, { ...init, permissionMode: "default" }, result]);
+      const events = await run({ selection: sel({ cwd: dir, access: "full" }), prompt: "x" });
+      expect(events.map((e) => e.type)).toEqual(["session", "access.reduced", "warning", "done"]);
+    });
+
+    it("emits them before the error of a run that never printed a session", async () => {
+      replay([{ __stderr: "Error: no login\n" }, { __stderr: effort }, { type: "result", subtype: "error_during_execution", is_error: true, session_id: "s" }]);
+      const events = await run({ selection: sel({ cwd: dir, access: "full" }), prompt: "x" });
+      expect(events.map((e) => e.type)).toEqual(["warning", "error"]);
+      expect(events.at(-1)).toMatchObject({ message: expect.stringContaining("no login") });
+    });
+
+    it("masks the run's API key in a warning", async () => {
+      const key = "sk-ant-test-0123456789abcdef";
+      replay([{ __stderr: `Warning: key ${key} is odd\n` }, init, result]);
+      const events = await run({ selection: sel({ cwd: dir, access: "full" }), prompt: "x", apiKey: key });
+      expect(events.find((e) => e.type === "warning")).toEqual({ type: "warning", message: "key [redacted] is odd" });
+    });
+
+    it("maps a high-priority notification from the stream and leaves out a low one", async () => {
+      const note = (priority: string, text: string) => ({ type: "system", subtype: "notification", key: "k", text, priority, session_id: "s" });
+      replay([init, note("immediate", "Fast mode disabled"), note("low", "Tip: try /help"), result]);
+      const events = await run({ selection: sel({ cwd: dir, access: "full" }), prompt: "x" });
+      expect(events.map((e) => e.type)).toEqual(["session", "warning", "done"]);
+    });
+  });
+
   it("round-trips a question with three options and a free-text answer", async () => {
     replay("question");
     const asked: unknown[] = [];
