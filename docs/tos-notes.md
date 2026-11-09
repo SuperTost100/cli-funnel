@@ -7,7 +7,7 @@ That does not decide what each provider's terms allow. I have not verified curre
 Points worth checking:
 
 - Whether the plan is for one person. A consumer subscription used to serve many end users through your app is the most likely thing to break a plan's terms. Use [API keys](api-keys.md) for that.
-- Whether automated or scripted use of the CLI is allowed on your plan, and what the rate limits are. Headless runs spend the same quota as interactive ones.
+- Whether automated or scripted use of the CLI is allowed on your plan, and what the rate limits are. Headless runs draw from the same quota as interactive ones, but not always at the same rate. On Claude Code, headless runs are reported to use the five-hour window faster: see [Subscription limits and the entry point](providers/claude.md#subscription-limits-and-the-entry-point).
 - Whether your users are signed in to their own accounts, on their own machines. That is the shape this package is built for.
 
 ## Things cli-funnel will not do
