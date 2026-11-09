@@ -17,7 +17,7 @@
 - [OpenAI compatibility](docs/openai-compat.md)
 - [API keys](docs/api-keys.md)
 - [MCP server](docs/mcp.md): `cli-funnel mcp` on stdio, tools list_providers, list_models and run, access capped by `--max-access`
-- [Claude Code](docs/providers/claude.md): how the CLI runs, access mapping, options, models, login, known limits
+- [Claude Code](docs/providers/claude.md): how the CLI runs, access mapping, options, models, login, subscription limits, known limits
 - [Codex](docs/providers/codex.md): how the CLI runs, access mapping, options, models, login, known limits
 - [Cursor Agent](docs/providers/agent.md): how the CLI runs, access mapping, options, models, login, known limits
 - [Antigravity](docs/providers/antigravity.md): how the CLI runs, access mapping, options, models, login, known limits
