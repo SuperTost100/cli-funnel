@@ -86,6 +86,16 @@ describe("claude parser", () => {
       expect(w.take()).toEqual(["b c"]);
     });
 
+    it("keeps the continuation of an open warning when a stream notice is added in between", () => {
+      const w = new StderrWarnings();
+      w.push("Warning: sandbox disabled", 1000);
+      w.add("Fast mode disabled");
+      w.push("  Commands will run WITHOUT sandboxing.", 1010);
+      // The notice is complete, so it comes first. The stderr warning follows once it is complete.
+      expect(w.takeComplete(1020)).toEqual(["Fast mode disabled"]);
+      expect(w.takeComplete(1070)).toEqual(["sandbox disabled Commands will run WITHOUT sandboxing."]);
+    });
+
     it("holds a fresh open warning for its continuation, and releases it once it has been quiet", () => {
       const w = new StderrWarnings();
       w.push("⚠ Sandbox disabled", 1000);

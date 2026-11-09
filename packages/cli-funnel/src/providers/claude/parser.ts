@@ -96,11 +96,12 @@ export class StderrWarnings {
     }
   }
 
-  /** Queues a warning that is complete as it is. */
+  /**
+   * Queues a warning that is complete as it is. It leaves the open stderr warning open, so a continuation line that
+   * arrives next still joins it. The added message therefore comes before the open warning in the order.
+   */
   add(message: string): void {
-    this.close();
-    this.open = message;
-    this.close();
+    if (message && this.done.length < MAX_HELD_WARNINGS) this.done.push(message);
   }
 
   /** The complete warnings, oldest first. An open one that is still fresh stays, and none is returned again. */

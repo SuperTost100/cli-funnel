@@ -23,6 +23,9 @@ const fixtureLines = (name: string) => readFileSync(new URL(`./fixtures/claude/$
 //   drop   the steer is removed from the queue after the result, so no turn answers it
 //   fail   the turn fails while the steer is queued, and the CLI would answer it next
 //   slow   init only, then nothing
+//   held   the steer is queued and a result with 3 input and 7 output tokens follows, then nothing
+//   heldcrash  the same, then the CLI exits with code 1
+//   crash  the CLI exits with code 1 right after init, with no steer
 // Any other prompt is answered at once with "<prompt>#<n>". Every stdin line is logged.
 const FAKE = `
 const fs = require("node:fs");
@@ -41,7 +44,7 @@ const isQueued = (l) => l.includes('"state":"queued"');
 let n = 0;
 let scenario;
 let steers = [];
-const want = { fold: 1, fold2: 2, late: 1, race: 1, drop: 1, fail: 1 };
+const want = { fold: 1, fold2: 2, late: 1, race: 1, drop: 1, fail: 1, held: 1, heldcrash: 1 };
 function onSteer(uuid) {
   steers.push(uuid);
   if (scenario === "slow") return lifecycle(uuid, "queued");
@@ -77,6 +80,13 @@ function onSteer(uuid) {
     result("first answer");
     lifecycle(uuid, "cancelled");
   }
+  if (scenario === "held" || scenario === "heldcrash") {
+    lifecycle(uuid, "queued");
+    result("first answer", { usage: { input_tokens: 3, output_tokens: 7 } });
+    // Tells the test the result is on the pipe.
+    fs.writeFileSync(process.env.FAKE_LOG + ".printed", "1");
+    if (scenario === "heldcrash") process.stdout.write("", () => process.exit(1));
+  }
   if (scenario === "fail") {
     lifecycle(uuid, "queued");
     out({ type: "result", subtype: "error_during_execution", is_error: true, result: "boom", session_id: sid });
@@ -100,10 +110,11 @@ process.stdin.on("data", (d) => {
     n++;
     const text = m.message.content;
     steers = [];
+    if (text === "crash") { out(init); process.stdout.write("", () => process.exit(1)); continue; }
     if (text in want || text === "slow") {
       scenario = text;
       const source = text === "late" || text === "race" || text === "drop" || text === "fail" ? late : fold;
-      if (text === "drop" || text === "fail" || text === "slow") { out(init); continue; }
+      if (text === "drop" || text === "fail" || text === "slow" || text === "held" || text === "heldcrash") { out(init); continue; }
       for (const l of source.slice(0, source.findIndex(isQueued))) out(l);
       continue;
     }
@@ -245,6 +256,65 @@ describe("claude steer, recorded fixtures through claudeTurn", () => {
   });
 });
 
+describe("claude steer, results held back through claudeTurn", () => {
+  const proc = { write: () => {}, exited: new Promise<number>(() => {}), stderr: () => "", onStderr: () => () => {} };
+  const INIT = { type: "system", subtype: "init", session_id: "s", capabilities: ["msg_lifecycle_v1"] };
+  const result = (text: string, extra: Record<string, unknown> = {}) => ({
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    result: text,
+    usage: { input_tokens: 1, output_tokens: 1 },
+    ...extra,
+  });
+  const drain = async (lines: () => AsyncGenerator<unknown>, steers: Steers, track = newClaudeTrack()) => {
+    const events: FunnelEvent[] = [];
+    for await (const e of claudeTurn(proc, lines(), claude("x"), {}, { finished: false }, track, undefined, steers)) events.push(e);
+    return events;
+  };
+
+  it("reports the usage of a held result when the CLI exits before the next one", async () => {
+    const steers = new Steers();
+    steers.add(STEER);
+    const events = await drain(async function* () {
+      yield INIT;
+      yield result("first", { usage: { input_tokens: 3, output_tokens: 7 } });
+    }, steers);
+    expect(events.filter((e) => e.type === "usage")).toMatchObject([{ type: "usage", usage: { inputTokens: 3, outputTokens: 7 } }]);
+    expect(events.some((e) => e.type === "done")).toBe(false);
+  });
+
+  it("keeps a denial when the last queued steer is cancelled", async () => {
+    const [a, b] = [STEER, "00000000-0000-4000-8000-0000000000bb"];
+    const steers = new Steers();
+    steers.add(a);
+    steers.add(b);
+    const events = await drain(async function* () {
+      yield INIT;
+      yield result("first", { permission_denials: [{ tool_name: "Bash", tool_use_id: "t1", tool_input: {} }] });
+      yield { type: "command_lifecycle", command_uuid: a, state: "started" };
+      yield result("second", { permission_denials: [], user_message_uuids: [a] });
+      yield { type: "command_lifecycle", command_uuid: b, state: "cancelled" };
+    }, steers);
+    expect(events.filter((e) => e.type === "done")).toEqual([{ type: "done", text: "second", finishReason: "denied" }]);
+  });
+
+  it("keeps the rest of a stderr warning when a stream notice comes in the middle", async () => {
+    const track = newClaudeTrack();
+    const events = await drain(async function* () {
+      yield INIT;
+      track.notices.push("Warning: sandbox disabled");
+      yield { type: "system", subtype: "notification", priority: "high", text: "Fast mode disabled" };
+      track.notices.push("  Commands will run WITHOUT sandboxing.");
+      yield result("done");
+    }, new Steers(), track);
+    expect(events.filter((e) => e.type === "warning")).toEqual([
+      { type: "warning", message: "Fast mode disabled" },
+      { type: "warning", message: "sandbox disabled Commands will run WITHOUT sandboxing." },
+    ]);
+  });
+});
+
 describe("claude live session steer", () => {
   it("is offered when the CLI reports the message lifecycle", async () => {
     const { f, sessionId } = await open();
@@ -338,5 +408,32 @@ describe("claude live session steer", () => {
     expect(await waitFor(() => !alive(pid))).toBe(true);
     const next = await f.run(claude("next", { sessionId }));
     expect(next.text).toBe("next#1");
+  });
+
+  it("reports the usage of a held result when the turn is aborted", async () => {
+    const { f, sessionId } = await open();
+    const controller = new AbortController();
+    const events = await turn(f, claude("held", { sessionId, signal: controller.signal }), (e) => e.type === "session", async () => {
+      await f.steer(sessionId, "queued");
+      expect(await waitFor(() => existsSync(`${log}.printed`))).toBe(true);
+      // The result is on the pipe. Give the reader a moment to take it before the abort.
+      await new Promise((r) => setTimeout(r, 150));
+      controller.abort();
+    });
+    expect(events.filter((e) => e.type === "usage")).toMatchObject([{ type: "usage", usage: { inputTokens: 3, outputTokens: 7 } }]);
+    expect(events.at(-1)).toMatchObject({ type: "done", finishReason: "cancelled" });
+  });
+
+  it("reports an error, with the held usage, when the CLI crashes while a result is held", async () => {
+    const { f, sessionId } = await open();
+    const events = await turn(f, claude("heldcrash", { sessionId }), (e) => e.type === "session", () => f.steer(sessionId, "queued"));
+    expect(events.filter((e) => e.type === "usage")).toMatchObject([{ type: "usage", usage: { inputTokens: 3, outputTokens: 7 } }]);
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "cli-failed", message: expect.stringContaining("(1)") });
+  });
+
+  it("reports an error when the CLI crashes in a turn with no steer", async () => {
+    const { f, sessionId } = await open();
+    const events = await turn(f, claude("crash", { sessionId }), () => false, async () => {});
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "cli-failed" });
   });
 });

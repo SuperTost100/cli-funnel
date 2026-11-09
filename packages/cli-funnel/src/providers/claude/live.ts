@@ -118,6 +118,8 @@ export async function openClaudeSession(first: RunInput): Promise<LiveSession> {
     if (signal?.aborted) onAbort();
     else signal?.addEventListener("abort", onAbort, { once: true });
 
+    // Whether the caller stopped the turn, read before the cleanup below stops the process itself.
+    let stopped = false;
     const state = { finished: false };
     const steers = new Steers();
     running = { steers, state };
@@ -133,11 +135,12 @@ export async function openClaudeSession(first: RunInput): Promise<LiveSession> {
       if (running?.steers === steers) running = undefined;
       // A turn that did not reach its result leaves the process mid-answer. It cannot take another turn. Neither can one
       // that failed with a steer message still queued, since Claude Code would answer it as the next turn.
+      stopped = aborted || closed;
       if (!state.finished || !steers.idle) stop();
       proc.hold(false);
       await removeFiles();
     }
-    if (!state.finished) yield await exitedEarly(proc, "Claude Code", () => aborted || closed);
+    if (!state.finished) yield await exitedEarly(proc, "Claude Code", () => stopped);
   }
 
   async function steer(text: string): Promise<void> {

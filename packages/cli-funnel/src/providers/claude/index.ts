@@ -382,7 +382,9 @@ export async function* claudeTurn(
           continue;
         }
         if (more && e.type === "done") {
-          held = { ...held, done: e, denied: held.denied || e.finishReason === "denied" };
+          // A denial from any result of the turn decides the finish reason, whichever path ends the turn.
+          const denied = held.denied || e.finishReason === "denied";
+          held = { ...held, done: denied && e.finishReason === "stop" ? { ...e, finishReason: "denied" } : e, denied };
           continue;
         }
         if (e.type === "usage") {
@@ -411,6 +413,8 @@ export async function* claudeTurn(
     }
     // The CLI exited before its result. Its last stderr lines often say why.
     if (tap) yield* tap.events();
+    // The turn of an earlier result did finish, so its tokens count even though the funnel turn did not.
+    yield* heldUsage();
     yield* warnings(true);
   } finally {
     tap?.close();
