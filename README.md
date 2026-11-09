@@ -197,7 +197,7 @@ The flags and the config file for `serve` are in [Run the server](docs/serve.md)
 
 ## Build from source
 
-You need Node 22 or newer and npm.
+You need npm and Node 22.18 or newer. On Node 24, use 24.11 or newer. The build tool, tsup, requires these versions.
 
 ```bash
 git clone https://github.com/SuperTost100/cli-funnel.git
