@@ -70,6 +70,13 @@ describe("antigravity file changes", () => {
     expect(changes(e)).toEqual([{ id: "00000000-0000-4000-8000-000000000001:2", path: "/tmp/agyt/hello.txt", kind: "add", status: "declined" }]);
   });
 
+  it("does not look at the file system for a declined write", () => {
+    const asked: string[] = [];
+    const e = events("file-hook-denied.ndjson", { createdInRun: (p) => (asked.push(p), false) });
+    expect(changes(e)).toEqual([{ id: "00000000-0000-4000-8000-000000000001:2", path: "/tmp/agyt/hello.txt", kind: "add", status: "declined" }]);
+    expect(asked).toEqual([]);
+  });
+
   it("maps a write refused by a permission check as declined, with the older TargetFile parameter", () => {
     const e = events("denied.ndjson");
     expect(changes(e)).toEqual([{ id: "00000000-0000-4000-8000-000000000001:2", path: "/tmp/agyt/hello.txt", kind: "add", status: "declined" }]);
@@ -151,6 +158,23 @@ describe("antigravity plans", () => {
       { text: "star item", status: "done" },
     ]);
     expect(parseTaskList("no list here")).toEqual([]);
+  });
+
+  it("reads a task list with CRLF line ends and trims the item text", () => {
+    expect(parseTaskList("- [ ]   spaced out  \r\n- [x] done\r\n")).toEqual([
+      { text: "spaced out", status: "pending" },
+      { text: "done", status: "done" },
+    ]);
+  });
+
+  it("reads a line with a very long whitespace run in linear time", () => {
+    // A lazy capture followed by trailing whitespace backtracked quadratically on a run like this one.
+    const line = `- [ ] a${" ".repeat(40_000)}b`;
+    const start = performance.now();
+    expect(parseTaskList(line)).toEqual([{ text: `a${" ".repeat(40_000)}b`, status: "pending" }]);
+    expect(parseTaskList(`- [ ] a${" ".repeat(40_000)}`)).toEqual([{ text: "a", status: "pending" }]);
+    expect(parseTaskList(`${" ".repeat(40_000)}x`)).toEqual([]);
+    expect(performance.now() - start).toBeLessThan(500);
   });
 
   it("emits a plan when the agent writes its task list, and keeps the task file out of the file changes", () => {

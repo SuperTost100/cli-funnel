@@ -10,6 +10,7 @@ import {
   type RunResult,
   type Usage,
 } from "../types.js";
+import type { CwdGuard } from "../util/fs-roots.js";
 import { isObject } from "../util/is-object.js";
 import { readJson } from "./body.js";
 import { resolveSelection, samplingOptions, type OpenAIDefaults } from "./openai.js";
@@ -118,7 +119,7 @@ export async function handleResponses(
   funnel: Funnel,
   req: Request,
   defaults: OpenAIDefaults,
-  cwdAllowed: (cwd: string) => boolean,
+  cwdGuard: CwdGuard,
   maxBodyBytes: number,
   startRun: (signal: AbortSignal) => TrackedRun,
 ): Promise<Response> {
@@ -131,7 +132,7 @@ export async function handleResponses(
   const bad = unsupported(body);
   if (bad) return fail(400, `${bad} is not supported by cli-funnel with this value. Leave it out or use its default.`, { param: bad, code: "unsupported_value" });
 
-  const resolved = resolveSelection(funnel, body.model, x, defaults, cwdAllowed);
+  const resolved = resolveSelection(funnel, body.model, x, defaults, cwdGuard);
   if (resolved instanceof Response) return resolved;
   const caps = funnel.providers[resolved.provider]!.capabilities;
 

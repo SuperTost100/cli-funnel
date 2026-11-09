@@ -109,11 +109,17 @@ describe("file changes", () => {
     const events = replay("edit-denied.ndjson", { exists: () => false });
     const changes = ofType(events, "file.change");
     expect(posix(changes.map(({ id: _, type: __, ...c }) => c))).toEqual([
-      { path: "/home/user/project/deny/notes.txt", kind: "add", status: "declined" },
+      { path: "/home/user/project/deny/notes.txt", kind: "update", status: "declined" },
       { path: "/home/user/project/deny/old.txt", kind: "delete", status: "declined" },
-      { path: "/home/user/project/deny/notes.txt", kind: "add", status: "declined" },
+      { path: "/home/user/project/deny/notes.txt", kind: "update", status: "declined" },
     ]);
     expect(events.at(-1)).toMatchObject({ type: "done", finishReason: "denied" });
+  });
+
+  it("does not tell from a declined edit whether the file exists on the host", () => {
+    const changes = (exists: boolean) => posix(ofType(replay("edit-denied.ndjson", { exists: () => exists }), "file.change"));
+    expect(changes(true)).toEqual(changes(false));
+    expect(changes(true).filter((c) => c.status === "declined" && c.kind !== "delete").map((c) => c.kind)).toEqual(["update", "update"]);
   });
 
   it("marks changes the operating system or the file refused as failed, not declined", () => {

@@ -219,7 +219,7 @@ const PATCH_KIND = { A: "add", M: "update", D: "delete" } as const;
 export interface MapperOptions {
   /**
    * Tells whether a path exists. Called when an edit starts, before it runs, for results that do not say whether the
-   * file was new. The mapper itself touches no file.
+   * file was new. The answer is never reported for a declined edit. The mapper itself touches no file.
    */
   exists?: (path: string) => boolean;
   /** Emit `subagent.text` for the messages a Task subagent wrote, which arrive with the end of its `task` call. */
@@ -357,7 +357,9 @@ export class StreamMapper {
       return path ? [{ id, path, kind: "delete", status }] : [];
     }
     if (key !== "editToolCall") return [];
-    const existed = this.existed.get(id);
+    // A refused edit says nothing about the file: its kind would tell the caller whether a path the model chose
+    // exists on this machine. It is reported as an update, whether the file exists or not.
+    const existed = status === "declined" ? undefined : this.existed.get(id);
     this.existed.delete(id);
     // A patch-style edit lists every file it touched, one letter and path per line.
     const listed = [...String(success?.message ?? "").matchAll(PATCH_LINE)].flatMap(([, letter, path]) => {

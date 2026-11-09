@@ -1,5 +1,4 @@
 import type { Funnel } from "../funnel.js";
-import { isAbsolute } from "node:path";
 import {
   ACCESS_LEVELS,
   type AccessLevel,
@@ -17,7 +16,7 @@ import {
 import { parseArguments, stringifyArguments } from "../messages.js";
 import { readJson } from "./body.js";
 import { json, sse, sseHeaders } from "./sse.js";
-import { real } from "../util/fs-roots.js";
+import type { CwdGuard } from "../util/fs-roots.js";
 import { isObject } from "../util/is-object.js";
 import {
   SYSTEM_ROLES,
@@ -73,7 +72,7 @@ interface ChatBody {
  * check cannot point it elsewhere. Providers accept a single string or a list, so both are handled. Other value types
  * pass through for the provider to refuse.
  */
-export function resolveOptionDirs<T>(options: T, allowed: (dir: string) => boolean): T | null {
+export function resolveOptionDirs<T>(options: T, guard: CwdGuard): T | null {
   if (typeof options !== "object" || options === null || Array.isArray(options)) return options;
   const entries: [string, unknown][] = [];
   for (const [id, entry] of Object.entries(options)) {
@@ -88,8 +87,8 @@ export function resolveOptionDirs<T>(options: T, allowed: (dir: string) => boole
         resolved.push(d);
         continue;
       }
-      const path = isAbsolute(d) ? real(d) : undefined;
-      if (!path || !allowed(path)) return null;
+      const path = guard(d);
+      if (!path) return null;
       resolved.push(path);
     }
     entries.push([id, { ...(entry as object), addDirs: resolved }]);
@@ -251,7 +250,7 @@ export function resolveSelection(
   modelId: string,
   x: { cwd?: string; access?: AccessLevel; providerOptions?: ProviderOptions } | undefined,
   defaults: OpenAIDefaults,
-  cwdAllowed: (cwd: string) => boolean,
+  cwdGuard: CwdGuard,
 ): { provider: ProviderId; model: string; cwd: string; access: AccessLevel; providerOptions?: ProviderOptions } | Response {
   const slash = modelId.indexOf("/");
   const provider = modelId.slice(0, slash) as ProviderId;
@@ -272,14 +271,17 @@ export function resolveSelection(
 
   // The resolved folder is always checked, the server's default and process.cwd() included.
   // Providers with no access levels have no machine to protect, so they skip the check.
-  const cwd = x?.cwd ?? defaults.cwd ?? process.cwd();
-  if (supported.length && !cwdAllowed(cwd)) {
+  // The run gets the checked real path, so a symlink swapped in after the check cannot point it elsewhere.
+  let cwd = x?.cwd ?? defaults.cwd ?? process.cwd();
+  const checked = cwdGuard(cwd);
+  if (checked) cwd = checked;
+  if (supported.length && !checked) {
     const message = x?.cwd
       ? "x_funnel.cwd does not exist or is outside the allowed roots."
       : "The server's default folder does not exist or is outside the allowed roots. Start the server with a folder inside fsRoots.";
     return fail(403, message, { param: x?.cwd ? "x_funnel.cwd" : undefined, code: "path_not_allowed" });
   }
-  const providerOptions = resolveOptionDirs(x?.providerOptions, cwdAllowed);
+  const providerOptions = resolveOptionDirs(x?.providerOptions, cwdGuard);
   if (providerOptions === null) {
     return fail(403, "An addDirs entry in x_funnel.providerOptions does not exist or is outside the allowed roots.", { param: "x_funnel.providerOptions", code: "path_not_allowed" });
   }
@@ -292,7 +294,7 @@ export async function handleOpenAI(
   req: Request,
   path: string,
   defaults: OpenAIDefaults,
-  cwdAllowed: (cwd: string) => boolean,
+  cwdGuard: CwdGuard,
   maxBodyBytes: number,
   startRun: (signal: AbortSignal) => TrackedRun,
 ): Promise<Response> {
@@ -330,7 +332,7 @@ export async function handleOpenAI(
   }
   const body = raw as unknown as ChatBody;
 
-  const resolved = resolveSelection(funnel, body.model, body.x_funnel, defaults, cwdAllowed);
+  const resolved = resolveSelection(funnel, body.model, body.x_funnel, defaults, cwdGuard);
   if (resolved instanceof Response) return resolved;
   const { provider, model, cwd, access, providerOptions } = resolved;
 

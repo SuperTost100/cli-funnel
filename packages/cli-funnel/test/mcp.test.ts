@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -164,7 +164,7 @@ describe("mcp tools", () => {
     const s = server();
     await s.handle(initialize());
     await s.handle(callRun({ selection: { provider: "claude", model: "fake-1" }, prompt: "hi" }));
-    expect(seen.at(-1)?.cwd).toBe(project);
+    expect(seen.at(-1)?.cwd).toBe(realpathSync(project));
   });
 
   it("run turns a failing provider into an isError result", async () => {

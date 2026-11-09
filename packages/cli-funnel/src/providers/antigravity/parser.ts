@@ -92,9 +92,12 @@ export function parseRm(command: string, cwd: string | undefined): string[] | un
 export function parseTaskList(markdown: string): PlanStep[] {
   const items: { indent: number; step: PlanStep }[] = [];
   for (const line of markdown.split("\n")) {
-    const m = /^(\s*)[-*]\s+\[([ xX/])\]\s+(.+?)\s*$/.exec(line);
+    // The prefix is matched alone and the rest is trimmed after. A lazy capture followed by `\s*$` backtracked
+    // quadratically on a long run of whitespace inside the text.
+    const m = /^(\s*)[-*]\s+\[([ xX/])\]\s/.exec(line);
     if (!m) continue;
-    const text = (m[3] ?? "").replace(/\*\*(.+?)\*\*/g, "$1").trim();
+    const text = line.slice(m[0].length).replace(/\*\*(.+?)\*\*/g, "$1").trim();
+    if (!text) continue;
     const mark = m[2];
     items.push({ indent: (m[1] ?? "").replace(/\t/g, "    ").length, step: { text, status: mark === "/" ? "in_progress" : mark === " " ? "pending" : "done" } });
   }
@@ -178,7 +181,9 @@ export function createMapper(options: MapperOptions = {}) {
     if (!path) return [];
     if (inBrain(path)) return status === "done" ? planFrom(String(s.conversation_id), path) : [];
     // A first write to a file this run made is an add. A rewrite of a file that was there before the run is an update.
-    const kind = isWrite && !written.has(path) && (options.createdInRun?.(path) ?? true) ? "add" : "update";
+    // A refused write touched nothing, so the file system is not asked about it: that would tell the caller whether a
+    // path the model chose exists on this machine.
+    const kind = isWrite && !written.has(path) && (status === "declined" || (options.createdInRun?.(path) ?? true)) ? "add" : "update";
     if (status === "done") written.add(path);
     return [{ type: "file.change", id, path, kind, status }];
   }
