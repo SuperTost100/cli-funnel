@@ -292,9 +292,11 @@ export async function launchClaude(input: RunInput, signal?: AbortSignal): Promi
  * `onResult` runs when `result` arrives, before its events are yielded. `track` lives as long as the process.
  * With `input.verbose` each line, and the stderr printed before it, is yielded as `raw` events first.
  *
- * Warnings the CLI printed on stderr (see `watchStderr`) are yielded as `warning` events after the turn's `session`
- * event and its `access.reduced`, and later ones after the stdout line that follows them. Stderr comes through another
- * pipe, so they are held until then. A run that ends without a `session` event yields them just before its last event.
+ * Warnings, from stderr (see `watchStderr`) and from `notification` messages, are yielded as `warning` events after the
+ * turn's `session` event and its `access.reduced`, and later ones after the stdout line that follows them. Stderr comes
+ * through another pipe, so they are held until then. A warning whose continuation line may still come is held until
+ * the next line that does not continue it, or until the terminal event, which yields every warning just before it.
+ * A run that ends without a `session` event yields them just before its last event.
  */
 export async function* claudeTurn(
   proc: Pick<Streamed, "write" | "exited" | "stderr" | "onStderr">,
@@ -307,7 +309,8 @@ export async function* claudeTurn(
 ): AsyncGenerator<FunnelEvent> {
   const { cwd, access } = requireMachine(input.selection);
   const tap = rawTap("claude", input, proc);
-  const warnings = (): FunnelEvent[] => track.notices.take().map((message) => ({ type: "warning", message }));
+  const warnings = (final = false): FunnelEvent[] =>
+    (final ? track.notices.take() : track.notices.takeComplete()).map((message) => ({ type: "warning", message }));
   let started = false;
   try {
     for await (const raw of lines) {
@@ -322,34 +325,38 @@ export async function* claudeTurn(
       }
       if (msg.type === "result") onResult?.();
       for (const e of parseClaudeMessage(raw, forward, track, access)) {
+        if (e.type === "warning") {
+          // Queued with the stderr warnings, so none comes before `session`.
+          track.notices.add(e.message);
+          continue;
+        }
         // A subagent's edits are not tracked as the run's file changes.
         if (e.type === "tool.start" && !e.parentId) {
           // The kind of a file change depends on whether the file was there before the tool ran.
           const path = editPath(e.name, e.input, cwd);
           if (path) track.edits.set(e.id, { path, existed: existsSync(path) });
         }
-        if (e.type === "done" || e.type === "error") {
-          yield* warnings();
-          state.finished = true;
-        }
-        if (e.type === "session") started = true;
+        let out = e;
         if (e.type === "error" && !msg.result) {
           // A run that fails before its first turn, such as a sandbox that cannot start, prints the reason on stderr.
           await Promise.race([proc.exited, new Promise((r) => setTimeout(r, 1000).unref())]);
           const tail = stderrTail(proc.stderr());
-          if (tail) {
-            yield { ...e, message: `${e.message} ${tail}` };
-            continue;
-          }
+          if (tail) out = { ...e, message: `${e.message} ${tail}` };
         }
-        yield e;
+        if (e.type === "done" || e.type === "error") {
+          // After the wait above, so a warning the CLI wrote last is in.
+          yield* warnings(true);
+          state.finished = true;
+        }
+        if (e.type === "session") started = true;
+        yield out;
       }
       if (started && !state.finished) yield* warnings();
       if (msg.type === "result") return;
     }
     // The CLI exited before its result. Its last stderr lines often say why.
     if (tap) yield* tap.events();
-    yield* warnings();
+    yield* warnings(true);
   } finally {
     tap?.close();
   }
@@ -513,7 +520,8 @@ export async function readUsage(options: ProcessOptions = {}, timeoutMs = USAGE_
   if (!bin) throw new FunnelError("Claude Code is not installed.", "not-installed");
   const args = [...NO_TOOLS, "--no-session-persistence", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"];
   const proc = spawnStream(bin, args, { env: options.env, signal: options.signal, closeStdin: false });
-  const unsupported = (why: string) => new FunnelError(`This Claude Code version cannot report its usage windows: ${why}`, "unsupported");
+  // The CLI's error text and stderr can hold account details and the caller's secrets, so none of it goes into a message.
+  const unsupported = (message: string) => new FunnelError(message, "unsupported");
   let timer: NodeJS.Timeout | undefined;
   try {
     proc.write(JSON.stringify({ type: "control_request", request_id: USAGE_REQUEST_ID, request: { subtype: "get_usage", skip_behaviors: true } }));
@@ -521,13 +529,13 @@ export async function readUsage(options: ProcessOptions = {}, timeoutMs = USAGE_
       for await (const raw of proc.lines) {
         const response = isObj(raw) && raw.type === "control_response" && isObj(raw.response) ? raw.response : undefined;
         if (response?.request_id !== USAGE_REQUEST_ID) continue;
-        if (response.subtype !== "success") throw unsupported(String(response.error ?? "the request failed."));
+        if (response.subtype !== "success") throw unsupported("This Claude Code version does not answer usage requests.");
         return parseUsage(response.response);
       }
-      throw unsupported(`it exited (${await proc.exited}) without an answer.${stderrTail(proc.stderr()) ? ` ${stderrTail(proc.stderr())}` : ""}`);
+      throw unsupported("Claude Code exited before it answered the usage request.");
     })();
     const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(unsupported(`it did not answer in ${timeoutMs / 1000} s.`)), timeoutMs);
+      timer = setTimeout(() => reject(unsupported(`Claude Code did not answer the usage request in ${timeoutMs / 1000} s.`)), timeoutMs);
     });
     return await Promise.race([answer, timeout]);
   } catch (e) {

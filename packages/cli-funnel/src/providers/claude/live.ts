@@ -27,6 +27,7 @@ export async function openClaudeSession(first: RunInput): Promise<LiveSession> {
   let closed = false;
   // The channel of the running turn. Lines that arrive between turns have no reader and are dropped.
   let current: Channel<unknown> | undefined;
+  let turns = 0;
 
   void (async () => {
     try {
@@ -48,6 +49,9 @@ export async function openClaudeSession(first: RunInput): Promise<LiveSession> {
 
   async function* turn(input: RunInput): AsyncGenerator<FunnelEvent> {
     if (current) throw new FunnelError("A turn is already running in this session.", "invalid-selection");
+    // Warnings that arrived since the last turn ended belong to no turn, so they are dropped rather than given to this
+    // one. The first turn keeps what the CLI printed at startup.
+    if (turns++) track.notices.clear();
     const lines = new Channel<unknown>();
     current = lines;
     if (exited || closed) lines.end();

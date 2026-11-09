@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,10 +30,13 @@ process.stdin.on("data", (d) => {
     buf = buf.slice(n + 1);
     fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ args, request: m, marker: process.env.FAKE_MARKER ?? null }) + "\\n");
     const mode = process.env.FAKE_USAGE;
-    if (mode === "exit") process.exit(3);
+    if (mode === "exit") {
+      process.stderr.write("fatal for " + (process.env.FAKE_LEAK ?? "") + "\\n", () => process.exit(3));
+      continue;
+    }
     if (mode === "hang") continue;
     const reply = mode === "error"
-      ? { type: "control_response", response: { subtype: "error", request_id: m.request_id, error: "Unsupported control request subtype: get_usage" } }
+      ? { type: "control_response", response: { subtype: "error", request_id: m.request_id, error: "Unsupported control request subtype: get_usage " + (process.env.FAKE_LEAK ?? "") } }
       : JSON.parse(fs.readFileSync(process.env.FAKE_FIXTURE, "utf8"));
     if (mode !== "error") reply.response.request_id = m.request_id;
     process.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: "s" }) + "\\n" + JSON.stringify(reply) + "\\n");
@@ -52,6 +55,8 @@ describe("claude rateLimits (fake CLI)", () => {
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "cf-claude-usage-"));
     process.env.CLI_FUNNEL_CLAUDE_BIN = fakeNodeCli(join(dir, "claude"), FAKE_USAGE_CLAUDE);
+    // A missing override makes the provider look for the real `claude` on PATH, so a test must never run without the fake.
+    expect(existsSync(process.env.CLI_FUNNEL_CLAUDE_BIN)).toBe(true);
     process.env.FAKE_LOG = join(dir, "log");
     process.env.FAKE_FIXTURE = fileURLToPath(new URL("./fixtures/claude/get-usage.json", import.meta.url));
     mode("answer");
@@ -81,11 +86,22 @@ describe("claude rateLimits (fake CLI)", () => {
 
   it("says unsupported when the CLI answers with an error, exits first or does not answer", async () => {
     mode("error");
-    await expect(readUsage()).rejects.toMatchObject({ code: "unsupported", message: expect.stringContaining("Unsupported control request subtype") });
+    await expect(readUsage()).rejects.toMatchObject({ code: "unsupported", message: "This Claude Code version does not answer usage requests." });
     mode("exit");
-    await expect(readUsage()).rejects.toMatchObject({ code: "unsupported", message: expect.stringContaining("exited (3) without an answer") });
+    await expect(readUsage()).rejects.toMatchObject({ code: "unsupported", message: "Claude Code exited before it answered the usage request." });
     mode("hang");
     await expect(readUsage({}, 300)).rejects.toMatchObject({ code: "unsupported", message: expect.stringContaining("did not answer") });
+  });
+
+  it("leaves the CLI's error text and stderr out of the error", async () => {
+    const leak = { account: "someone@example.com", org: "org-1234-5678", token: "sk-ant-secret-token-value" };
+    const env = { FAKE_LEAK: Object.values(leak).join(" ") };
+    for (const m of ["error", "exit"]) {
+      mode(m);
+      const err = await createFunnel().rateLimits("claude", { env }).then(() => undefined, (e: Error) => e);
+      expect(err).toMatchObject({ code: "unsupported" });
+      for (const v of Object.values(leak)) expect(err!.message).not.toContain(v);
+    }
   });
 
   it("stops the process on abort and says aborted", async () => {

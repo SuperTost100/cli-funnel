@@ -62,34 +62,63 @@ export const newClaudeTrack = (): ClaudeTrack => ({
 /** The most warnings kept while no turn reads them, so an idle live session cannot grow without bound. */
 const MAX_HELD_WARNINGS = 100;
 
+/** How long after its last line an open warning counts as complete. The lines of one warning arrive in one write. */
+const WARNING_QUIET_MS = 50;
+
 /**
  * Finds the warnings in Claude Code's stderr. A line that starts with `Warning: ` or `⚠ ` starts one, and the message is
  * the text after the marker. Lines that directly follow it and start with whitespace belong to it, joined with one space.
  * Every other line, `Error:` lines included, is ignored: the provider puts those into the error of a failed run.
  *
- * `take` returns the warnings seen so far, the one still open included, so a warning is cut in two only when its
- * continuation line arrives after the caller took the first line. The CLI writes both in one go.
+ * A warning is complete once a line that does not continue it has followed, or once `WARNING_QUIET_MS` passed since
+ * its last line: the CLI writes the lines of one warning together, and most warnings are a single line with nothing
+ * after it. `takeComplete` returns only complete ones, so a continuation line that arrives after an ordinary drain
+ * still joins its warning. `take` is the final drain: it returns the open warning too, for the caller that is about to
+ * end the turn. `add` queues a warning the CLI sent in its stdout, so both sources share one order.
  */
 export class StderrWarnings {
   private open: string | undefined;
+  /** When the open warning got its last line. */
+  private openAt = 0;
   private readonly done: string[] = [];
 
-  push(line: string): void {
+  push(line: string, now: number = Date.now()): void {
     const marker = line.match(/^(?:Warning: |⚠\uFE0F? )/)?.[0];
     if (marker) {
       this.close();
       this.open = line.slice(marker.length).trim();
+      this.openAt = now;
     } else if (this.open !== undefined && /^\s/.test(line) && line.trim()) {
       this.open += ` ${line.trim()}`;
+      this.openAt = now;
     } else {
       this.close();
     }
   }
 
-  /** The warnings seen so far, oldest first. They are not returned again. */
+  /** Queues a warning that is complete as it is. */
+  add(message: string): void {
+    this.close();
+    this.open = message;
+    this.close();
+  }
+
+  /** The complete warnings, oldest first. An open one that is still fresh stays, and none is returned again. */
+  takeComplete(now: number = Date.now()): string[] {
+    if (now - this.openAt >= WARNING_QUIET_MS) this.close();
+    return this.done.splice(0);
+  }
+
+  /** Every warning seen so far, the open one included, oldest first. None is returned again. */
   take(): string[] {
     this.close();
     return this.done.splice(0);
+  }
+
+  /** Forgets the warnings seen so far, the open one included. */
+  clear(): void {
+    this.open = undefined;
+    this.done.length = 0;
   }
 
   private close(): void {

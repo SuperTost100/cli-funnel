@@ -46,6 +46,7 @@ process.stdin.on("data", (d) => {
     const answer = text + "#" + n + "@" + process.pid;
     send({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: answer } } });
     send({ type: "result", subtype: "success", is_error: false, result: answer, session_id: sid });
+    if (process.env.FAKE_LATE_STDERR && n === 1) process.stderr.write(process.env.FAKE_LATE_STDERR);
   }
 });
 process.stdin.on("end", () => process.exit(0));
@@ -176,6 +177,8 @@ beforeEach(() => {
   log = join(mkdtempSync(join(tmpdir(), "cf-log-")), "log");
   process.env.FAKE_LOG = log;
   process.env.CLI_FUNNEL_CLAUDE_BIN = fake("claude", FAKE_CLAUDE);
+  // A missing override makes the provider look for the real `claude` on PATH, so a test must never run without the fake.
+  expect(existsSync(process.env.CLI_FUNNEL_CLAUDE_BIN)).toBe(true);
   process.env.CLI_FUNNEL_CODEX_BIN = fake("codex", FAKE_CODEX);
 });
 
@@ -248,6 +251,21 @@ describe("claude live sessions", () => {
       expect(spawns()).toHaveLength(1);
     } finally {
       delete process.env.FAKE_STDERR;
+    }
+  });
+
+  it("drops a warning that arrives between two turns instead of giving it to the next turn", async () => {
+    process.env.FAKE_LATE_STDERR = "Warning: belongs to turn one\n";
+    try {
+      const f = make({ keepAlive: true });
+      const first = await f.run(claude("one"));
+      expect(first.warnings ?? []).toEqual([]);
+      await new Promise((r) => setTimeout(r, 150));
+      const second = await f.run(claude("two", { sessionId: first.sessionId }));
+      expect(second.warnings ?? []).toEqual([]);
+      expect(spawns()).toHaveLength(1);
+    } finally {
+      delete process.env.FAKE_LATE_STDERR;
     }
   });
 

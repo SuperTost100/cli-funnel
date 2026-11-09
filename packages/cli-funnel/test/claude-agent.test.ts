@@ -1,9 +1,9 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { fakeNodeCli } from "./fake-cli.js";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildArgs, claudeProvider, questionAnswers, questionRequest } from "../src/providers/claude/index.js";
+import { buildArgs, claudeProvider, claudeTurn, questionAnswers, questionRequest, watchStderr } from "../src/providers/claude/index.js";
 import { editPath, newClaudeTrack, parseClaudeMessage } from "../src/providers/claude/parser.js";
 import { collect } from "./helpers.js";
 import type { AccessLevel, FunnelEvent, McpServer, RunInput, Selection } from "../src/types.js";
@@ -302,6 +302,8 @@ describe("claude control requests (fake CLI)", () => {
     dir = mkdtempSync(join(tmpdir(), "cf-claude-agent-"));
     logFile = join(dir, "log");
     process.env.CLI_FUNNEL_CLAUDE_BIN = fakeNodeCli(join(dir, "claude"), FAKE_CLAUDE);
+    // A missing override makes the provider look for `claude` on PATH, so a test must never run without the fake.
+    expect(existsSync(process.env.CLI_FUNNEL_CLAUDE_BIN)).toBe(true);
     process.env.FAKE_LOG = logFile;
   });
 
@@ -415,6 +417,53 @@ describe("claude control requests (fake CLI)", () => {
       const note = (priority: string, text: string) => ({ type: "system", subtype: "notification", key: "k", text, priority, session_id: "s" });
       replay([init, note("immediate", "Fast mode disabled"), note("low", "Tip: try /help"), result]);
       const events = await run({ selection: sel({ cwd: dir, access: "full" }), prompt: "x" });
+      expect(events.map((e) => e.type)).toEqual(["session", "warning", "done"]);
+    });
+
+    it("emits a stderr warning that the CLI wrote after its error result and no newline", async () => {
+      replay([{ type: "result", subtype: "error_during_execution", is_error: true, session_id: "s" }, { __stderr: effort.trimEnd() }]);
+      const events = await run({ selection: sel({ cwd: dir, access: "full" }), prompt: "x" });
+      expect(events.map((e) => e.type)).toEqual(["warning", "error"]);
+    });
+
+    it("emits a notification that came before init after session and access.reduced", async () => {
+      const note = { type: "system", subtype: "notification", key: "k", text: "Fast mode disabled", priority: "high", session_id: "s" };
+      const i: RunInput = { selection: sel({ cwd: dir, access: "full" }), prompt: "x" };
+      replay([note, { ...init, permissionMode: "default" }, result]);
+      expect((await run(i)).map((e) => e.type)).toEqual(["session", "access.reduced", "warning", "done"]);
+      replay([note, { type: "result", subtype: "error_during_execution", is_error: true, session_id: "s" }]);
+      expect((await run(i)).map((e) => e.type)).toEqual(["warning", "error"]);
+    });
+
+    // claudeTurn with stdout lines and stderr lines in an order the test controls, with no process.
+    const turn = async (script: (feed: (line: string) => void) => AsyncGenerator<unknown>) => {
+      let listener: (line: string) => void = () => {};
+      const proc = { write: () => {}, exited: new Promise<number | null>(() => {}), stderr: () => "", onStderr: (l: (line: string) => void) => ((listener = l), () => {}) };
+      const i: RunInput = { selection: sel({ cwd: dir, access: "full" }), prompt: "x" };
+      const track = newClaudeTrack();
+      watchStderr(proc, i, track);
+      const events: FunnelEvent[] = [];
+      for await (const e of claudeTurn(proc, script(listener), i, { text: false, tools: false }, { finished: false }, track)) events.push(e);
+      return events;
+    };
+
+    it("keeps a continuation line that arrives after init with its warning", async () => {
+      const events = await turn(async function* (feed) {
+        feed("⚠ Sandbox disabled: dependencies are missing");
+        yield init;
+        feed("  Commands will run WITHOUT sandboxing.");
+        yield result;
+      });
+      expect(events.map((e) => e.type)).toEqual(["session", "warning", "done"]);
+      expect(events[1]).toEqual({ type: "warning", message: "Sandbox disabled: dependencies are missing Commands will run WITHOUT sandboxing." });
+    });
+
+    it("emits a single-line warning that nothing follows before done", async () => {
+      const events = await turn(async function* (feed) {
+        feed("Warning: only line");
+        yield init;
+        yield result;
+      });
       expect(events.map((e) => e.type)).toEqual(["session", "warning", "done"]);
     });
   });

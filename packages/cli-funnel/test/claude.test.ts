@@ -86,6 +86,18 @@ describe("claude parser", () => {
       expect(w.take()).toEqual(["b c"]);
     });
 
+    it("holds a fresh open warning for its continuation, and releases it once it has been quiet", () => {
+      const w = new StderrWarnings();
+      w.push("⚠ Sandbox disabled", 1000);
+      // Drained right away, the warning could still get a second line.
+      expect(w.takeComplete(1010)).toEqual([]);
+      w.push("  Commands will run WITHOUT sandboxing.", 1020);
+      expect(w.takeComplete(1030)).toEqual([]);
+      // Nothing more came, so the next drain sends it, long before the turn ends.
+      expect(w.takeComplete(1070)).toEqual(["Sandbox disabled Commands will run WITHOUT sandboxing."]);
+      expect(w.take()).toEqual([]);
+    });
+
     // The exact raw line was not kept. This message is built from the fields seen on 2.1.319, next to `uuid` and `session_id`.
     const notification = (over: Record<string, unknown>) => ({
       type: "system", subtype: "notification", key: "fast-mode-overage-rejected", text: "Fast mode disabled · usage credit limit reached",
