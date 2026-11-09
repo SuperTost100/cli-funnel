@@ -4,6 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { denyNote, effectiveReply, isQuestion, toApprovalRequest, toQuestionReply, toQuestionRequest, toReply } from "../src/providers/codex/approvals.js";
+import { startedAccess } from "../src/providers/codex/access.js";
 import { authKind } from "../src/providers/codex/auth.js";
 import { fileChangeEvents, planEvent, Translator } from "../src/providers/codex/events.js";
 import { codexProvider } from "../src/providers/codex/index.js";
@@ -35,8 +36,57 @@ function replay(name: string, onRequest?: (m: any, t: Translator) => void) {
   return { events, requests, out, t };
 }
 
+// configWarning summaries as codex-cli 0.166.0 sent them under a requirements file.
+const SANDBOX_WARNING =
+  "Configured value for `permission_profile` is disallowed by requirements; falling back to required value Managed { file_system: Restricted { entries: [FileSystemSandboxEntry { path: Special { value: Root }, access: Read, missing_path_behavior: None }], glob_scan_max_depth: None }, network: Restricted }. Details: invalid value for `sandbox_mode`: `WorkspaceWrite` is not in the allowed set [ReadOnly] (set by /etc/codex/requirements.toml)";
+const BUBBLEWRAP_WARNING = "Codex could not find bubblewrap on PATH. Install bubblewrap with your OS package manager. Codex will use the bundled bubblewrap in the meantime.";
+const APPROVAL_WARNING =
+  "Configured value for `approval_policy` is disallowed by requirements; falling back to required value Never. Details: invalid value for `approval_policy`: `UnlessTrusted` is not in the allowed set [Never] (set by /etc/codex/requirements.toml)";
+
 const input = (access: AccessLevel, extra: Partial<RunInput> = {}): RunInput => ({ selection: { provider: "codex", model: "m", cwd: "/tmp", access }, prompt: "x", ...extra });
 const http = (extra: Partial<McpServer> = {}): McpServer => ({ type: "http", url: "http://127.0.0.1:7777/mcp", ...extra }) as McpServer;
+
+describe("codex started access", () => {
+  const asked = { sandbox: "workspace-write", approvalPolicy: "untrusted" } as const;
+  const answer = (type: string, approvalPolicy = "untrusted") => ({ sandbox: { type }, approvalPolicy });
+
+  it("reports a narrower sandbox with the warnings that name the sandbox, and without a reason when there are none", () => {
+    expect(startedAccess("accept-edits", asked, answer("readOnly"), [BUBBLEWRAP_WARNING, SANDBOX_WARNING])).toEqual({
+      access: "accept-edits",
+      expected: "workspace-write",
+      started: "read-only",
+      reason: SANDBOX_WARNING,
+    });
+    expect(startedAccess("accept-edits", asked, answer("readOnly"), [BUBBLEWRAP_WARNING])).toEqual({ access: "accept-edits", expected: "workspace-write", started: "read-only" });
+  });
+
+  it("reports nothing for the sandbox that was asked for, a wider one, or a type it does not know", () => {
+    expect(startedAccess("supervised", asked, answer("workspaceWrite"), [])).toBeUndefined();
+    expect(startedAccess("supervised", asked, answer("dangerFullAccess"), [])).toBeUndefined();
+    expect(startedAccess("supervised", asked, answer("externalSandbox"), [SANDBOX_WARNING])).toBeUndefined();
+    expect(startedAccess("supervised", asked, {}, [])).toBeUndefined();
+  });
+
+  it("compares with what was sent: full with sandbox asks for workspace-write and gets it", () => {
+    const sent = { sandbox: "workspace-write", approvalPolicy: "never" } as const;
+    expect(startedAccess("full", sent, answer("workspaceWrite", "never"), [])).toBeUndefined();
+    expect(startedAccess("full", { ...sent, sandbox: "danger-full-access" }, answer("workspaceWrite", "never"), [])).toMatchObject({ expected: "danger-full-access", started: "workspace-write" });
+  });
+
+  it("throws cli-failed when the policy asks less often than the level needs, and quotes the warning", () => {
+    expect(() => startedAccess("supervised", asked, answer("workspaceWrite", "never"), [APPROVAL_WARNING])).toThrow(
+      expect.objectContaining({ code: "cli-failed", message: expect.stringContaining(APPROVAL_WARNING) }),
+    );
+    expect(() => startedAccess("supervised", asked, answer("workspaceWrite", "on-request"), [])).toThrow(/"on-request".*"untrusted"/);
+  });
+
+  it("accepts a policy that asks more often, and ignores a missing or unknown one", () => {
+    const auto = { sandbox: "workspace-write", approvalPolicy: "on-request" } as const;
+    expect(startedAccess("auto", auto, answer("workspaceWrite", "untrusted"), [])).toBeUndefined();
+    expect(startedAccess("auto", auto, { sandbox: { type: "workspaceWrite" } }, [])).toBeUndefined();
+    expect(startedAccess("auto", auto, answer("workspaceWrite", "granular"), [])).toBeUndefined();
+  });
+});
 
 describe("codex plans", () => {
   it("emits the whole plan on each turn/plan/updated, with mapped statuses", () => {
@@ -283,7 +333,10 @@ process.stdin.on("data", (d) => {
         if (process.env.FAKE_MCP === "error") send({ id: m.id, error: { code: -32601, message: "unknown method" } });
         else send({ id: m.id, result: { config: { model: null, mcp_servers: JSON.parse(process.env.FAKE_MCP || "{}") }, origins: {} } });
         break;
-      case "thread/start": send({ id: m.id, result: { thread: { id: thread }, model: p.model, cwd: p.cwd } }); break;
+      case "thread/start":
+        for (const summary of JSON.parse(process.env.FAKE_WARNINGS || "[]")) send({ method: "configWarning", params: { summary, details: null } });
+        send({ id: m.id, result: { thread: { id: thread }, model: p.model, cwd: p.cwd, ...JSON.parse(process.env.FAKE_STARTED || "{}") } });
+        break;
       case "turn/steer": send({ id: m.id, result: { turnId: turn } }); break;
       case "turn/start":
         turn = "turn-1";
@@ -348,6 +401,31 @@ describe("codex agent features through the app-server", () => {
     delete process.env.FAKE_LOG;
     delete process.env.FAKE_KEY;
     delete process.env.FAKE_MCP;
+    delete process.env.FAKE_WARNINGS;
+    delete process.env.FAKE_STARTED;
+  });
+
+  it("reports a thread that started in a narrower sandbox, on the result and after session", async () => {
+    process.env.FAKE_WARNINGS = JSON.stringify([BUBBLEWRAP_WARNING, SANDBOX_WARNING]);
+    process.env.FAKE_STARTED = JSON.stringify({ sandbox: { type: "readOnly", networkAccess: false }, approvalPolicy: "untrusted" });
+    const { res, events } = await run("hi", { selection: { provider: "codex", model: "m", cwd, access: "accept-edits" } });
+    const reduced = { access: "accept-edits", expected: "workspace-write", started: "read-only", reason: SANDBOX_WARNING };
+    expect(events.map((e) => e.type).slice(0, 2)).toEqual(["session", "access.reduced"]);
+    expect(events[1]).toEqual({ type: "access.reduced", ...reduced });
+    expect(res.accessReduced).toEqual(reduced);
+  });
+
+  it("fails the run when Codex forces an approval policy that asks less often than the level needs", async () => {
+    process.env.FAKE_WARNINGS = JSON.stringify([APPROVAL_WARNING]);
+    process.env.FAKE_STARTED = JSON.stringify({ sandbox: { type: "workspaceWrite" }, approvalPolicy: "never" });
+    await expect(run("hi")).rejects.toMatchObject({ code: "cli-failed", message: expect.stringContaining(APPROVAL_WARNING) });
+  });
+
+  it("reports nothing when the thread started as asked", async () => {
+    process.env.FAKE_STARTED = JSON.stringify({ sandbox: { type: "workspaceWrite" }, approvalPolicy: "untrusted" });
+    const { res, events } = await run("hi");
+    expect(events.some((e) => e.type === "access.reduced")).toBe(false);
+    expect(res.accessReduced).toBeUndefined();
   });
 
   it("emits question.request, awaits onQuestion and sends the answers", async () => {

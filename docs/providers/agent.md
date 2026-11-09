@@ -56,6 +56,8 @@ Usage: `inputTokens` is input plus cache read plus cache write, `cachedInputToke
 | `accept-edits` | not offered, the CLI has no such flag |
 | `supervised` | not offered, see below |
 
+Cursor Agent never emits `access.reduced`. Its `init` event reports `permissionMode: "default"` whatever the flags, so the funnel cannot tell whether a level took effect. See [Access levels](../access-levels.md#when-the-cli-starts-with-less-access).
+
 Print mode has "access to all tools, including write and shell" per `--help`. On the machine used to build this provider, plain `-p` without any flag wrote files and ran shell commands, because that user's `~/.cursor/cli-config.json` has `approvalMode: "unrestricted"`. The provider never runs without one of the two flags, so `full` and `auto` are explicit and do not depend on the user's config.
 
 ### Why there is no `supervised`

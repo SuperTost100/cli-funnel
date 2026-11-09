@@ -1,5 +1,5 @@
 import { isAbsolute, posix, win32 } from "node:path";
-import type { EffortOption, FunnelEvent, ModelInfo, PlanStep, Usage } from "../../types.js";
+import type { AccessLevel, EffortOption, FunnelEvent, ModelInfo, PlanStep, Usage } from "../../types.js";
 
 const EFFORTS = ["low", "medium", "high", "max"];
 const EFFORT_RE = /^(.+)-(low|medium|high|max)$/;
@@ -121,6 +121,8 @@ export interface MapperOptions {
    */
   brainDir?: string;
   readText?: (path: string) => string | undefined;
+  /** The level the run asked for. At `full` the mapper reports an `init` that is not `always-proceed` as `access.reduced`. */
+  access?: AccessLevel;
 }
 
 const slashes = (p: string) => p.replace(/\\/g, "/");
@@ -198,7 +200,15 @@ export function createMapper(options: MapperOptions = {}) {
       if (o.event === "init") {
         const id = o.conversation_id;
         if (typeof o.init?.cwd === "string") cwd = o.init.cwd;
-        return id ? [{ type: "session", sessionId: id, model: o.init?.model, ...(options.auth && { auth: options.auth }) }] : [];
+        if (!id) return [];
+        const events: FunnelEvent[] = [{ type: "session", sessionId: id, model: o.init?.model, ...(options.auth && { auth: options.auth }) }];
+        // `--dangerously-skip-permissions` reports `always-proceed`. The other levels start as `request-review` whatever
+        // their flags, so only `full` can be checked.
+        const mode = o.init?.permission_mode;
+        if (options.access === "full" && typeof mode === "string" && mode !== "always-proceed") {
+          events.push({ type: "access.reduced", access: "full", expected: "always-proceed", started: mode });
+        }
+        return events;
       }
       if (o.event === "step_update") {
         const s = o.step_update as Json;

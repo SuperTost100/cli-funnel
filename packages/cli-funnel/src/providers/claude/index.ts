@@ -2,7 +2,6 @@ import { existsSync } from "node:fs";
 import {
   ACCESS_LEVELS,
   FunnelError,
-  type AccessLevel,
   type AuthStatus,
   type Capabilities,
   type FunnelEvent,
@@ -22,19 +21,10 @@ import { exec, spawnStream, type Streamed } from "../../util/process.js";
 import { openClaudeSession } from "./live.js";
 import { FEEDBACK_CHANNELS } from "../feedback.js";
 import { requireMachine } from "../../selection.js";
-import { editPath, newClaudeTrack, parseClaudeMessage, type ClaudeTrack, type ForwardSubagents } from "./parser.js";
+import { editPath, newClaudeTrack, parseClaudeMessage, PERMISSION_MODE, type ClaudeTrack, type ForwardSubagents } from "./parser.js";
 
 const BIN = "claude";
 const TESTED_RANGE = { min: "2.1.0" };
-
-const PERMISSION_MODE: Record<AccessLevel, string> = {
-  // With every tool removed there is nothing to approve. `manual` keeps it that way if a tool slips in.
-  none: "manual",
-  supervised: "manual",
-  "accept-edits": "acceptEdits",
-  auto: "auto",
-  full: "bypassPermissions",
-};
 
 const capabilities: Capabilities = {
   access: ["none", "supervised", "accept-edits", "auto", "full"],
@@ -304,7 +294,7 @@ export async function* claudeTurn(
   track: ClaudeTrack,
   onResult?: () => void,
 ): AsyncGenerator<FunnelEvent> {
-  const { cwd } = requireMachine(input.selection);
+  const { cwd, access } = requireMachine(input.selection);
   const tap = rawTap("claude", input, proc);
   try {
     for await (const raw of lines) {
@@ -318,7 +308,7 @@ export async function* claudeTurn(
         continue;
       }
       if (msg.type === "result") onResult?.();
-      for (const e of parseClaudeMessage(raw, forward, track)) {
+      for (const e of parseClaudeMessage(raw, forward, track, access)) {
         // A subagent's edits are not tracked as the run's file changes.
         if (e.type === "tool.start" && !e.parentId) {
           // The kind of a file change depends on whether the file was there before the tool ran.

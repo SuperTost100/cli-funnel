@@ -201,6 +201,30 @@ describe("claude file changes", () => {
   });
 });
 
+describe("claude access.reduced", () => {
+  const init = (permissionMode: unknown, access: AccessLevel) =>
+    parseClaudeMessage({ type: "system", subtype: "init", session_id: "s", model: "m", permissionMode }, {}, newClaudeTrack(), access).map((e) => e.type === "access.reduced" ? e : e.type);
+
+  it("reports a start in default mode at full and auto, with Claude's own mode names", () => {
+    expect(init("default", "full")).toEqual(["session", { type: "access.reduced", access: "full", expected: "bypassPermissions", started: "default" }]);
+    expect(init("acceptEdits", "auto")).toEqual(["session", { type: "access.reduced", access: "auto", expected: "auto", started: "acceptEdits" }]);
+    expect(init("default", "accept-edits")).toEqual(["session", { type: "access.reduced", access: "accept-edits", expected: "acceptEdits", started: "default" }]);
+  });
+
+  it("reports nothing when the mode is as asked, wider, unknown or absent, or the level maps to manual", () => {
+    expect(init("acceptEdits", "accept-edits")).toEqual(["session"]);
+    expect(init("bypassPermissions", "auto")).toEqual(["session"]);
+    expect(init("default", "supervised")).toEqual(["session"]);
+    expect(init("default", "none")).toEqual(["session"]);
+    expect(init("plan", "full")).toEqual(["session"]);
+    expect(init(undefined, "full")).toEqual(["session"]);
+  });
+
+  it("reports nothing when the parser is not told the level", () => {
+    expect(parseClaudeMessage({ type: "system", subtype: "init", session_id: "s", permissionMode: "default" })).toHaveLength(1);
+  });
+});
+
 describe("claude auth", () => {
   it("reports the login kind from apiKeySource", () => {
     const init = (apiKeySource?: string) => parseClaudeMessage({ type: "system", subtype: "init", session_id: "s", model: "m", apiKeySource })[0];

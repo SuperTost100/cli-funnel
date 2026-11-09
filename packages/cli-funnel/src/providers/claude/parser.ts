@@ -1,5 +1,5 @@
 import { isAbsolute, resolve } from "node:path";
-import type { FileChange, FinishReason, FunnelEvent, PlanStep, Usage } from "../../types.js";
+import type { AccessLevel, FileChange, FinishReason, FunnelEvent, PlanStep, Usage } from "../../types.js";
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -164,18 +164,45 @@ const AUTH: Record<string, "account" | "api-key"> = {
   "/login managed key": "api-key",
 };
 
+/** The `--permission-mode` value for each access level. */
+export const PERMISSION_MODE: Record<AccessLevel, string> = {
+  // With every tool removed there is nothing to approve. `manual` keeps it that way if a tool slips in.
+  none: "manual",
+  supervised: "manual",
+  "accept-edits": "acceptEdits",
+  auto: "auto",
+  full: "bypassPermissions",
+};
+
+/** The modes `init` reports, from the narrowest to the widest. `plan` and `dontAsk` are not on the scale. */
+const MODES = ["default", "acceptEdits", "auto", "bypassPermissions"];
+
+/**
+ * `access.reduced` for an `init` line, when the CLI started in a narrower mode than `access` asked for. Managed
+ * settings that switch a mode off, or a model that lacks auto mode, leave it in `default` without an error.
+ */
+function accessReduced(init: Obj, access: AccessLevel | undefined): FunnelEvent[] {
+  if (!access) return [];
+  const expected = PERMISSION_MODE[access];
+  const started = init.permissionMode;
+  // `manual` is reported as `default`, the narrowest mode, so the levels that ask for it have nothing to compare.
+  if (!MODES.includes(expected) || typeof started !== "string" || !MODES.includes(started)) return [];
+  return MODES.indexOf(started) < MODES.indexOf(expected) ? [{ type: "access.reduced", access, expected, started }] : [];
+}
+
 /**
  * Maps one stream-json object from `claude -p` to zero or more FunnelEvents. Messages from subagents are dropped unless
- * `forward` asks for their text or their tool calls (see `subagentEvents`). `track` carries what one process needs
+ * `forward` asks for their text or their tool calls (see `subagentEvents`). `access` is the level the run asked for, which
+ * `access.reduced` compares with the mode in `init`. `track` carries what one process needs
  * across messages: the task list for `plan`, and the edit calls for `file.change`. The parser does no I/O.
  */
-export function parseClaudeMessage(raw: unknown, forward: ForwardSubagents = {}, track: ClaudeTrack = newClaudeTrack()): FunnelEvent[] {
+export function parseClaudeMessage(raw: unknown, forward: ForwardSubagents = {}, track: ClaudeTrack = newClaudeTrack(), access?: AccessLevel): FunnelEvent[] {
   if (!isObj(raw)) return [];
   const type = raw.type;
 
   if (type === "system" && raw.subtype === "init" && typeof raw.session_id === "string") {
     const auth = typeof raw.apiKeySource === "string" ? AUTH[raw.apiKeySource] : undefined;
-    return [{ type: "session", sessionId: raw.session_id, model: typeof raw.model === "string" ? raw.model : undefined, ...(auth ? { auth } : {}) }];
+    return [{ type: "session", sessionId: raw.session_id, model: typeof raw.model === "string" ? raw.model : undefined, ...(auth ? { auth } : {}) }, ...accessReduced(raw, access)];
   }
 
   if (type === "rate_limit_event" && isObj(raw.rate_limit_info)) return parseRateLimit(raw.rate_limit_info);

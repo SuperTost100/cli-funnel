@@ -29,6 +29,8 @@ Runs use `agy --print=<prompt> --output-format stream-json` with stdin closed. L
 - `full` passes `--dangerously-skip-permissions`. Every tool runs without a check.
 - `auto` is not offered. `agy` 1.3.5 added `--mode auto`, but it is not available on every account. On an account without it, `agy` prints `warning: --mode auto is not available for this account; continuing in the default mode.` on stderr and runs in the default mode. cli-funnel cannot tell from the stream which mode ran, so it cannot promise the level. Tested on 1.3.5.
 
+At `full`, `init` reports `permission_mode: "always-proceed"`. When it reports anything else, the run emits `access.reduced` after `session`. The default mode and `--mode accept-edits` both report `request-review`, so `accept-edits` cannot be checked. See [Access levels](../access-levels.md#when-the-cli-starts-with-less-access).
+
 That is not true of every shell command. On 1.2.13, a `touch` outside the workspace ran without a check both in the default print mode and with `--mode plan --sandbox`. `--mode plan` has no effect together with `--disable-slash-commands`, and the CLI prints a warning saying so. Neither mode can carry `none`.
 
 ### Sandbox

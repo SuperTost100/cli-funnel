@@ -1,4 +1,4 @@
-import type { FileChange, FinishReason, FunnelEvent, Limit, PlanStep, Selection, Usage } from "cli-funnel/client";
+import type { AccessReduced, FileChange, FinishReason, FunnelEvent, Limit, PlanStep, Selection, Usage } from "cli-funnel/client";
 
 export interface TurnToolCall {
   id: string;
@@ -39,6 +39,8 @@ export interface Turn {
   limit?: Limit;
   /** When the `limit` event arrived, in ms since the epoch. Anchors `limit.retryAfterMs`. */
   limitAt?: number;
+  /** Set when the CLI started with less access than `selection.access` asked for. */
+  accessReduced?: AccessReduced;
   status: "running" | "done" | "error";
   error?: string;
 }
@@ -77,6 +79,11 @@ export function applyEvent(turn: Turn, e: FunnelEvent, now: number = Date.now())
       if (turn.limit) return turn;
       const { type: _, ...limit } = e;
       return { ...turn, limit, limitAt: now };
+    }
+    case "access.reduced": {
+      if (turn.accessReduced) return turn;
+      const { type: _, ...accessReduced } = e;
+      return { ...turn, accessReduced };
     }
     case "structured":
       return { ...turn, structured: e.data, structuredError: undefined };

@@ -115,6 +115,17 @@ async function render(opts: { json?: boolean; quiet?: boolean; schema?: boolean 
   return { ok: structured, stdout, stderr };
 }
 
+describe("renderRun access.reduced", () => {
+  it("prints one line on stderr, with --quiet too", async () => {
+    for (const quiet of [false, true]) {
+      let stderr = "";
+      const events: FunnelEvent[] = [{ type: "access.reduced", access: "accept-edits", expected: "workspace-write", started: "read-only", reason: "Set by requirements." }];
+      await renderRun(fakeStream(events, result()), { quiet, stdout: () => undefined, stderr: (s) => (stderr += s) });
+      expect(stderr).toBe("\n[access] The CLI started in read-only, not workspace-write, for access accept-edits. Set by requirements.\n");
+    }
+  });
+});
+
 describe("renderRun", () => {
   it("streams text on stdout by default", async () => {
     const r = await render({});

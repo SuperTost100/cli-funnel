@@ -34,6 +34,21 @@ Antigravity's `accept-edits` writes only inside workspaces the user has already 
 
 `none` needs a mode the CLI enforces, not one the model is asked to respect. Claude Code can remove every tool. Codex runs in a read-only sandbox with its tool features off and every approval denied. Cursor Agent and Antigravity have no such flag. Their read-only modes still ran shell commands in testing. Both do read config from the folder they run in, so cli-funnel runs them in an empty folder of its own that holds a rule refusing every tool call. The CLI applies the rule, not the model. See [Run options](run-options.md#text-only-access-none).
 
+## When the CLI starts with less access
+
+A managed policy can leave a CLI with less access than the run asked for, and the CLI does not fail. A Codex requirements file that allows only a read-only sandbox is one case. Claude Code's `permissions.disableBypassPermissionsMode` and `permissions.disableAutoMode` are two more. Without a report, a run at `accept-edits` would get an agent that cannot write, and the caller would find out from the answer.
+
+When the CLI says it started narrower, the run gets an `access.reduced` event right after `session`, and `result.accessReduced` holds the first one. It has `access` (the level you asked for), `expected` and `started` (the CLI's own names for the two modes), and `reason` when the CLI gives one. The run goes on with what the CLI allowed. `cli-funnel run` prints a line on stderr, also with `--quiet`.
+
+| CLI | What is compared |
+|---|---|
+| Codex | The sandbox in the `thread/start` or `thread/resume` answer against the one that was sent. `reason` is the `configWarning` text about the sandbox. |
+| Claude Code | `permissionMode` in `init` against the mode the level maps to, at `accept-edits`, `auto` and `full`. |
+| Antigravity | `permission_mode` in `init` at `full`: anything but `always-proceed` is reported. The other levels start in the same mode whatever their flags, so they are not checked. |
+| Cursor Agent | Nothing. Its `init` says `default` whatever the flags, so the funnel cannot tell. |
+
+Codex also checks the approval policy. If it started with a policy that asks less often than the level needs, the run fails with code `cli-failed` and a message that names both policies, because at `supervised` a forced `never` would run commands without asking `onApproval`. A policy that asks more often is not reported.
+
 ## Denied actions
 
 When a CLI refuses an action because nobody could approve it, the run reports it in `result.deniedActions`. It does not fail. Check that list, then raise the level or choose a provider with `supervised`.

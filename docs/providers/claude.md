@@ -44,6 +44,8 @@ Usage has no `costUsd`. The CLI reports a list-price estimate, not what a subscr
 
 Approvals work. The CLI writes a `control_request` (subtype `can_use_tool`) to stdout and waits. The provider answers on stdin with a `control_response` carrying `{behavior: "allow", updatedInput}` or `{behavior: "deny", message}`. This only happens with `--permission-prompt-tool stdio`. The `--permission-prompts host` flag alone is not enough: without the stdio tool the CLI denies the call and lists it in `permission_denials`, and `done` gets `finishReason: "denied"`. Each entry in `permission_denials` also lands in `result.deniedActions`. The help text lists `manual` as the mode name, not `default`, though `init` reports it as `default`.
 
+`init` reports the mode the CLI started in as `permissionMode`. Managed settings that switch a mode off, or a model without auto mode, leave it in `default` without an error. At `accept-edits`, `auto` and `full` the run then emits `access.reduced` after `session`, with the mode names as `init` prints them, such as `expected: "bypassPermissions"` and `started: "default"`. See [Access levels](../access-levels.md#when-the-cli-starts-with-less-access).
+
 ### Sandbox
 
 `sandbox: true` passes `--settings` with `{"sandbox": {"enabled": true, "failIfUnavailable": true, "allowUnsandboxedCommands": false, "autoAllowBashIfSandboxed": false}}` at every level but `none`, where no tool exists. Bash commands then run in Claude Code's sandbox, which lets them write in `cwd`, the `addDirs` folders and the CLI's own temp folder. The other settings do this:

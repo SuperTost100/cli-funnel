@@ -308,6 +308,18 @@ export interface Limit {
   detail: string;
 }
 
+/** A CLI that started with less access than the run asked for. */
+export interface AccessReduced {
+  /** The level the run asked for. */
+  access: AccessLevel;
+  /** The CLI's name for the mode that level maps to, such as `workspace-write` or `bypassPermissions`. */
+  expected: string;
+  /** The CLI's name for the mode it started in, such as `read-only` or `default`. */
+  started: string;
+  /** The CLI's own words on why, when it gives any. */
+  reason?: string;
+}
+
 /** Where a `raw` event came from: a CLI's stdout or stderr, an HTTP response's status and headers, or a body chunk. */
 export type RawSource = "stdout" | "stderr" | "response" | "http";
 
@@ -316,6 +328,12 @@ export type FunnelEvent =
   | { type: "queue.position"; ahead: number }
   /** `auth` says how the CLI signed in for this run, when the provider knows: the saved account login or an API key. */
   | { type: "session"; sessionId: string; model?: string; auth?: "account" | "api-key" }
+  /**
+   * The CLI started with less access than `selection.access` asked for, for example when a managed policy allows only a
+   * read-only sandbox or switches a permission mode off. It follows `session`, and the run goes on with what the CLI
+   * allowed. Codex, Claude Code and Antigravity (at `full`) report it. Cursor Agent does not state its mode, so it never does.
+   */
+  | ({ type: "access.reduced" } & AccessReduced)
   /**
    * Text the agent writes to the user. On Claude Code and Codex this includes the short notes between tool calls
    * ("I'll read the notes first"), so a stream can hold several messages. `RunResult.text` is the final message only.
@@ -524,6 +542,8 @@ export interface RunResult {
   timeout?: true;
   /** The first limit the provider reported during the run. A run that failed on it throws an error that carries it too. */
   limit?: Limit;
+  /** The first report that the CLI started with less access than the run asked for. Same value as the `access.reduced` event. */
+  accessReduced?: AccessReduced;
   /** The last plan the agent reported. Present when there was one. */
   plan?: PlanStep[];
   /** Files the agent added, changed or deleted, in order, including refused changes. Present when there are any. */

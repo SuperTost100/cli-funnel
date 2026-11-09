@@ -156,3 +156,16 @@ describe("RunResult.limit", () => {
     expect(result.limit).toEqual({ kind: "rate", detail: "first", resetAt: "2026-10-15T13:00:00.000Z" });
   });
 });
+
+describe("access.reduced in the result", () => {
+  it("keeps the first report on RunResult.accessReduced", async () => {
+    const input: RunInput = { prompt: "x", selection: { provider: "codex", model: "m", cwd: "/tmp", access: "accept-edits" } };
+    const first = { access: "accept-edits", expected: "workspace-write", started: "read-only", reason: "why" } as const;
+    async function* events(): AsyncGenerator<FunnelEvent> {
+      yield { type: "access.reduced", ...first };
+      yield { type: "access.reduced", ...first, started: "other" };
+      yield { type: "done", text: "ok", finishReason: "stop" };
+    }
+    expect((await collect(events(), input)).accessReduced).toEqual(first);
+  });
+});

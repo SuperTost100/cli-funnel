@@ -423,6 +423,8 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
       structuredError: last?.structuredError,
       /** The first limit the provider reported, as in RunResult.limit. */
       limit: last?.limit,
+      /** Set when the CLI started with less access than the run asked for, as in RunResult.accessReduced. */
+      accessReduced: last?.accessReduced,
     }),
     [last],
   );
