@@ -42,7 +42,7 @@ With `createFunnel({ sessions: { keepAlive: true } })`:
 - Server approval requests go to the running turn's `onApproval`. Between turns they are declined.
 - An aborted turn sends `turn/interrupt` and waits for `turn/completed` (five seconds at most). When Codex acknowledged the interrupt and ended the turn, the process and thread stay live for the next turn. Otherwise the process stops. Checked live on 0.160.0: after an abort in the middle of a long answer, the next turn on the same session took 1.6 s.
 
-## Threads, fork and usage
+## Threads, fork, usage and feedback
 
 These calls start a short-lived `codex app-server`, make one request and stop it. They need no `keepAlive`.
 
@@ -51,8 +51,9 @@ These calls start a short-lived `codex app-server`, make one request and stop it
 | `funnel.listThreads("codex", options)` | `thread/list` | `cwd`, `search` (`searchTerm`), `limit` and `cursor` pass through. Sorted by `updated_at`, newest first. Times are Unix seconds on the wire and milliseconds in `ThreadInfo`. |
 | `funnel.forkSession("codex", sessionId)` | `thread/fork` with `excludeTurns: true` | Resolves with the new thread id. Codex writes the fork to disk before it answers, and `thread/resume` opens it in a new process. An empty fork does not show in `thread/list` until it has a turn. |
 | `funnel.rateLimits("codex")` | `account/rateLimits/read` | `primary` and `secondary` are the five-hour and weekly windows. `limit` uses the same rule as the `limit` event on `account/rateLimits/updated`. |
+| `funnel.sendFeedback("codex", report)` | `feedback/upload` | Sends a report to OpenAI, as the TUI's `/feedback` does. Waits up to two minutes. See [Feedback reports](../feedback.md). |
 
-An error from Codex, such as a thread that does not exist, comes back as `FunnelError` with code `cli-failed`. A call that takes longer than 30 seconds fails the same way. `scripts/check-drift.mjs` checks these params and responses against the generated schema.
+An error from Codex, such as a thread that does not exist, comes back as `FunnelError` with code `cli-failed`. A call that takes longer than 30 seconds, two minutes for `feedback/upload`, fails the same way. `scripts/check-drift.mjs` checks these params and responses against the generated schema.
 
 ## Access mapping
 

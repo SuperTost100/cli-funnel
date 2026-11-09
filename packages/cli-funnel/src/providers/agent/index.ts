@@ -9,6 +9,7 @@ import { bool, dirList, flag, mcpServersFor, oneOf, optionsFor, requireAccess } 
 import { redactErrors } from "../../util/redact.js";
 import { ownedWorkspace } from "../../util/workspace.js";
 import { attachMcp } from "./mcp.js";
+import { FEEDBACK_CHANNELS } from "../feedback.js";
 import { groupModels, parseModelList, parseStatus, StreamMapper, toCliModel, type MapperOptions } from "./parser.js";
 
 const BINARY = "agent";
@@ -204,6 +205,8 @@ function runRedacted(input: RunInput): AsyncGenerator<FunnelEvent> {
 export const agentProvider: Provider = {
   id: "agent",
   displayName: "Cursor Agent",
+  // `/feedback` works only in the interactive terminal.
+  feedbackChannel: FEEDBACK_CHANNELS.cursor,
   capabilities: {
     access: ["none", "auto", "full"],
     effort: true,

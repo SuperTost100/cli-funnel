@@ -26,7 +26,7 @@ function checkCodexSchema() {
     for (const key of ["ephemeral", "approvalPolicy", "config"]) if (!start.properties?.[key]) report(key, "ThreadStartParams");
     const policies = JSON.stringify(start.definitions?.AskForApproval ?? {});
     for (const p of ["untrusted", "on-request", "never"]) if (!policies.includes(`"${p}"`)) report(`approval policy ${p}`, "AskForApproval");
-    // Live sessions and the thread calls: thread/list, thread/fork, account/rateLimits/read and turn/interrupt.
+    // Live sessions and the one-off calls: thread/list, thread/fork, account/rateLimits/read, feedback/upload and turn/interrupt.
     const schema = (name) => JSON.parse(readFileSync(join(dir, "v2", `${name}.json`), "utf8"));
     const list = schema("ThreadListParams");
     for (const key of ["cwd", "searchTerm", "limit", "cursor", "sortKey"]) if (!list.properties?.[key]) report(key, "ThreadListParams");
@@ -40,8 +40,10 @@ function checkCodexSchema() {
     for (const key of ["id", "name", "preview", "cwd", "createdAt", "updatedAt", "forkedFromId"]) if (!thread[key]) report(key, "Thread");
     if (!schema("GetAccountRateLimitsResponse").properties?.rateLimits) report("rateLimits", "GetAccountRateLimitsResponse");
     for (const key of ["threadId", "turnId"]) if (!schema("TurnInterruptParams").properties?.[key]) report(key, "TurnInterruptParams");
+    for (const key of ["classification", "reason", "threadId", "includeLogs"]) if (!schema("FeedbackUploadParams").properties?.[key]) report(key, "FeedbackUploadParams");
+    if (!schema("FeedbackUploadResponse").properties?.threadId) report("threadId", "FeedbackUploadResponse");
     const methods = readFileSync(join(dir, "ClientRequest.json"), "utf8");
-    for (const m of ["thread/list", "thread/fork", "account/rateLimits/read", "turn/interrupt", "turn/steer", "account/login/start", "account/read", "config/read"]) if (!methods.includes(`"${m}"`)) report(m, "ClientRequest");
+    for (const m of ["thread/list", "thread/fork", "account/rateLimits/read", "feedback/upload", "turn/interrupt", "turn/steer", "account/login/start", "account/read", "config/read"]) if (!methods.includes(`"${m}"`)) report(m, "ClientRequest");
     const bundle = JSON.parse(readFileSync(join(dir, "codex_app_server_protocol.v2.schemas.json"), "utf8"));
     if (!bundle.definitions?.Config?.properties?.web_search) report("web_search", "Config");
     const modes = bundle.definitions?.WebSearchMode?.enum ?? [];

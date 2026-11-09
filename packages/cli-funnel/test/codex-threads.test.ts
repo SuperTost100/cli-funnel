@@ -1,8 +1,10 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { parseRateLimits, parseThread, parseThreadPage } from "../src/providers/codex/threads.js";
+import { feedbackParams, parseFeedback, parseRateLimits, parseThread, parseThreadPage } from "../src/providers/codex/threads.js";
 
 // Results recorded from codex 0.160.0 (`thread/list`, `account/rateLimits/read`), with ids, paths and account data replaced.
+// `feedback-upload.json` follows the FeedbackUploadResponse schema of codex 0.166.0 instead: recording one would send a
+// real report to OpenAI.
 const fixture = (name: string) => JSON.parse(readFileSync(new URL(`./fixtures/codex/${name}.json`, import.meta.url), "utf8"));
 
 describe("codex thread/list", () => {
@@ -50,5 +52,36 @@ describe("codex account/rateLimits/read", () => {
 
   it("copes with an answer that has no windows", () => {
     expect(parseRateLimits({ rateLimits: { planType: "free", primary: null, secondary: null } })).toEqual({ provider: "codex", plan: "free" });
+  });
+});
+
+describe("codex feedback/upload", () => {
+  it("builds the params Codex's /feedback sends", () => {
+    expect(feedbackParams({ classification: "bad_result", sessionId: "thr-1", reason: "  Made up a function.  ", includeLogs: true })).toEqual({
+      classification: "bad_result",
+      reason: "Made up a function.",
+      threadId: "thr-1",
+      includeLogs: true,
+    });
+  });
+
+  it("leaves out what the report does not set, and logs stay off", () => {
+    expect(feedbackParams({ classification: "other", reason: "   " })).toEqual({ classification: "other", includeLogs: false });
+  });
+
+  it("refuses values Codex would file under the wrong kind", () => {
+    expect(() => feedbackParams({ classification: "bad" as never })).toThrow(expect.objectContaining({ code: "invalid-selection" }));
+    expect(() => feedbackParams({ classification: "bug", sessionId: "" })).toThrow("sessionId");
+    expect(() => feedbackParams({ classification: "bug", includeLogs: "yes" as never })).toThrow("includeLogs");
+    expect(() => feedbackParams({ classification: "bug", reason: 3 as never })).toThrow("reason");
+  });
+
+  it("reads the report id from the answer", () => {
+    expect(parseFeedback(fixture("feedback-upload"))).toBe("00000000-0000-4000-8000-000000000001");
+    expect(parseFeedback({ threadId: "no-active-thread-abc", promptHash: null })).toBe("no-active-thread-abc");
+  });
+
+  it("fails when the answer has no id", () => {
+    expect(() => parseFeedback({})).toThrow(expect.objectContaining({ code: "cli-failed" }));
   });
 });

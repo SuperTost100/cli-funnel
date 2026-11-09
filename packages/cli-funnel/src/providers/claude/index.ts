@@ -20,6 +20,7 @@ import { manifestModels } from "../../catalog/manifest.js";
 import { needsArgFile, writeArgFile, type ArgFile } from "../../util/argfile.js";
 import { exec, spawnStream, type Streamed } from "../../util/process.js";
 import { openClaudeSession } from "./live.js";
+import { FEEDBACK_CHANNELS } from "../feedback.js";
 import { requireMachine } from "../../selection.js";
 import { editPath, newClaudeTrack, parseClaudeMessage, type ClaudeTrack, type ForwardSubagents } from "./parser.js";
 
@@ -479,6 +480,8 @@ async function authStatus(): Promise<AuthStatus> {
 export const claudeProvider: Provider = {
   id: "claude",
   displayName: "Claude Code",
+  // `/feedback` and `/bug` work only in the interactive terminal, behind a consent screen.
+  feedbackChannel: FEEDBACK_CHANNELS.anthropic,
   capabilities,
   detect: () => detectInstallation(BIN, TESTED_RANGE),
   authStatus,

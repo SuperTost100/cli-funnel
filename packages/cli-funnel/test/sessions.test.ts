@@ -124,6 +124,9 @@ process.stdin.on("data", (d) => {
       case "account/rateLimits/read":
         send({ id: m.id, result: { rateLimits: { planType: "plus", primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: 1790000000 }, secondary: { usedPercent: 10, windowDurationMins: 10080, resetsAt: 1790500000 } } } });
         break;
+      case "feedback/upload":
+        send({ id: m.id, result: { threadId: p.threadId ?? "no-active-thread-x", promptHash: null } });
+        break;
     }
   }
 });
@@ -570,6 +573,29 @@ describe("codex threads, fork and rate limits", () => {
     await f.listThreads("codex");
     await f.rateLimits("codex");
     expect(await waitFor(() => spawns().every((s) => !alive(s.pid)))).toBe(true);
+  });
+
+  it("sends a feedback report about a session", async () => {
+    const f = make();
+    const r = await f.sendFeedback("codex", { classification: "bad_result", sessionId: "thr-a", reason: " Wrong answer. ", includeLogs: true });
+    expect(r).toEqual({ provider: "codex", sent: true, reportId: "thr-a" });
+    expect(entries().find((e) => e.method === "feedback/upload")!.params).toEqual({ classification: "bad_result", reason: "Wrong answer.", threadId: "thr-a", includeLogs: true });
+  });
+
+  it("refuses an unknown classification before it starts Codex", async () => {
+    const f = make();
+    await expect(f.sendFeedback("codex", { classification: "spam" as never })).rejects.toMatchObject({ code: "invalid-selection" });
+    expect(spawns()).toHaveLength(0);
+  });
+
+  it("hands back the manual channel where the CLI has no headless feedback, without starting it", async () => {
+    const f = make();
+    expect(f.feedbackSupport("codex")).toMatchObject({ provider: "codex", send: true });
+    expect(f.feedbackSupport("claude")).toMatchObject({ provider: "claude", send: false, channel: { email: "usersafety@anthropic.com" } });
+    const r = await f.sendFeedback("claude", { classification: "bad_result", sessionId: "s", includeLogs: true });
+    expect(r).toEqual({ provider: "claude", sent: false, channel: f.feedbackSupport("claude").channel });
+    expect(spawns()).toHaveLength(0);
+    await expect(f.sendFeedback("claude", { classification: "nope" as never })).rejects.toMatchObject({ code: "invalid-selection" });
   });
 
   it("throws unsupported on providers that cannot", async () => {
