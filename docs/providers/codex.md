@@ -58,11 +58,11 @@ An error from Codex, such as a thread that does not exist, comes back as `Funnel
 
 | Access | Approval policy | Sandbox | Behavior |
 | --- | --- | --- | --- |
-| `none` | `untrusted` | `read-only` | Every approval is denied without calling `onApproval`. The thread starts with tool features off (`shell_tool`, `unified_exec`, `apps`, `plugins`, `multi_agent`, and more), web search disabled, and every enabled MCP server from the user's or project's `config.toml` switched off by name. |
+| `none` | `untrusted` | `read-only` | Every approval is denied without calling `onApproval`. The thread starts with tool features off (`shell_tool`, `unified_exec`, `apps`, `plugins`, `multi_agent`, and more), web search disabled, and every MCP server in the effective config switched off by name. If Codex cannot list those servers, the run fails and no thread starts. |
 | `supervised` | `untrusted` | `workspace-write` | Every command that is not on Codex's known-safe list and every file change becomes an `approval.request`. |
 | `accept-edits` | `untrusted` | `workspace-write` | File changes are allowed without asking. Commands still go to `onApproval`. |
 | `auto` | `on-request` | `workspace-write` | Codex's auto review agent (`approvalsReviewer: auto_review`) decides escalations. Commands run inside the sandbox without asking. |
-| `full` | `never` | `danger-full-access` | No sandbox and no prompts. With `sandbox: true`, `workspace-write` instead. |
+| `full` | `never` | `danger-full-access` | No sandbox and no prompts. With `sandbox: true`, `workspace-write` instead. With a stricter `approvalPolicy`, the requests it adds go to `onApproval`. |
 
 `sandbox: true` changes only `full`, since the other levels already run commands in a sandbox. At `full` the thread starts with `sandbox: "workspace-write"` and approval policy `never`, so commands run without asking but can write only in `cwd` and the folders Codex's `workspace-write` defaults allow, such as the temp folder. Checked live on 0.164.0: a `full` run with `sandbox: true` could not write a file next to `cwd`, and wrote one inside it.
 
@@ -70,7 +70,9 @@ When `onApproval` is missing, requests are denied. Denied commands are declined 
 
 The `auto` level starts the thread with the auto review reviewer. A run inside the sandbox needs no review, which was verified. An escalation reviewed by the auto review agent was not exercised.
 
-Plugin and feature MCP servers are not overridden by name. Codex rejects the whole configuration when `mcp_servers.<name>.enabled` names a server no config file defines, and those servers go away with their feature. Verified live on 0.159.0: with `none`, a request to create a file and run `ls` produced no tool calls and no file.
+At `none` the MCP servers come from the app-server's `config/read` with the run's `cwd`. Codex parses its own config layers there, so every TOML spelling counts (quoted, dotted or escaped names, inline tables), and so do the system and project layers. Each server is switched off with `mcp_servers = { "<name>" = { enabled = false } }` in the thread config, since the dotted key `mcp_servers.<name>.enabled` cannot spell a name that contains a dot. An error from `config/read`, or an answer without an `mcp_servers` table, fails the run with `cli-failed` before `thread/start`. Checked live on 0.166.0: three servers spelled `"mcp_servers".quoted`, `"mcp_servers"."esc\u0061ped"` and `"mcp_servers"."a.b"` all started at `supervised` and none started at `none`.
+
+Plugin and feature MCP servers are not overridden by name. Codex rejects the whole configuration when an `enabled` override names a server no config file defines, and those servers go away with their feature. Verified live on 0.159.0: with `none`, a request to create a file and run `ls` produced no tool calls and no file.
 
 ## Run options
 
@@ -92,7 +94,7 @@ The capabilities are `mcpServers: ["http", "stdio"]`, `apiKey`, `plan`, `fileCha
 | `autoApprove` | `default_tools_approval_mode = "approve"` |
 | `command`, `args`, `env` | `command`, `args`, `env` |
 
-At `supervised` and `accept-edits` Codex asks before each call to a tool of the server, through `mcpServer/elicitation/request`. The request reaches `onApproval` as tool `mcp:<server>/<tool>` with the tool's arguments as `input`. With `autoApprove` Codex skips the question itself. At `full` Codex runs MCP tools without asking. Verified live at `supervised`: a local HTTP MCP server got `Authorization: Bearer ...` on every request, and the tool ran after one approval. With `autoApprove` it ran with no approval.
+At `supervised` and `accept-edits` Codex asks before each call to a tool of the server, through `mcpServer/elicitation/request`. The request reaches `onApproval` as tool `mcp:<server>/<tool>` with the tool's arguments as `input`. The elicitation does not name the call, so cli-funnel looks for the one call in flight on the same thread and server whose arguments equal the elicitation's `_meta.tool_params`. Subagent calls count, whether or not `forwardSubagentTools` is on. When no single call matches, the request goes as tool `mcp` with the elicitation's `tool_params` as `input`, so it never shows another call's tool. With `autoApprove` Codex skips the question itself. At `full` Codex runs MCP tools without asking. Verified live at `supervised`: a local HTTP MCP server got `Authorization: Bearer ...` on every request, and the tool ran after one approval. With `autoApprove` it ran with no approval.
 
 If you turned the `tool_call_mcp_elicitation` feature off, Codex asks the same question through `item/tool/requestUserInput` instead. Those requests go to `onApproval` too, not to `onQuestion`.
 
@@ -140,7 +142,7 @@ With `apiKey` the app-server starts with `-c cli_auth_credentials_store="ephemer
 | `forwardSubagentText: boolean` | none, the translator keeps the messages | all |
 | `forwardSubagentTools: boolean` | none, the translator keeps the calls | all |
 
-`approvalPolicy` may ask more often than the access level, never less. From most to fewest questions the order is `untrusted`, `on-request`, `never`. `none`, `supervised` and `accept-edits` use `untrusted`, so they accept only `untrusted`. `auto` uses `on-request` and also accepts `untrusted`. `full` accepts all three. The granular policy object is refused. At `none` every approval is still answered `deny`, whatever the policy.
+`approvalPolicy` may ask more often than the access level, never less. From most to fewest questions the order is `untrusted`, `on-request`, `never`. `none`, `supervised` and `accept-edits` use `untrusted`, so they accept only `untrusted`. `auto` uses `on-request` and also accepts `untrusted`. `full` accepts all three. The granular policy object is refused. At `none` every approval is still answered `deny`, whatever the policy. A policy stricter than the level's sends the requests Codex then raises to `onApproval`, as at `supervised`, and denies them when there is no handler. So `full` with `untrusted` asks before commands and file changes instead of allowing them.
 
 All three options were run live on 0.160 at `auto`.
 

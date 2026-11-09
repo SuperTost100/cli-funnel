@@ -66,6 +66,8 @@ export function fileChangeEvents(item: Params, cwd: string): FunnelEvent[] {
 /** An MCP tool call in progress, kept so its approval request can name the tool. */
 export interface McpCall {
   id: string;
+  /** The thread that made the call: this run's thread or one of its subagents'. */
+  thread: string;
   server: string;
   tool: string;
   arguments: unknown;
@@ -96,7 +98,10 @@ export interface Translated {
 export class Translator {
   /** File changes by item id, kept so approval requests can show them. */
   readonly items = new Map<string, unknown>();
-  /** MCP tool calls in flight, by item id. Codex asks to approve a call after its `item/started`, and calls can overlap. */
+  /**
+   * MCP tool calls in flight, by item id, from this thread and its subagents. Codex asks to approve a call after its
+   * `item/started`, and calls can overlap. Kept whether or not subagent tool events are forwarded.
+   */
   readonly mcpCalls = new Map<string, McpCall>();
   private messages: string[] = [];
   private usage: Usage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, totalTokens: 0 };
@@ -117,6 +122,7 @@ export class Translator {
   ) {}
 
   handle(method: string, p: Params = {}): Translated {
+    this.trackMcpCall(method, p);
     if (p.threadId && p.threadId !== this.threadId) return { events: this.fromSubagent(method, p) };
     switch (method) {
       case "item/agentMessage/delta":
@@ -179,6 +185,16 @@ export class Translator {
     return this.forward.tools ? this.itemCompleted(p.item).filter((e) => e.type === "tool.end").map(tag) : [];
   }
 
+  /** Keeps an MCP call of this thread or a subagent's from its start to its end, for its approval request. */
+  private trackMcpCall(method: string, p: Params): void {
+    const item = p.item;
+    if (item?.type !== "mcpToolCall" || typeof item.id !== "string") return;
+    const thread = p.threadId ?? this.threadId;
+    if (thread !== this.threadId && !this.subagents.has(thread)) return;
+    if (method === "item/started") this.mcpCalls.set(item.id, { id: item.id, thread, server: item.server, tool: item.tool, arguments: item.arguments });
+    else if (method === "item/completed") this.mcpCalls.delete(item.id);
+  }
+
   /** Remembers which item started a subagent thread, so the thread's items can name it as their parent. */
   private trackSubagent(item: Params): void {
     if (item?.type === "subAgentActivity" && item.kind === "started" && typeof item.agentThreadId === "string") {
@@ -199,7 +215,6 @@ export class Translator {
         this.items.set(item.id, item.changes);
         return [{ type: "tool.start", id: item.id, name: "file_change", input: { changes: item.changes } }];
       case "mcpToolCall":
-        this.mcpCalls.set(item.id, { id: item.id, server: item.server, tool: item.tool, arguments: item.arguments });
         return [{ type: "tool.start", id: item.id, name: `mcp:${item.server}/${item.tool}`, input: item.arguments }];
       case "dynamicToolCall":
         return [{ type: "tool.start", id: item.id, name: item.tool, input: item.arguments }];
@@ -238,7 +253,6 @@ export class Translator {
         return [...fileChangeEvents(item, this.cwd), { type: "tool.end", id: item.id, error }];
       }
       case "mcpToolCall": {
-        this.mcpCalls.delete(item.id);
         const error = item.error?.message ?? (item.status === "failed" ? "MCP tool call failed" : undefined);
         const out = item.result ? JSON.stringify(item.result.structuredContent ?? item.result.content) : undefined;
         return [{ type: "tool.end", id: item.id, output: out, error }];
