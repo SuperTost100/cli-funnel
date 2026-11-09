@@ -126,6 +126,17 @@ describe("renderRun access.reduced", () => {
   });
 });
 
+describe("renderRun warning", () => {
+  it("prints one line on stderr, but not with --quiet", async () => {
+    for (const quiet of [false, true]) {
+      let stderr = "";
+      const events: FunnelEvent[] = [{ type: "warning", message: "Config value replaced." }];
+      await renderRun(fakeStream(events, result()), { quiet, stdout: () => undefined, stderr: (s) => (stderr += s) });
+      expect(stderr).toBe(quiet ? "" : "\n[warning] Config value replaced.\n");
+    }
+  });
+});
+
 describe("renderRun", () => {
   it("streams text on stdout by default", async () => {
     const r = await render({});

@@ -361,7 +361,7 @@ export function createFunnel(options: FunnelOptions = {}) {
       }
       return p.forkThread(sessionId, opts);
     },
-    /** The account's usage windows now, and the limit that is reached, if any. Codex only: other providers throw `unsupported`. */
+    /** The account's usage windows now, and the limit that is reached, if any. Codex, Claude Code and Antigravity: other providers throw `unsupported`. */
     async rateLimits(id: ProviderId, opts?: ProcessOptions): Promise<RateLimits> {
       const p = provider(id);
       if (!p.rateLimits) throw new FunnelError(`${p.displayName} cannot report its usage windows.`, "unsupported");

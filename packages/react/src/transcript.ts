@@ -41,6 +41,8 @@ export interface Turn {
   limitAt?: number;
   /** Set when the CLI started with less access than `selection.access` asked for. */
   accessReduced?: AccessReduced;
+  /** The CLI's warnings, in order. */
+  warnings?: string[];
   status: "running" | "done" | "error";
   error?: string;
 }
@@ -85,6 +87,8 @@ export function applyEvent(turn: Turn, e: FunnelEvent, now: number = Date.now())
       const { type: _, ...accessReduced } = e;
       return { ...turn, accessReduced };
     }
+    case "warning":
+      return { ...turn, warnings: [...(turn.warnings ?? []), e.message] };
     case "structured":
       return { ...turn, structured: e.data, structuredError: undefined };
     case "done":

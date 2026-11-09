@@ -33,5 +33,5 @@
 - Model ids are concrete versioned names. Get them from `cli-funnel models <provider> --json`. Ollama and OpenAI-compatible ids are the server's own names, such as `llama3.2:3b`.
 - Provider ids: `claude`, `codex`, `agent`, `antigravity`, `anthropic-api`, `openai-api`, `gemini-api`, `ollama`, and `openai-compatible:<id>` for each configured server.
 - `access: "supervised"` needs an `onApproval` callback and is not available on every provider. Check `capabilities.access`.
-- `funnel.run()` returns `{ text, provider, model, sessionId?, usage?, finishReason, retries?, toolCalls, pendingToolCalls?, deniedActions, structured?, structuredError?, timeout?, limit?, accessReduced? }`. Fields marked `?` are absent when there is nothing to report.
+- `funnel.run()` returns `{ text, provider, model, sessionId?, usage?, finishReason, retries?, toolCalls, pendingToolCalls?, deniedActions, structured?, structuredError?, timeout?, limit?, accessReduced?, warnings? }`. Fields marked `?` are absent when there is nothing to report.
 - Do not run `login`, `logout`, `update`, `pull` or `rm` without asking the user.
