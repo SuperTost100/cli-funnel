@@ -31,6 +31,25 @@ const input = (over: Partial<RunInput["selection"]> = {}): RunInput => ({
   selection: { provider: "antigravity", model: "gemini-3.8-flash", effort: "low", cwd: "/tmp", access: "full", ...over },
 });
 
+describe("antigravity access.reduced", () => {
+  const init = (access: RunInput["selection"]["access"], permission_mode?: string) =>
+    createMapper({ access }).map({ event: "init", conversation_id: "c", init: { model: "m", cwd: "/w", permission_mode } }).map((e) => e.type);
+  const reduced = (permission_mode: string) =>
+    createMapper({ access: "full" }).map({ event: "init", conversation_id: "c", init: { permission_mode } })[1];
+
+  it("reports a start that is not always-proceed at full", () => {
+    expect(init("full", "request-review")).toEqual(["session", "access.reduced"]);
+    expect(reduced("request-review")).toEqual({ type: "access.reduced", access: "full", expected: "always-proceed", started: "request-review" });
+  });
+
+  it("reports nothing at full with always-proceed or no field, or at the levels it cannot tell apart", () => {
+    expect(init("full", "always-proceed")).toEqual(["session"]);
+    expect(init("full")).toEqual(["session"]);
+    expect(init("accept-edits", "request-review")).toEqual(["session"]);
+    expect(init("none", "proceed-in-sandbox")).toEqual(["session"]);
+  });
+});
+
 describe("antigravity parser", () => {
   it("groups effort variants into base models", () => {
     const models = parseModels(fx("models.txt"));

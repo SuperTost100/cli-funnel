@@ -67,6 +67,8 @@ An error from Codex, such as a thread that does not exist, comes back as `Funnel
 
 `sandbox: true` changes only `full`, since the other levels already run commands in a sandbox. At `full` the thread starts with `sandbox: "workspace-write"` and approval policy `never`, so commands run without asking but can write only in `cwd` and the folders Codex's `workspace-write` defaults allow, such as the temp folder. Checked live on 0.164.0: a `full` run with `sandbox: true` could not write a file next to `cwd`, and wrote one inside it.
 
+The `thread/start` and `thread/resume` answers say which sandbox and approval policy the thread got. A requirements file such as `/etc/codex/requirements.toml` can change both without an error, and Codex then sends a `configWarning` notification with the reason. When the sandbox is narrower than the one sent, the run emits `access.reduced` after `session` (see [Access levels](../access-levels.md#when-the-cli-starts-with-less-access)). When the policy asks less often than the level needs, the run fails with `cli-failed`.
+
 When `onApproval` is missing, requests are denied. Denied commands are declined with `decline`, so the turn continues and the model sees the refusal. Declined commands and file changes appear in `result.deniedActions`. Verified live: an approved `echo hi > a.txt` created the file, and a declined one did not.
 
 The `auto` level starts the thread with the auto review reviewer. A run inside the sandbox needs no review, which was verified. An escalation reviewed by the auto review agent was not exercised.

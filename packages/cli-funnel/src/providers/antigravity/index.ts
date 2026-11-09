@@ -337,6 +337,7 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   const brainDir = join(dataDir(home ?? homedir()), "brain");
   const mapper = createMapper({
     auth: home ? "api-key" : undefined,
+    access: requireMachine(input.selection).access,
     createdInRun: createdInRunFor(input, startedAt),
     brainDir,
     readText: readTaskList,

@@ -1,11 +1,9 @@
 import type { RunInput } from "../../types.js";
 import { bool, invalidOption, mcpServersFor, oneOf, optionsFor, requireAccess } from "../options.js";
 import { requireMachine } from "../../selection.js";
-import { planAccess, type ApprovalPolicy } from "./access.js";
+import { planAccess, POLICIES, type ApprovalPolicy } from "./access.js";
 import type { ForwardSubagents } from "./events.js";
 
-/** From the policy that asks most to the one that asks least. */
-const POLICIES: readonly ApprovalPolicy[] = ["untrusted", "on-request", "never"];
 const WEB_SEARCH = ["disabled", "cached", "indexed", "live"] as const;
 
 export interface CodexThreadOptions {

@@ -51,6 +51,14 @@ describe("redactErrors", () => {
   });
 });
 
+describe("redactErrors with access.reduced", () => {
+  it("masks tokens in the reason and leaves an event without one as it is", async () => {
+    const base = { type: "access.reduced", access: "full", expected: "danger-full-access", started: "read-only" } as const;
+    const out = await drain(redactErrors(events({ ...base, reason: `set by ${GH}` }, base), []));
+    expect(out).toEqual([{ ...base, reason: "set by [redacted]" }, base]);
+  });
+});
+
 describe("redactErrors with a thrown error", () => {
   it("masks the key in the message, stack and cause of an exception from the stream", async () => {
     const KEY = "sk-live-0123456789abcdef";

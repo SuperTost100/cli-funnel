@@ -122,6 +122,10 @@ export async function renderRun(
       const when = e.resetAt ? ` Resets at ${e.resetAt}.` : e.retryAfterMs !== undefined ? ` Retry in ${Math.ceil(e.retryAfterMs / 1000)} s.` : "";
       opts.stderr(`\n[${e.kind} limit] ${e.detail}${when}\n`);
     }
+    // A run that started with less access than asked can fail or stall in ways that look like the model's fault, so this shows with --quiet too.
+    if (e.type === "access.reduced") {
+      opts.stderr(`\n[access] The CLI started in ${e.started}, not ${e.expected}, for access ${e.access}.${e.reason ? ` ${e.reason}` : ""}\n`);
+    }
     if (opts.quiet) continue;
     if (e.type === "text.delta" && !data) opts.stdout(e.text);
     else if (e.type === "tool.start") opts.stderr(`\n[tool] ${e.name}\n`);

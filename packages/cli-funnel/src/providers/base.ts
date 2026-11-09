@@ -356,6 +356,11 @@ export function createRunFolder(input: RunInput): RunFolder {
           result.limit ??= limit;
           break;
         }
+        case "access.reduced": {
+          const { type: _, ...reduced } = e;
+          result.accessReduced ??= reduced;
+          break;
+        }
         case "retry":
           result.retries = (result.retries ?? 0) + 1;
           break;

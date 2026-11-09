@@ -1,10 +1,10 @@
-import { FunnelError, type ApprovalDecision, type ApprovalRequest, type FunnelEvent, type LiveSession, type RunInput } from "../../types.js";
+import { FunnelError, type AccessReduced, type ApprovalDecision, type ApprovalRequest, type FunnelEvent, type LiveSession, type RunInput } from "../../types.js";
 import { requireMachine } from "../../selection.js";
 import { Channel } from "../../util/channel.js";
 import { spawnStream } from "../../util/process.js";
 import { redactErrors, runSecrets } from "../../util/redact.js";
 import { askApproval, askQuestion, findBinary, rawEvent, SETTLE_MS, stderrTail } from "../base.js";
-import { planAccess } from "./access.js";
+import { planAccess, startedAccess } from "./access.js";
 import { denyNote, effectiveReply, isQuestion, toApprovalRequest, toQuestionReply, toQuestionRequest, toReply, type Reply, type ServerRequest } from "./approvals.js";
 import { authKind } from "./auth.js";
 import { Translator } from "./events.js";
@@ -186,6 +186,10 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
   let exited = false;
   let closed = false;
   let current: Turn | undefined;
+  /** `configWarning` summaries. They arrive before the `thread/start` answer, and `startedAccess` quotes them. */
+  const warnings: string[] = [];
+  /** Set when the thread started with less access than asked. Every turn reports it after `session`. */
+  let reduced: AccessReduced | undefined;
 
   const emit = (t: Turn, e: FunnelEvent) => {
     if (t.held) t.held.push(e);
@@ -197,7 +201,10 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
     const held = t.held;
     if (!held) return;
     t.held = undefined;
-    if (t.session) t.out.push(t.session());
+    if (t.session) {
+      t.out.push(t.session());
+      if (reduced) t.out.push({ type: "access.reduced", ...reduced });
+    }
     for (const e of held) t.out.push(e);
   };
 
@@ -226,6 +233,7 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
       if (t && !t.finished && t.input.verbose) emit(t, rawEvent("codex", "stdout", raw, t.input));
     },
     notification(method, params) {
+      if (method === "configWarning" && typeof params?.summary === "string") warnings.push(params.summary);
       const t = current;
       if (!t || t.finished) return;
       if (method === "turn/started" && params?.threadId === threadId && params.turn?.id) t.setTurnId(params.turn.id);
@@ -298,6 +306,7 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
     const started = first.sessionId
       ? await rpc.request("thread/resume", { threadId: first.sessionId, ...settings })
       : await rpc.request("thread/start", { ...settings, ...start });
+    reduced = startedAccess(requireMachine(first.selection).access, settings, started, warnings);
     threadId = started.thread.id as string;
     model = started.model;
     if (typeof started.cwd === "string") cwd = started.cwd;

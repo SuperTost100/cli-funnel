@@ -202,6 +202,17 @@ describe("useRun", () => {
     expect(result.current.turns[0]?.limit).toEqual(result.current.result.limit);
   });
 
+  it("puts the first access.reduced report on the result and the turn", async () => {
+    const a = stream<RunEvent>();
+    const { result } = renderHook(() => useRun(fakeClient({ run: vi.fn(() => a.gen) })));
+    act(() => void result.current.send("one", SEL));
+    const reduced = { access: "accept-edits", expected: "workspace-write", started: "read-only", reason: "Set by requirements." } as const;
+    act(() => a.push({ type: "access.reduced", ...reduced }));
+    act(() => a.push({ type: "access.reduced", ...reduced, started: "other" }));
+    await waitFor(() => expect(result.current.result.accessReduced).toEqual(reduced));
+    expect(result.current.turns[0]?.accessReduced).toEqual(reduced);
+  });
+
   it("parses a JSON answer into result.structured and explains a text answer in result.structuredError", async () => {
     const answer = async (text: string) => {
       const a = stream<RunEvent>();
