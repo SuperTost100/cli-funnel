@@ -30,8 +30,15 @@ Protocol flow:
 | `thread/tokenUsage/updated` | `usage` (sum of the per-call `last` breakdown, so a resumed thread reports only this turn) |
 | `turn/completed` | `done` (`cancelled` when interrupted) or `error` when the turn failed |
 | `error` with `willRetry: false` | `error` |
+| `configWarning`, `deprecationNotice`, `warning`, `guardianWarning` | `warning` (see [Warnings](#warnings)) |
 
 Usage has no cost figure. `inputTokens` includes cached tokens, as Codex reports them.
+
+## Warnings
+
+Four notifications become `warning` events: `configWarning` and `deprecationNotice`, which send a summary and optional details, and `warning` and `guardianWarning`, which send a message. The text is the summary followed by the details, or the message. They are not errors and the run goes on. `result.warnings` lists them in order.
+
+Codex sends some of them before the thread starts, and a requirements fallback arrives twice, as `configWarning` and as `warning`. cli-funnel holds them until the turn's `session` event (and `access.reduced`, when there is one) has gone out, reports each text once per session, and emits later ones at once. A warning that arrives between turns of a live session comes with the next turn. When the session fails to start, the warnings come before the `error`, since they often give the reason.
 
 ## Live sessions
 

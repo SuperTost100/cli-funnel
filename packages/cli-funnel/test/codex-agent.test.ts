@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { denyNote, effectiveReply, isQuestion, toApprovalRequest, toQuestionReply, toQuestionRequest, toReply } from "../src/providers/codex/approvals.js";
 import { startedAccess } from "../src/providers/codex/access.js";
 import { authKind } from "../src/providers/codex/auth.js";
-import { fileChangeEvents, planEvent, Translator } from "../src/providers/codex/events.js";
+import { fileChangeEvents, planEvent, Translator, warningText } from "../src/providers/codex/events.js";
 import { codexProvider } from "../src/providers/codex/index.js";
 import { appServerArgs } from "../src/providers/codex/live.js";
 import { agentConfig, mcpConfig } from "../src/providers/codex/options.js";
@@ -85,6 +85,28 @@ describe("codex started access", () => {
     expect(startedAccess("auto", auto, answer("workspaceWrite", "untrusted"), [])).toBeUndefined();
     expect(startedAccess("auto", auto, { sandbox: { type: "workspaceWrite" } }, [])).toBeUndefined();
     expect(startedAccess("auto", auto, answer("workspaceWrite", "granular"), [])).toBeUndefined();
+  });
+});
+
+describe("codex warning text", () => {
+  it("joins the summary and the details of configWarning and deprecationNotice", () => {
+    expect(warningText("configWarning", { summary: "Codex could not find bubblewrap on PATH.", details: null })).toBe("Codex could not find bubblewrap on PATH.");
+    expect(warningText("configWarning", { summary: "Bad value.", details: "" })).toBe("Bad value.");
+    expect(warningText("deprecationNotice", { summary: "`foo` is deprecated.", details: "Use `bar`." })).toBe("`foo` is deprecated. Use `bar`.");
+  });
+
+  it("takes the message of warning and guardianWarning, with or without a thread", () => {
+    expect(warningText("warning", { threadId: "t", message: "Falling back." })).toBe("Falling back.");
+    expect(warningText("warning", { threadId: null, message: "Falling back." })).toBe("Falling back.");
+    expect(warningText("guardianWarning", { threadId: "t", message: "Paused." })).toBe("Paused.");
+  });
+
+  it("gives nothing for another method or a notification without text", () => {
+    expect(warningText("error", { message: "x" })).toBeUndefined();
+    expect(warningText("item/started", { summary: "x" })).toBeUndefined();
+    expect(warningText("configWarning", { details: "x" })).toBeUndefined();
+    expect(warningText("warning", { threadId: "t", message: "" })).toBeUndefined();
+    expect(warningText("warning", undefined)).toBeUndefined();
   });
 });
 
@@ -335,6 +357,7 @@ process.stdin.on("data", (d) => {
         break;
       case "thread/start":
         for (const summary of JSON.parse(process.env.FAKE_WARNINGS || "[]")) send({ method: "configWarning", params: { summary, details: null } });
+        for (const n of JSON.parse(process.env.FAKE_NOTES || "[]")) send(n);
         send({ id: m.id, result: { thread: { id: thread }, model: p.model, cwd: p.cwd, ...JSON.parse(process.env.FAKE_STARTED || "{}") } });
         break;
       case "turn/steer": send({ id: m.id, result: { turnId: turn } }); break;
@@ -358,6 +381,13 @@ process.stdin.on("data", (d) => {
           send({ method: "item/completed", params: { threadId: "child-1", item: { type: "agentMessage", id: "m1", text: "a.txt", phase: "final_answer" } } });
           send({ method: "turn/completed", params: { threadId: "child-1", turn: { id: "child-turn", status: "completed" } } });
           done("ok");
+        } else if (prompt === "late-warning") {
+          // After the turn's session event has gone out. A warning from another thread counts too.
+          setTimeout(() => {
+            send({ method: "warning", params: { threadId: thread, message: "mid-turn" } });
+            send({ method: "guardianWarning", params: { threadId: "other-thread", message: "from elsewhere" } });
+            done("ok");
+          }, 200);
         } else if (prompt === "fail") {
           process.stderr.write("auth failed for " + process.env.FAKE_KEY + "\\n");
           send({ method: "turn/completed", params: { threadId: thread, turn: { id: turn, status: "failed", error: { message: "Incorrect API key provided: " + process.env.FAKE_KEY } } } });
@@ -403,6 +433,7 @@ describe("codex agent features through the app-server", () => {
     delete process.env.FAKE_MCP;
     delete process.env.FAKE_WARNINGS;
     delete process.env.FAKE_STARTED;
+    delete process.env.FAKE_NOTES;
   });
 
   it("reports a thread that started in a narrower sandbox, on the result and after session", async () => {
@@ -413,6 +444,41 @@ describe("codex agent features through the app-server", () => {
     expect(events.map((e) => e.type).slice(0, 2)).toEqual(["session", "access.reduced"]);
     expect(events[1]).toEqual({ type: "access.reduced", ...reduced });
     expect(res.accessReduced).toEqual(reduced);
+    // The warnings follow, so a caller that stops reading at the reduction still saw it first.
+    expect(events.map((e) => e.type).slice(0, 4)).toEqual(["session", "access.reduced", "warning", "warning"]);
+    expect(res.warnings).toEqual([BUBBLEWRAP_WARNING, SANDBOX_WARNING]);
+  });
+
+  it("reports warnings after session in order, and drops a text it already reported", async () => {
+    const requirements = "Configured value for `approval_policy` is disallowed by requirements; falling back to required value OnRequest.";
+    process.env.FAKE_WARNINGS = JSON.stringify([requirements]);
+    process.env.FAKE_NOTES = JSON.stringify([
+      { method: "deprecationNotice", params: { summary: "`foo` is deprecated.", details: "Use `bar`." } },
+      { method: "warning", params: { threadId: "thr-1", message: requirements } },
+      { method: "guardianWarning", params: { threadId: "thr-1", message: "Guardian paused." } },
+    ]);
+    const { res, events } = await run("hi");
+    expect(events.map((e) => e.type)).toEqual(["session", "warning", "warning", "warning", "done"]);
+    expect(events.filter((e) => e.type === "warning")).toEqual([
+      { type: "warning", message: requirements },
+      { type: "warning", message: "`foo` is deprecated. Use `bar`." },
+      { type: "warning", message: "Guardian paused." },
+    ]);
+    expect(res.warnings).toEqual([requirements, "`foo` is deprecated. Use `bar`.", "Guardian paused."]);
+  });
+
+  it("emits a warning that arrives during the turn at once, from any thread", async () => {
+    const { res, events } = await run("late-warning");
+    expect(events.map((e) => e.type)).toEqual(["session", "warning", "warning", "done"]);
+    expect(res.warnings).toEqual(["mid-turn", "from elsewhere"]);
+  });
+
+  it("sends the warnings before the error when the session fails to start", async () => {
+    process.env.FAKE_WARNINGS = JSON.stringify([APPROVAL_WARNING]);
+    process.env.FAKE_STARTED = JSON.stringify({ sandbox: { type: "workspaceWrite" }, approvalPolicy: "never" });
+    await run("hi").catch(() => undefined);
+    expect(events.map((e) => e.type)).toEqual(["warning", "error"]);
+    expect(events[0]).toEqual({ type: "warning", message: APPROVAL_WARNING });
   });
 
   it("fails the run when Codex forces an approval policy that asks less often than the level needs", async () => {

@@ -7,7 +7,7 @@ import { askApproval, askQuestion, findBinary, rawEvent, SETTLE_MS, stderrTail }
 import { planAccess, startedAccess } from "./access.js";
 import { denyNote, effectiveReply, isQuestion, toApprovalRequest, toQuestionReply, toQuestionRequest, toReply, type Reply, type ServerRequest } from "./approvals.js";
 import { authKind } from "./auth.js";
-import { Translator } from "./events.js";
+import { Translator, warningText } from "./events.js";
 import { BINARY, INITIALIZE_PARAMS } from "./index.js";
 import { agentConfig, codexForward, threadOptions } from "./options.js";
 import { RpcClient } from "./rpc.js";
@@ -190,13 +190,20 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
   const warnings: string[] = [];
   /** Set when the thread started with less access than asked. Every turn reports it after `session`. */
   let reduced: AccessReduced | undefined;
+  /** Every warning this session has reported or queued. Codex can send one text twice, for example a requirements fallback. */
+  const reported = new Set<string>();
+  /** Warnings that came before a turn's `session` event went out, or between turns. The next `open` sends them. */
+  const queued: string[] = [];
 
   const emit = (t: Turn, e: FunnelEvent) => {
     if (t.held) t.held.push(e);
     else t.out.push(e);
   };
 
-  /** Sends the `session` event, when the thread is known, then the events held back meanwhile. */
+  /**
+   * Sends the `session` event, when the thread is known, then the queued warnings, then the events held back meanwhile.
+   * A turn whose session never started gets the warnings too, since they often say why.
+   */
   const open = (t: Turn) => {
     const held = t.held;
     if (!held) return;
@@ -205,7 +212,17 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
       t.out.push(t.session());
       if (reduced) t.out.push({ type: "access.reduced", ...reduced });
     }
+    for (const message of queued.splice(0)) t.out.push({ type: "warning", message });
     for (const e of held) t.out.push(e);
+  };
+
+  /** Reports a warning once per session: at once during a turn whose `session` went out, otherwise at the next `open`. */
+  const warn = (message: string) => {
+    if (reported.has(message)) return;
+    reported.add(message);
+    const t = current;
+    if (t && !t.finished && !t.held) t.out.push({ type: "warning", message });
+    else queued.push(message);
   };
 
   const finish = (t: Turn, events: FunnelEvent[]) => {
@@ -234,6 +251,9 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
     },
     notification(method, params) {
       if (method === "configWarning" && typeof params?.summary === "string") warnings.push(params.summary);
+      // Before the checks below: a warning is not tied to this turn or this thread.
+      const warning = warningText(method, params);
+      if (warning) warn(warning);
       const t = current;
       if (!t || t.finished) return;
       if (method === "turn/started" && params?.threadId === threadId && params.turn?.id) t.setTurnId(params.turn.id);
