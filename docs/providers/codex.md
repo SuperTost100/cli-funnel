@@ -32,7 +32,7 @@ Protocol flow:
 | `error` with `willRetry: false` | `error` |
 | `configWarning`, `deprecationNotice`, `warning`, `guardianWarning` | `warning` (see [Warnings](#warnings)) |
 
-Usage has no cost figure. `inputTokens` includes cached tokens, as Codex reports them.
+Usage has no cost figure. `inputTokens` includes cached tokens, as Codex reports them. When Codex wrote tokens to the prompt cache (`cacheWriteInputTokens`), `cacheCreationInputTokens` has their sum. Codex counts them in `inputTokens` too, as the Responses API does with `cache_write_tokens`. The field is unset when no call wrote any.
 
 ## Warnings
 

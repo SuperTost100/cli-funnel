@@ -167,6 +167,8 @@ export class Translator {
         u.outputTokens += l.outputTokens;
         u.cachedInputTokens = (u.cachedInputTokens ?? 0) + l.cachedInputTokens;
         u.reasoningTokens = (u.reasoningTokens ?? 0) + l.reasoningOutputTokens;
+        // Counted in inputTokens, like the cached ones. Older servers send no such field.
+        if (typeof l.cacheWriteInputTokens === "number" && l.cacheWriteInputTokens > 0) u.cacheCreationInputTokens = (u.cacheCreationInputTokens ?? 0) + l.cacheWriteInputTokens;
         u.totalTokens += l.totalTokens;
         return { events: [{ type: "usage", usage: { ...u } }] };
       }

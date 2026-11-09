@@ -107,7 +107,7 @@ export interface Usage {
   inputTokens: number;
   outputTokens: number;
   cachedInputTokens?: number;
-  /** Input tokens written to the prompt cache. Counted in `inputTokens`. Anthropic only. */
+  /** Input tokens written to the prompt cache. Counted in `inputTokens`. Set by Anthropic and Codex, and only when there were any. */
   cacheCreationInputTokens?: number;
   reasoningTokens?: number;
   totalTokens: number;
