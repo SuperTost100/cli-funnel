@@ -22,6 +22,7 @@ import {
 import {
   FunnelError,
   type ApiProviderId,
+  type FeedbackChannel,
   type FunnelEvent,
   type Message,
   type ModelInfo,
@@ -31,6 +32,7 @@ import {
   type ToolCall,
 } from "../types.js";
 import { streamResponses } from "./responses.js";
+import { FEEDBACK_CHANNELS } from "./feedback.js";
 import { joinUrl } from "../util/url.js";
 
 /** What a stream hands back besides events. */
@@ -82,6 +84,8 @@ interface ApiContext {
 interface ApiSpec {
   id: ApiProviderId;
   displayName: string;
+  /** None of the APIs takes feedback, so this is the vendor's manual channel. */
+  feedbackChannel: FeedbackChannel;
   envVar: string;
   keyHint: string;
   defaultBaseUrl: string;
@@ -138,6 +142,7 @@ export function anthropicBody(input: RunInput, messages: Msg[]): Record<string, 
 const anthropic: ApiSpec = {
   id: "anthropic-api",
   displayName: "Anthropic API",
+  feedbackChannel: FEEDBACK_CHANNELS.anthropic,
   envVar: "ANTHROPIC_API_KEY",
   keyHint: "console.anthropic.com",
   defaultBaseUrl: "https://api.anthropic.com",
@@ -393,6 +398,7 @@ const openaiApiFor = (model: string, mode?: OpenAIApi): OpenAIApi => mode ?? (op
 const openai: ApiSpec = {
   id: "openai-api",
   displayName: "OpenAI API",
+  feedbackChannel: FEEDBACK_CHANNELS.openai,
   envVar: "OPENAI_API_KEY",
   keyHint: "platform.openai.com",
   defaultBaseUrl: "https://api.openai.com/v1",
@@ -430,6 +436,7 @@ const GEMINI_BLOCKED = new Set(["SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED
 const gemini: ApiSpec = {
   id: "gemini-api",
   displayName: "Gemini API",
+  feedbackChannel: FEEDBACK_CHANNELS.google,
   envVar: "GEMINI_API_KEY",
   keyHint: "aistudio.google.com",
   defaultBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
@@ -581,6 +588,7 @@ function makeApiProvider(spec: ApiSpec, getKey: () => string | undefined, config
   return {
     id: spec.id,
     displayName: spec.displayName,
+    feedbackChannel: spec.feedbackChannel,
     capabilities: httpCapabilities({ cache: spec.cache }),
     detect: async () => ({ installed: true, testedRange: { min: "0" }, withinTestedRange: true }),
     authStatus: async () => {

@@ -225,6 +225,7 @@ npm test                # unit tests against recorded CLI output, no logins need
 | [Access levels](docs/access-levels.md)                     | What each CLI can enforce                                            |
 | [Run options](docs/run-options.md)                         | System prompt, images, JSON answers and the output limit             |
 | [Live sessions](docs/sessions.md)                          | Keep Claude Code and Codex running between turns, steer and fork     |
+| [Feedback reports](docs/feedback.md)                       | Report a result through Codex, or each vendor's manual channel       |
 | [Sign-in and updates](docs/auth-and-updates.md)            | Passing login and update through to each CLI                         |
 | [UI components](docs/ui.md)                                | Hooks, picker, login panel and approvals                             |
 | [Run the server](docs/serve.md)                            | Config file, folders, CORS, run log, Docker Compose and systemd      |

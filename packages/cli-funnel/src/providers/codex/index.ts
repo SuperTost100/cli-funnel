@@ -4,9 +4,10 @@ import type { AuthStatus, FunnelEvent, ModelInfo, Provider, ProviderContext, Run
 import { exec } from "../../util/process.js";
 import { detectInstallation, findBinary, runLogout, runUpdate, spawnLogin } from "../base.js";
 import { parseLoginStatus } from "./auth.js";
+import { FEEDBACK_CHANNELS } from "../feedback.js";
 import { parseCatalog } from "./models.js";
 import { openCodexSession } from "./live.js";
-import { forkThread, listThreads, rateLimits } from "./threads.js";
+import { forkThread, listThreads, rateLimits, sendFeedback } from "./threads.js";
 
 export const BINARY = "codex";
 const TESTED_RANGE = { min: "0.150.0" };
@@ -63,6 +64,7 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
 export const codexProvider: Provider = {
   id: "codex",
   displayName: "Codex",
+  feedbackChannel: FEEDBACK_CHANNELS.openai,
   capabilities: {
     access: ["none", "supervised", "accept-edits", "auto", "full"],
     effort: true,
@@ -96,4 +98,5 @@ export const codexProvider: Provider = {
   listThreads,
   forkThread,
   rateLimits,
+  sendFeedback,
 };

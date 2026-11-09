@@ -23,6 +23,7 @@ import { detectInstallation, exitedEarly, findBinary, isTerminal, LOGIN_TIMEOUT_
 import { createMapper, parseModels } from "./parser.js";
 import { SubagentTranscripts, type ForwardSubagents } from "./transcript.js";
 import { composePrompt } from "../prompt.js";
+import { FEEDBACK_CHANNELS } from "../feedback.js";
 import { bool, dirList, flag, mcpServersFor, optionsFor, positive, requireAccess } from "../options.js";
 import { requireMachine } from "../../selection.js";
 import { ownedWorkspace } from "../../util/workspace.js";
@@ -393,6 +394,7 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
 export const antigravityProvider: Provider = {
   id: "antigravity",
   displayName: "Antigravity",
+  feedbackChannel: FEEDBACK_CHANNELS.antigravity,
   capabilities: {
     access: ["none", "accept-edits", "full"],
     effort: true,

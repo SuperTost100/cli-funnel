@@ -5,6 +5,7 @@ import { validateProviderOptions, validateSelection } from "./selection.js";
 import { SessionPool, type LiveSessionInfo, type SessionOptions } from "./sessions.js";
 import { createRunFolder } from "./providers/base.js";
 import { mcpServersFor } from "./providers/options.js";
+import { checkFeedbackReport } from "./providers/feedback.js";
 import { redactSecrets, runSecrets } from "./util/redact.js";
 import { PROVIDERS } from "./providers/index.js";
 import { memoryHistory } from "./providers/history.js";
@@ -15,6 +16,9 @@ import { RunQueue, waitForSlot, type RunLimits } from "./queue.js";
 import {
   FunnelError,
   type AuthStatus,
+  type FeedbackReport,
+  type FeedbackResult,
+  type FeedbackSupport,
   type FunnelEvent,
   type HistoryStore,
   type Installation,
@@ -362,6 +366,24 @@ export function createFunnel(options: FunnelOptions = {}) {
       const p = provider(id);
       if (!p.rateLimits) throw new FunnelError(`${p.displayName} cannot report its usage windows.`, "unsupported");
       return p.rateLimits(opts);
+    },
+    /** Whether `sendFeedback` can send a report for this provider, and the vendor's manual channel. Starts no process. */
+    feedbackSupport(id: ProviderId): FeedbackSupport {
+      const p = provider(id);
+      // A copy, so a caller that edits it cannot change the channel other callers get.
+      return { provider: p.id, send: Boolean(p.sendFeedback), ...(p.feedbackChannel ? { channel: structuredClone(p.feedbackChannel) } : {}) };
+    },
+    /**
+     * Sends a feedback report about a session to the vendor through the CLI's own feedback path. Only Codex has one.
+     * Other providers resolve with `sent: false` and the vendor's manual channel, and nothing leaves the machine. With
+     * `includeLogs`, Codex also uploads its logs and the saved conversation. A `cli-failed` error after a timeout does
+     * not prove the report was not sent.
+     */
+    async sendFeedback(id: ProviderId, report: FeedbackReport, opts?: ProcessOptions): Promise<FeedbackResult> {
+      const p = provider(id);
+      checkFeedbackReport(report);
+      if (!p.sendFeedback) return { provider: p.id, sent: false, ...(p.feedbackChannel ? { channel: structuredClone(p.feedbackChannel) } : {}) };
+      return { provider: p.id, sent: true, reportId: await p.sendFeedback(report, opts) };
     },
 
     /** Runs one turn and resolves with the final text, usage and tool calls. */

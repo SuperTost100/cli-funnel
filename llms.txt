@@ -11,6 +11,7 @@
 - [Access levels](docs/access-levels.md): what each CLI can enforce
 - [Run options](docs/run-options.md): system prompt, images, JSON schema answers, output limit, access `none`, `verbose` for every provider's raw output, and which providers forward subagent tool calls and text
 - [Live sessions](docs/sessions.md): keep CLI processes between turns, steer, close, fork, list threads
+- [Feedback reports](docs/feedback.md): send a report about a result through Codex, or get each vendor's manual reporting channel
 - [Sign-in and updates](docs/auth-and-updates.md)
 - [UI components](docs/ui.md): React hooks, picker, login panel, approvals
 - [Run the server](docs/serve.md): config file, folders, CORS, run log, tailnet deploy

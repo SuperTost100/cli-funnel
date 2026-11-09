@@ -1,6 +1,7 @@
-import { FunnelError, type Limit, type ListThreadsOptions, type ProcessOptions, type RateLimits, type ThreadInfo, type ThreadPage, type UsageWindow } from "../../types.js";
+import { FunnelError, type FeedbackReport, type Limit, type ListThreadsOptions, type ProcessOptions, type RateLimits, type ThreadInfo, type ThreadPage, type UsageWindow } from "../../types.js";
 import { spawnStream } from "../../util/process.js";
 import { findBinary, stderrTail } from "../base.js";
+import { checkFeedbackReport } from "../feedback.js";
 import { snapshotLimit } from "./events.js";
 import { BINARY, INITIALIZE_PARAMS } from "./index.js";
 import { RpcClient } from "./rpc.js";
@@ -8,6 +9,8 @@ import { RpcClient } from "./rpc.js";
 type Json = Record<string, any>;
 
 const CALL_TIMEOUT_MS = 30_000;
+// With logs, Codex gathers its log database, the saved conversation and a diagnostics report before it uploads.
+const FEEDBACK_TIMEOUT_MS = 120_000;
 
 /** A `Thread` from `thread/list` or `thread/fork`. Times are Unix seconds on the wire. */
 export function parseThread(t: Json): ThreadInfo {
@@ -54,7 +57,7 @@ export function parseRateLimits(result: Json): RateLimits {
 }
 
 /** Starts `codex app-server`, makes one request and stops it. For calls that need no running turn. */
-async function call(method: string, params: unknown, options: ProcessOptions = {}): Promise<Json> {
+async function call(method: string, params: unknown, options: ProcessOptions = {}, timeoutMs = CALL_TIMEOUT_MS): Promise<Json> {
   const path = findBinary(BINARY);
   if (!path) throw new FunnelError("codex is not installed.", "not-installed");
   const proc = spawnStream(path, ["app-server"], { env: options.env, signal: options.signal });
@@ -72,7 +75,7 @@ async function call(method: string, params: unknown, options: ProcessOptions = {
       return (await rpc.request(method, params)) as Json;
     })();
     const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`Codex did not answer ${method} in time.`)), CALL_TIMEOUT_MS);
+      timer = setTimeout(() => reject(new Error(`Codex did not answer ${method} in time.`)), timeoutMs);
     });
     return await Promise.race([answer, timeout]);
   } catch (e) {
@@ -111,4 +114,32 @@ export async function forkThread(sessionId: string, options: ProcessOptions = {}
 
 export async function rateLimits(options: ProcessOptions = {}): Promise<RateLimits> {
   return parseRateLimits(await call("account/rateLimits/read", null, options));
+}
+
+/** The params of `feedback/upload`. Blank reasons and unset fields stay out. */
+export function feedbackParams(report: FeedbackReport): Json {
+  checkFeedbackReport(report);
+  const reason = report.reason?.trim();
+  return {
+    classification: report.classification,
+    ...(reason ? { reason } : {}),
+    ...(report.sessionId ? { threadId: report.sessionId } : {}),
+    includeLogs: report.includeLogs === true,
+  };
+}
+
+/** The result of `feedback/upload`. `threadId` is the id Codex filed the report under. */
+export function parseFeedback(result: Json): string {
+  const id = result?.threadId;
+  if (typeof id !== "string" || !id) throw new FunnelError("feedback/upload answered without a report id.", "cli-failed");
+  return id;
+}
+
+/**
+ * `feedback/upload` sends the report to OpenAI, the same request the TUI's `/feedback` makes. After a timeout or an
+ * exit before the answer, the report may still have reached OpenAI, so a retry can send it twice.
+ */
+export async function sendFeedback(report: FeedbackReport, options: ProcessOptions = {}): Promise<string> {
+  const params = feedbackParams(report);
+  return parseFeedback(await call("feedback/upload", params, options, FEEDBACK_TIMEOUT_MS));
 }

@@ -425,6 +425,55 @@ export interface RateLimits {
   limit?: Limit;
 }
 
+/** The kinds of feedback report. They are the values Codex's own `/feedback` command sends. */
+export const FEEDBACK_CLASSIFICATIONS = ["bug", "bad_result", "good_result", "safety_check", "other"] as const;
+export type FeedbackClassification = (typeof FEEDBACK_CLASSIFICATIONS)[number];
+
+/** A report for `funnel.sendFeedback`. */
+export interface FeedbackReport {
+  classification: FeedbackClassification;
+  /** The session the report is about. Without it the report carries no conversation. */
+  sessionId?: string;
+  /** The user's own words about what happened. */
+  reason?: string;
+  /** Attach the CLI's logs and, with `sessionId`, the saved conversation. Off by default. */
+  includeLogs?: boolean;
+}
+
+/** Where a person reports a result to the vendor by hand. */
+export interface FeedbackChannel {
+  /** A page or form for the report. */
+  url?: string;
+  /** An address for the report. */
+  email?: string;
+  /** What the channel takes or where to find it. */
+  note?: string;
+  /** The vendor pages that name this channel. */
+  sources: string[];
+}
+
+/** What `funnel.feedbackSupport` tells before anything is sent. */
+export interface FeedbackSupport {
+  provider: ProviderId;
+  /** True when `sendFeedback` sends the report through the CLI. */
+  send: boolean;
+  /** The vendor's manual channel. Absent for model servers, where the operator or the model's publisher takes reports. */
+  channel?: FeedbackChannel;
+}
+
+/**
+ * What `funnel.sendFeedback` resolves with. `sent: true` means the vendor accepted the report. `sent: false` means the
+ * provider has no headless channel, nothing left the machine, and `channel` says where the user can report it.
+ */
+export type FeedbackResult =
+  | {
+      provider: ProviderId;
+      sent: true;
+      /** The id the vendor files the report under. Codex uses the session id, or `no-active-thread-<uuid>` without one. */
+      reportId: string;
+    }
+  | { provider: ProviderId; sent: false; channel?: FeedbackChannel };
+
 /** Environment and abort signal for the calls that start a short-lived CLI process. */
 export interface ProcessOptions {
   /** Extra environment for the CLI process, for example `CODEX_HOME`. */
@@ -784,6 +833,10 @@ export interface Provider {
   forkThread?(sessionId: string, options?: ProcessOptions): Promise<string>;
   /** Reads the account's usage windows. Codex only. */
   rateLimits?(options?: ProcessOptions): Promise<RateLimits>;
+  /** Where users report a result by hand. See `funnel.feedbackSupport`. */
+  readonly feedbackChannel?: FeedbackChannel;
+  /** Sends a feedback report through the CLI, as its own feedback command does, and resolves with the report id. Codex only. */
+  sendFeedback?(report: FeedbackReport, options?: ProcessOptions): Promise<string>;
 }
 
 /** A CLI process that keeps one conversation across turns. Made by `Provider.openSession`. */
