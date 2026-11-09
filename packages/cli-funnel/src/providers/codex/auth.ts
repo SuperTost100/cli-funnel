@@ -19,3 +19,21 @@ export function authKind(res: unknown): "account" | "api-key" | undefined {
   const type = (res as { account?: { type?: unknown } | null } | null)?.account?.type;
   return type === "apiKey" ? "api-key" : type === "chatgpt" ? "account" : undefined;
 }
+
+/**
+ * `AuthStatus` from the `account/read` response, for a ChatGPT account or an API key. The labels match `parseLoginStatus`.
+ * `account` is the email and `plan` the plan type, as Claude Code reports them. Any other answer (no account, or a
+ * Bedrock or GCP login) gives undefined, so the caller falls back to `codex login status`.
+ */
+export function accountStatus(res: unknown): AuthStatus | undefined {
+  const account = (res as { account?: { type?: unknown; email?: unknown; planType?: unknown } | null } | null)?.account;
+  if (account?.type === "apiKey") return { loggedIn: true, method: "API key", detail: "Logged in using an API key" };
+  if (account?.type !== "chatgpt") return undefined;
+  return {
+    loggedIn: true,
+    method: "ChatGPT",
+    ...(typeof account.email === "string" && account.email ? { account: account.email } : {}),
+    ...(typeof account.planType === "string" && account.planType ? { plan: account.planType } : {}),
+    detail: "Logged in using ChatGPT",
+  };
+}

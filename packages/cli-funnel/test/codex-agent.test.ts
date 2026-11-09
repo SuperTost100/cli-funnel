@@ -5,10 +5,11 @@ import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { denyNote, effectiveReply, isQuestion, toApprovalRequest, toQuestionReply, toQuestionRequest, toReply } from "../src/providers/codex/approvals.js";
 import { startedAccess } from "../src/providers/codex/access.js";
-import { authKind } from "../src/providers/codex/auth.js";
+import { accountStatus, authKind } from "../src/providers/codex/auth.js";
 import { fileChangeEvents, planEvent, Translator, warningText } from "../src/providers/codex/events.js";
 import { codexProvider } from "../src/providers/codex/index.js";
 import { appServerArgs } from "../src/providers/codex/live.js";
+import { readAccount } from "../src/providers/codex/threads.js";
 import { agentConfig, mcpConfig } from "../src/providers/codex/options.js";
 import { collect } from "./helpers.js";
 import type { AccessLevel, FunnelEvent, McpServer, RunInput } from "../src/types.js";
@@ -309,6 +310,29 @@ describe("codex MCP servers and feature config", () => {
 
 });
 
+describe("codex account status", () => {
+  it("gives the email, plan and method of a ChatGPT account", () => {
+    expect(accountStatus({ account: { type: "chatgpt", email: "user@example.com", planType: "plus", workspaceName: null } })).toEqual({
+      loggedIn: true,
+      method: "ChatGPT",
+      account: "user@example.com",
+      plan: "plus",
+      detail: "Logged in using ChatGPT",
+    });
+    expect(accountStatus({ account: { type: "chatgpt", email: null, planType: "unknown" } })).toEqual({ loggedIn: true, method: "ChatGPT", plan: "unknown", detail: "Logged in using ChatGPT" });
+  });
+
+  it("gives only the method for an API key", () => {
+    expect(accountStatus({ account: { type: "apiKey" } })).toEqual({ loggedIn: true, method: "API key", detail: "Logged in using an API key" });
+  });
+
+  it("gives nothing for no account, another login or a bad answer, so the login status text decides", () => {
+    for (const res of [{ account: null }, { account: { type: "amazonBedrock", usesCodexManagedCredentials: true } }, { account: { type: "gcp" } }, {}, null, undefined]) {
+      expect(accountStatus(res)).toBeUndefined();
+    }
+  });
+});
+
 describe("codex API key and auth", () => {
   it("keeps credentials in memory only when an API key is passed", () => {
     expect(appServerArgs(input("auto", { apiKey: "sk-x" }))).toEqual(["app-server", "-c", 'cli_auth_credentials_store="ephemeral"']);
@@ -327,6 +351,10 @@ describe("codex API key and auth", () => {
 const FAKE = `const fs = require("node:fs");
 const log = (o) => fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify(o) + "\\n");
 log({ args: process.argv.slice(2) });
+if (process.argv[2] === "login") {
+  process.stderr.write(process.env.FAKE_LOGIN_STATUS || "");
+  process.exit(0);
+}
 const send = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
 const thread = "thr-1";
 let turn;
@@ -350,7 +378,10 @@ process.stdin.on("data", (d) => {
     switch (m.method) {
       case "initialize": send({ id: m.id, result: {} }); break;
       case "account/login/start": send({ id: m.id, result: { type: "apiKey" } }); break;
-      case "account/read": send({ id: m.id, result: { account: { type: "chatgpt", email: null, planType: "plus" }, requiresOpenaiAuth: true } }); break;
+      case "account/read":
+        if (process.env.FAKE_ACCOUNT === "error") send({ id: m.id, error: { code: -32601, message: "unknown method" } });
+        else if (process.env.FAKE_ACCOUNT !== "hang") send({ id: m.id, result: { account: JSON.parse(process.env.FAKE_ACCOUNT || '{"type":"chatgpt","email":null,"planType":"plus"}'), requiresOpenaiAuth: true } });
+        break;
       case "config/read":
         if (process.env.FAKE_MCP === "error") send({ id: m.id, error: { code: -32601, message: "unknown method" } });
         else send({ id: m.id, result: { config: { model: null, mcp_servers: JSON.parse(process.env.FAKE_MCP || "{}"), sandbox_workspace_write: JSON.parse(process.env.FAKE_SANDBOX_CONFIG || "null") }, origins: {} } });
@@ -435,6 +466,8 @@ describe("codex agent features through the app-server", () => {
     delete process.env.FAKE_STARTED;
     delete process.env.FAKE_NOTES;
     delete process.env.FAKE_SANDBOX_CONFIG;
+    delete process.env.FAKE_ACCOUNT;
+    delete process.env.FAKE_LOGIN_STATUS;
   });
 
   it("reports a thread that started in a narrower sandbox, on the result and after session", async () => {
@@ -642,6 +675,33 @@ describe("codex agent features through the app-server", () => {
   it("does not read the config above none when the caller adds no MCP servers", async () => {
     await run("plain");
     expect(entries().some((e) => e.method === "config/read")).toBe(false);
+  });
+
+  describe("authStatus", () => {
+    const status = () => codexProvider.authStatus();
+
+    it("reads the account and plan from account/read and does not run codex login", async () => {
+      process.env.FAKE_ACCOUNT = JSON.stringify({ type: "chatgpt", email: "user@example.com", planType: "pro", workspaceName: null });
+      expect(await status()).toEqual({ loggedIn: true, method: "ChatGPT", account: "user@example.com", plan: "pro", detail: "Logged in using ChatGPT" });
+      const sent = entries();
+      expect(sent.find((e) => e.method === "account/read").params).toEqual({ refreshToken: false });
+      expect(sent.some((e) => e.args?.[0] === "login")).toBe(false);
+    });
+
+    it("falls back to codex login status when account/read fails or knows no account", async () => {
+      process.env.FAKE_LOGIN_STATUS = "Logged in using ChatGPT\n";
+      process.env.FAKE_ACCOUNT = "error";
+      expect(await status()).toEqual({ loggedIn: true, method: "ChatGPT", detail: "Logged in using ChatGPT" });
+      process.env.FAKE_LOGIN_STATUS = "Not logged in\n";
+      process.env.FAKE_ACCOUNT = "null";
+      expect(await status()).toEqual({ loggedIn: false, detail: "Not logged in" });
+      expect(entries().filter((e) => e.args?.[0] === "login")).toHaveLength(2);
+    });
+
+    it("gives up on an app-server that does not answer", async () => {
+      process.env.FAKE_ACCOUNT = "hang";
+      await expect(readAccount(150)).rejects.toMatchObject({ code: "cli-failed", message: expect.stringContaining("account/read") });
+    });
   });
 
   describe("addDirs", () => {
