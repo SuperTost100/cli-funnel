@@ -3,9 +3,10 @@ import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFil
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { fakeShCli, sh } from "./fake-cli.js";
 import { collect } from "./helpers.js";
 import { antigravityProvider, buildArgs, NONE_MATCHER, noneHooks, noneWorkspace } from "../src/providers/antigravity/index.js";
-import { createMapper, parseModels } from "../src/providers/antigravity/parser.js";
+import { createMapper, parseModels, parseWarning } from "../src/providers/antigravity/parser.js";
 import type { FunnelEvent, RunInput } from "../src/types.js";
 
 // agy keeps its token in the OS keyring, so no token file is the normal case. Start from a home without one, even on
@@ -310,5 +311,144 @@ describe.skipIf(process.platform === "win32")("antigravity default effort", () =
       /* drain */
     }
     expect(readFileSync(log, "utf8")).toContain("--effort high");
+  });
+});
+
+describe("antigravity warnings", () => {
+  it("reads a warning from a stderr line that starts with `warning: `", () => {
+    expect(parseWarning('warning: conversation "nonexistent-id" not found')).toBe('conversation "nonexistent-id" not found');
+    expect(parseWarning("warning: --mode plan has no effect while slash command expansion is disabled.")).toBe("--mode plan has no effect while slash command expansion is disabled.");
+    expect(parseWarning('warning: unrecognized --mode value "x" (valid: accept-edits, auto, plan)')).toBe('unrecognized --mode value "x" (valid: accept-edits, auto, plan)');
+    expect(parseWarning('warning: ignoring unsupported stream input message event "bogus"')).toBe('ignoring unsupported stream input message event "bogus"');
+    expect(parseWarning("warning:   padded  ")).toBe("padded");
+  });
+
+  it("reads nothing from the other prefixes, an empty warning or a warning in the middle of a line", () => {
+    for (const line of ["error: boom", 'jetski: no output produced', "[agy] starting", "AGY_ERROR: boom", "warning:", "warning: ", "Warning: x", "see warning: x", ""]) {
+      expect(parseWarning(line)).toBeUndefined();
+    }
+  });
+
+  /** A fake agy that prints `stderr` first and then a normal run, on `conversation_id` `reported`. Logs its arguments. */
+  function fakeAgy(stderr: string, reported = "c1") {
+    const dir = mkdtempSync(join(tmpdir(), "cf-agy-"));
+    const log = join(dir, "args");
+    process.env.CLI_FUNNEL_AGY_BIN = fakeShCli(
+      join(dir, "agy"),
+      `for a in "$@"; do echo "$a" >> "${sh(log)}"; done
+${stderr}
+echo '{"event":"init","conversation_id":"${reported}","init":{"model":"m","cwd":"/w","permission_mode":"always-proceed"}}'
+echo '{"event":"step_update","step_update":{"conversation_id":"${reported}","step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"ok"}}'
+echo '{"event":"result","result":{"status":"SUCCESS","response":"ok"}}'`,
+    );
+    return { dir, args: () => readFileSync(log, "utf8").split("\n").filter(Boolean) };
+  }
+  const drain = async (r: RunInput) => {
+    const out: FunnelEvent[] = [];
+    for await (const e of antigravityProvider.run(r)) out.push(e);
+    return out;
+  };
+  const types = (events: FunnelEvent[]) => events.map((e) => e.type);
+  afterEach(() => {
+    delete process.env.CLI_FUNNEL_AGY_BIN;
+  });
+
+  it("emits a stderr warning right after session and keeps it in the result", async () => {
+    fakeAgy(`echo 'warning: --mode plan has no effect while slash command expansion is disabled.' >&2
+echo 'jetski: not a warning' >&2`);
+    const run = input();
+    const events = await drain(run);
+    expect(types(events)).toEqual(["session", "warning", "text.delta", "done"]);
+    expect(events[1]).toEqual({ type: "warning", message: "--mode plan has no effect while slash command expansion is disabled." });
+    expect((await collect(antigravityProvider.run(run), run)).warnings).toEqual(["--mode plan has no effect while slash command expansion is disabled."]);
+  });
+
+  it("puts the warning after access.reduced", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cf-agy-"));
+    process.env.CLI_FUNNEL_AGY_BIN = fakeShCli(
+      join(dir, "agy"),
+      `echo 'warning: a' >&2
+echo '{"event":"init","conversation_id":"c1","init":{"model":"m","cwd":"/w","permission_mode":"request-review"}}'
+echo '{"event":"result","result":{"status":"SUCCESS","response":"ok"}}'`,
+    );
+    expect(types(await drain(input()))).toEqual(["session", "access.reduced", "warning", "done"]);
+  });
+
+  it("masks the run's secrets in a warning", async () => {
+    fakeAgy(`echo 'warning: key sk-secret-1234 rejected' >&2`);
+    const events = await drain({ ...input(), apiKey: "sk-secret-1234" });
+    const warning = events.find((e) => e.type === "warning");
+    expect(warning).toMatchObject({ type: "warning" });
+    expect(JSON.stringify(warning)).not.toContain("sk-secret-1234");
+  });
+
+  it("emits a warning that the run has no session for just before the terminal event", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cf-agy-"));
+    process.env.CLI_FUNNEL_AGY_BIN = fakeShCli(join(dir, "agy"), `echo 'warning: early' >&2
+echo '{"event":"result","result":{"status":"SUCCESS","response":"ok"}}'`);
+    expect(types(await drain(input()))).toEqual(["warning", "done"]);
+  });
+
+  it("emits a warning that arrives after the session before the next line", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cf-agy-"));
+    process.env.CLI_FUNNEL_AGY_BIN = fakeShCli(
+      join(dir, "agy"),
+      `echo '{"event":"init","conversation_id":"c1","init":{"model":"m","cwd":"/w","permission_mode":"always-proceed"}}'
+sleep 0.2
+echo 'warning: late' >&2
+sleep 0.2
+echo '{"event":"step_update","step_update":{"conversation_id":"c1","step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"ok"}}'
+echo '{"event":"result","result":{"status":"SUCCESS","response":"ok"}}'`,
+    );
+    expect(types(await drain(input()))).toEqual(["session", "warning", "text.delta", "done"]);
+  });
+
+  it("emits a held warning before the error of a run that exits without a result", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cf-agy-"));
+    process.env.CLI_FUNNEL_AGY_BIN = fakeShCli(join(dir, "agy"), `echo 'warning: before exit' >&2
+exit 3`);
+    const events = await drain(input());
+    expect(types(events)).toEqual(["warning", "error"]);
+  });
+});
+
+describe("antigravity resume", () => {
+  afterEach(() => {
+    delete process.env.CLI_FUNNEL_AGY_BIN;
+  });
+  const fake = (reported: string, stderr = "") => {
+    const dir = mkdtempSync(join(tmpdir(), "cf-agy-"));
+    process.env.CLI_FUNNEL_AGY_BIN = fakeShCli(
+      join(dir, "agy"),
+      `${stderr}
+echo '{"event":"init","conversation_id":"${reported}","init":{"model":"m","cwd":"/w"}}'
+echo '{"event":"step_update","step_update":{"conversation_id":"${reported}","step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"after"}}'
+echo '{"event":"result","result":{"status":"SUCCESS","response":"ok"}}'`,
+    );
+  };
+  const drain = async (r: RunInput) => {
+    const out: FunnelEvent[] = [];
+    for await (const e of antigravityProvider.run(r)) out.push(e);
+    return out;
+  };
+
+  it("fails a resume that started a new conversation, with no session event and nothing after the error", async () => {
+    fake("other-id", `echo 'warning: conversation "abc" not found' >&2`);
+    const events = await drain({ ...input(), sessionId: "abc" });
+    expect(events.map((e) => e.type)).toEqual(["warning", "error"]);
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "cli-failed", message: expect.stringContaining("abc") });
+    expect((events.at(-1) as { message: string }).message).toMatch(/not found.*new conversation/i);
+  });
+
+  it("resumes when init reports the conversation that was asked for", async () => {
+    fake("abc");
+    const events = await drain({ ...input(), sessionId: "abc" });
+    expect(events[0]).toMatchObject({ type: "session", sessionId: "abc" });
+    expect(events.at(-1)).toMatchObject({ type: "done" });
+  });
+
+  it("takes any conversation id when the run is not a resume", async () => {
+    fake("other-id");
+    expect((await drain(input()))[0]).toMatchObject({ type: "session", sessionId: "other-id" });
   });
 });

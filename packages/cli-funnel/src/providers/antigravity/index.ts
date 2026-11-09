@@ -19,8 +19,9 @@ import {
   type RunInput,
   type Selection,
 } from "../../types.js";
-import { detectInstallation, exitedEarly, findBinary, isTerminal, LOGIN_TIMEOUT_MS, rawTap, runUpdate } from "../base.js";
-import { createMapper, parseModels } from "./parser.js";
+import { detectInstallation, exitedEarly, findBinary, isTerminal, LOGIN_TIMEOUT_MS, rawTap, runUpdate, SETTLE_MS } from "../base.js";
+import { runSecrets } from "../../util/redact.js";
+import { createMapper, parseModels, parseWarning } from "./parser.js";
 import { SubagentTranscripts, type ForwardSubagents } from "./transcript.js";
 import { composePrompt } from "../prompt.js";
 import { FEEDBACK_CHANNELS } from "../feedback.js";
@@ -338,11 +339,23 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   const mapper = createMapper({
     auth: home ? "api-key" : undefined,
     access: requireMachine(input.selection).access,
+    resume: input.sessionId,
     createdInRun: createdInRunFor(input, startedAt),
     brainDir,
     readText: readTaskList,
   });
   const tap = rawTap("antigravity", input, stream);
+  // Warnings come on stderr, a pipe of their own, and can arrive before the `init` line. They wait here until the loop
+  // has sent `session`, or until the run ends without one.
+  const held: string[] = [];
+  stream.onStderr((line) => {
+    const message = parseWarning(line);
+    if (message) held.push(message);
+  }, runSecrets(input));
+  const takeWarnings = (): FunnelEvent[] => held.splice(0).map((message) => ({ type: "warning", message }));
+  // Stderr may be read a moment after a stdout line that agy wrote later, so the loop waits once before it takes warnings.
+  const settle = () => new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+  let sessionSent = false;
   const forward = antigravityForward(input);
   // Only with a forward option: the stream lines and the subagents' transcripts then go through one channel.
   let source: AsyncIterable<unknown> = stream.lines;
@@ -378,7 +391,18 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
       }
       // A subagent may still be writing when the run ends, so its transcript is read once more first.
       if (transcripts && terminal && !before) yield* await transcripts.finish();
+      // Warnings follow `session` and `access.reduced`. Before the first `session` they wait, unless the run ends here.
+      const lastOfStart = events.findLastIndex((e) => e.type === "session" || e.type === "access.reduced");
+      if ((terminal && !tap) || (!sessionSent && lastOfStart >= 0)) await settle();
+      if (!sessionSent && lastOfStart >= 0) {
+        sessionSent = true;
+        events.splice(lastOfStart + 1, 0, ...takeWarnings());
+      } else if (sessionSent || terminal) {
+        events.unshift(...takeWarnings());
+      }
       yield* events;
+      // The terminal event ends the stream, also when the CLI keeps running (a resume that started another conversation).
+      if (terminal) break;
     }
     if (tap && !mapper.finished) yield* tap.events();
     if (transcripts && !mapper.finished) yield* await transcripts.finish();
@@ -389,7 +413,11 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
     stream.kill();
     await cleanup();
   }
-  if (!mapper.finished) yield await exitedEarly(stream, "agy", () => input.signal?.aborted);
+  if (!mapper.finished) {
+    const last = await exitedEarly(stream, "agy", () => input.signal?.aborted);
+    yield* takeWarnings();
+    yield last;
+  }
 }
 
 export const antigravityProvider: Provider = {

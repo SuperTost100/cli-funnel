@@ -37,6 +37,15 @@ export function parseModels(text: string): ModelInfo[] {
   return out;
 }
 
+/** agy prints its warnings on stderr, one per line. The other prefixes (`error: `, `jetski: `, `[agy] `, `AGY_ERROR: `) are not warnings. */
+const WARNING_PREFIX = "warning: ";
+
+/** The text of a stderr line that is a warning, or undefined for any other line. */
+export function parseWarning(line: string): string | undefined {
+  if (!line.startsWith(WARNING_PREFIX)) return undefined;
+  return line.slice(WARNING_PREFIX.length).trim() || undefined;
+}
+
 type Json = Record<string, any>;
 
 function toUsage(u: Json | undefined): Usage | undefined {
@@ -123,6 +132,11 @@ export interface MapperOptions {
   readText?: (path: string) => string | undefined;
   /** The level the run asked for. At `full` the mapper reports an `init` that is not `always-proceed` as `access.reduced`. */
   access?: AccessLevel;
+  /**
+   * The conversation the run asked to resume. An unknown id makes agy start a new conversation, with only a warning on
+   * stderr, so an `init` that reports another id ends the run with an error and no `session` event.
+   */
+  resume?: string;
 }
 
 const slashes = (p: string) => p.replace(/\\/g, "/");
@@ -201,6 +215,10 @@ export function createMapper(options: MapperOptions = {}) {
         const id = o.conversation_id;
         if (typeof o.init?.cwd === "string") cwd = o.init.cwd;
         if (!id) return [];
+        if (options.resume && id !== options.resume) {
+          finished = true;
+          return [{ type: "error", message: `Conversation ${options.resume} was not found. agy started a new conversation instead.`, code: "cli-failed" }];
+        }
         const events: FunnelEvent[] = [{ type: "session", sessionId: id, model: o.init?.model, ...(options.auth && { auth: options.auth }) }];
         // `--dangerously-skip-permissions` reports `always-proceed`. The other levels start as `request-review` whatever
         // their flags, so only `full` can be checked.
