@@ -421,8 +421,9 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
     })();
 
     let terminal = false;
-    // Codex quotes the server's answer in errors, and a key could be in it.
-    const events = first.apiKey ? redactErrors(t.out, [first.apiKey]) : t.out;
+    // Always redacted, also on a saved-login run: Codex quotes the server's answer in errors and its own config in
+    // warnings, and either can hold a token in a URL. The key is masked too when the run has one.
+    const events = redactErrors(t.out, first.apiKey ? [first.apiKey] : []);
     try {
       for await (const e of events) {
         if (e.type === "done" || e.type === "error") terminal = true;

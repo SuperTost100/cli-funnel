@@ -362,6 +362,8 @@ let prompt;
 const done = (text) => {
   send({ method: "item/completed", params: { threadId: thread, item: { type: "agentMessage", text } } });
   send({ method: "turn/completed", params: { threadId: thread, turn: { id: turn, status: "completed" } } });
+  // Warnings that arrive right after the turn ended, before the next one starts.
+  for (const message of JSON.parse(process.env.FAKE_AFTER_DONE || "[]")) send({ method: "warning", params: { threadId: thread, message } });
 };
 const question = ${JSON.stringify(load("question.ndjson").find((r) => r.m.method === "item/tool/requestUserInput")!.m.params)};
 let buf = "";
@@ -463,6 +465,7 @@ describe("codex agent features through the app-server", () => {
     delete process.env.FAKE_KEY;
     delete process.env.FAKE_MCP;
     delete process.env.FAKE_WARNINGS;
+    delete process.env.FAKE_AFTER_DONE;
     delete process.env.FAKE_STARTED;
     delete process.env.FAKE_NOTES;
     delete process.env.FAKE_SANDBOX_CONFIG;
@@ -505,6 +508,35 @@ describe("codex agent features through the app-server", () => {
     const { res, events } = await run("late-warning");
     expect(events.map((e) => e.type)).toEqual(["session", "warning", "warning", "done"]);
     expect(res.warnings).toEqual(["mid-turn", "from elsewhere"]);
+  });
+
+  it("masks secrets in a warning on a saved-login run, which has no API key", async () => {
+    process.env.FAKE_WARNINGS = JSON.stringify(["MCP server failed: https://mcp.example.test/?token=review-private-marker"]);
+    const { res, events } = await run("hi");
+    expect(events.filter((e) => e.type === "warning")).toEqual([{ type: "warning", message: "MCP server failed: https://mcp.example.test/" }]);
+    expect(res.warnings).toEqual(["MCP server failed: https://mcp.example.test/"]);
+    expect(JSON.stringify(events)).not.toContain("review-private-marker");
+  });
+
+  it("reports a warning from between two turns once, at the start of the next turn, and not again", async () => {
+    const first = "Configured value is disallowed by requirements.";
+    process.env.FAKE_WARNINGS = JSON.stringify([first]);
+    process.env.FAKE_AFTER_DONE = JSON.stringify(["Guardian paused.", first]);
+    const session = await codexProvider.openSession!({ selection: { provider: "codex", model: "m", cwd, access: "supervised" }, prompt: "first" });
+    try {
+      const turn = async (prompt: string) => {
+        const out: FunnelEvent[] = [];
+        for await (const e of session.turn({ selection: { provider: "codex", model: "m", cwd, access: "supervised" }, prompt })) out.push(e);
+        return out;
+      };
+      const one = await turn("first");
+      expect(one.map((e) => e.type)).toEqual(["session", "warning", "done"]);
+      const two = await turn("second");
+      expect(two.map((e) => e.type)).toEqual(["session", "warning", "done"]);
+      expect(two[1]).toEqual({ type: "warning", message: "Guardian paused." });
+    } finally {
+      session.close();
+    }
   });
 
   it("sends the warnings before the error when the session fails to start", async () => {
