@@ -192,6 +192,28 @@ With `createFunnel({ sessions: { keepAlive: true } })` stdin stays open after `r
 
 There is no `steer`. A `user` line written while a turn runs does not join that turn: Claude Code answers it afterwards as a turn of its own, with a second `result`. See [Live sessions](../sessions.md).
 
+## Subscription limits and the entry point
+
+On Pro and Max plans, runs through cli-funnel can use up the five-hour window faster than the same work in the interactive CLI. The reports below are about the five-hour window only.
+
+Claude Code tags its requests with an entry point. In `-p` mode, which cli-funnel always uses, the CLI reports `sdk-cli` unless `CLAUDE_CODE_ENTRYPOINT` is already set in its environment. It also changes an inherited `cli` to `sdk-cli`, so starting cli-funnel from an interactive Claude Code session does not change it. This was checked in Claude Code 2.1.316.
+
+Users report that `sdk-cli`, and the Agent SDK's `sdk-ts` and `sdk-py`, use about 1.8 times more of the five-hour window per token than the interactive CLI ([anthropics/claude-code#97074](https://github.com/anthropics/claude-code/issues/97074)). Anthropic has not documented a different rate, and cli-funnel has not measured it. Anthropic removed the five-hour window for verified Ultra accounts on 2026-11-02, so those accounts are not affected.
+
+cli-funnel does not set `CLAUDE_CODE_ENTRYPOINT`. The variable is not in Claude Code's documented settings, and Anthropic has not said whether subscribers may set it ([anthropics/claude-code#107106](https://github.com/anthropics/claude-code/issues/107106)). T3 Code sets it to `t3-code`, and its author says Anthropic agreed to that informally. Whether you set it for your own app is your decision, so read [Terms and limits](../tos-notes.md) first.
+
+To set it for one run, pass it in `env`. A value in `env` wins over the parent environment:
+
+```ts
+await funnel.run({
+  prompt: "Summarise the open issues",
+  selection: { provider: "claude", model: "claude-fable-5-1", cwd: projectDir, access: "none" },
+  env: { CLAUDE_CODE_ENTRYPOINT: "my-app" },
+});
+```
+
+To set it for every run, set it in the environment that starts cli-funnel, for example before `cli-funnel serve` or `cli-funnel mcp`. The CLI inherits that environment.
+
 ## Known limits
 
 - Fast mode is unavailable.
