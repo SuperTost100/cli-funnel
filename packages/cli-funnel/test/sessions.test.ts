@@ -357,7 +357,7 @@ describe("claude live sessions", () => {
     expect(await waitFor(() => !alive(spawns()[0]!.pid))).toBe(true);
   });
 
-  it("refuses steer with unsupported", async () => {
+  it("refuses steer with unsupported when the CLI does not report the message lifecycle", async () => {
     const f = make({ keepAlive: true });
     const a = await f.run(claude("one"));
     await expect(f.steer(a.sessionId!, "more")).rejects.toMatchObject({ code: "unsupported" });

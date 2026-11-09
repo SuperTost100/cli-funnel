@@ -67,7 +67,7 @@ It mirrors the funnel. `signal` is an optional `AbortSignal`, and every method r
 | `pullModel(id, name, signal?)` | Streams a model download. Ollama only. |
 | `deleteModel(id, name)` | Deletes a model. Ollama only. |
 | `sessions(signal?)` | Lists live sessions. Needs `sessions.keepAlive` on the server, else 409. |
-| `steer(sessionId, text, provider?)` | Adds a message to the turn running in a live session. Codex only. |
+| `steer(sessionId, text, provider?)` | Adds a message to the turn running in a live session. Codex and Claude Code. |
 | `closeSession(sessionId, provider?)` | Stops the live process of a session. The next turn resumes it in a new one. |
 
 Pass `provider` to `steer` and `closeSession` when two providers could share a session id. See [Live sessions](sessions.md#over-http).

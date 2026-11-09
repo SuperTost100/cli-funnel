@@ -2,7 +2,8 @@
 // Every "--flag" string in packages/cli-funnel/src/providers must be listed here. test/drift-checks.test.ts enforces it.
 export const CHECKS = {
   // Claude Code's help cannot show the stream-json fields the provider also reads: `apiKeySource` in `init`,
-  // `mcp_server` in `can_use_tool`, `tool_use_result`, AskUserQuestion's `answers`, and the per-server MCP `timeout`.
+  // `mcp_server` in `can_use_tool`, `tool_use_result`, AskUserQuestion's `answers`, the per-server MCP `timeout`, and
+  // for steer the `msg_lifecycle_v1` capability in `init`, `command_lifecycle` lines and `user_message_uuids` in `result`.
   // The recorded fixtures in test/fixtures/claude and the live tests cover those.
   claude: {
     bin: "claude",

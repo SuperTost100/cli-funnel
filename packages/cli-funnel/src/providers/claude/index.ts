@@ -14,6 +14,7 @@ import {
   type QuestionRequest,
   type RateLimits,
   type RunInput,
+  type Usage,
 } from "../../types.js";
 import { askApproval, askQuestion, detectInstallation, exitedEarly, findBinary, rawTap, runLogout, runUpdate, spawnLogin, stderrTail } from "../base.js";
 import { bool, dirList, flag, invalidOption, mcpServersFor, object, optionsFor, positive, requireAccess, str, stringList } from "../options.js";
@@ -21,7 +22,7 @@ import { runSecrets } from "../../util/redact.js";
 import { manifestModels } from "../../catalog/manifest.js";
 import { needsArgFile, writeArgFile, type ArgFile } from "../../util/argfile.js";
 import { exec, spawnStream, type Streamed } from "../../util/process.js";
-import { openClaudeSession } from "./live.js";
+import { openClaudeSession, type Steers } from "./live.js";
 import { FEEDBACK_CHANNELS } from "../feedback.js";
 import { requireMachine } from "../../selection.js";
 import { editPath, newClaudeTrack, parseClaudeMessage, parseUsage, PERMISSION_MODE, type ClaudeTrack, type ForwardSubagents } from "./parser.js";
@@ -286,11 +287,23 @@ export async function launchClaude(input: RunInput, signal?: AbortSignal): Promi
   return { proc, removeFiles };
 }
 
+/** Two usages added up, for a funnel turn that spans more than one Claude Code turn. */
+function addUsage(a: Usage | undefined, b: Usage): Usage {
+  if (!a) return b;
+  const out: Usage = { ...b };
+  for (const k of Object.keys(a) as (keyof Usage)[]) out[k] = (a[k] ?? 0) + (b[k] ?? 0);
+  return out;
+}
+
 /**
  * Reads one turn from `lines`: answers control requests and yields events up to and including `result`.
  * `state.finished` is set before a terminal event is yielded, since a consumer that stops at `done` never comes back.
- * `onResult` runs when `result` arrives, before its events are yielded. `track` lives as long as the process.
+ * `onResult` runs when the last `result` arrives, before its events are yielded. `track` lives as long as the process.
  * With `input.verbose` each line, and the stderr printed before it, is yielded as `raw` events first.
+ *
+ * `steers` holds the messages a live session added to this turn. When a `result` arrives while one of them is still
+ * queued, Claude Code answers it next as a turn of its own, so the funnel turn goes on through that turn: the `done` of
+ * the earlier result is held back, its usage is added to the next one, and the next turn's `init` is skipped.
  *
  * Warnings, from stderr (see `watchStderr`) and from `notification` messages, are yielded as `warning` events after the
  * turn's `session` event and its `access.reduced`, and later ones after the stdout line that follows them. Stderr comes
@@ -306,12 +319,19 @@ export async function* claudeTurn(
   state: { finished: boolean },
   track: ClaudeTrack,
   onResult?: () => void,
+  steers?: Steers,
 ): AsyncGenerator<FunnelEvent> {
   const { cwd, access } = requireMachine(input.selection);
   const tap = rawTap("claude", input, proc);
   const warnings = (final = false): FunnelEvent[] =>
     (final ? track.notices.take() : track.notices.takeComplete()).map((message) => ({ type: "warning", message }));
   let started = false;
+  // What earlier results of this funnel turn left to report, while a steer message runs as a turn of its own.
+  let held: { done?: Extract<FunnelEvent, { type: "done" }>; usage?: Usage; denied: boolean } = { denied: false };
+  const heldUsage = function* (): Generator<FunnelEvent> {
+    if (held.usage) yield { type: "usage", usage: held.usage };
+    held.usage = undefined;
+  };
   try {
     for await (const raw of lines) {
       const msg = raw as Record<string, any>;
@@ -323,8 +343,29 @@ export async function* claudeTurn(
         yield* answerControlRequest(proc, msg, input, track);
         continue;
       }
-      if (msg.type === "result") onResult?.();
-      for (const e of parseClaudeMessage(raw, forward, track, access)) {
+      if (steers && msg.type === "command_lifecycle") {
+        steers.lifecycle(String(msg.command_uuid), String(msg.state));
+        // A steer message dropped before any turn took it in gets no result. With nothing else on the way, the turn ends.
+        if (held.done && steers.idle) {
+          steers.ended = true;
+          yield* heldUsage();
+          yield* warnings(true);
+          state.finished = true;
+          yield held.done;
+          return;
+        }
+        continue;
+      }
+      // The turn that answers a late steer message reports the same session again. It is the same funnel turn.
+      if (held.done && msg.type === "system" && msg.subtype === "init") continue;
+      const events = parseClaudeMessage(raw, forward, track, access);
+      // True when a steer message is still queued: Claude Code answers it in a turn of its own after this result.
+      const more = msg.type === "result" && steers !== undefined && steers.result(msg.user_message_uuids) && !events.some((e) => e.type === "error");
+      if (msg.type === "result" && !more) {
+        if (steers) steers.ended = true;
+        onResult?.();
+      }
+      for (let e of events) {
         if (e.type === "warning") {
           // Queued with the stderr warnings, so none comes before `session`.
           track.notices.add(e.message);
@@ -336,6 +377,19 @@ export async function* claudeTurn(
           const path = editPath(e.name, e.input, cwd);
           if (path) track.edits.set(e.id, { path, existed: existsSync(path) });
         }
+        if (more && e.type === "usage") {
+          held.usage = addUsage(held.usage, e.usage);
+          continue;
+        }
+        if (more && e.type === "done") {
+          held = { ...held, done: e, denied: held.denied || e.finishReason === "denied" };
+          continue;
+        }
+        if (e.type === "usage") {
+          e = { type: "usage", usage: addUsage(held.usage, e.usage) };
+          held.usage = undefined;
+        }
+        if (e.type === "done" && held.denied && e.finishReason === "stop") e = { ...e, finishReason: "denied" };
         let out = e;
         if (e.type === "error" && !msg.result) {
           // A run that fails before its first turn, such as a sandbox that cannot start, prints the reason on stderr.
@@ -344,6 +398,7 @@ export async function* claudeTurn(
           if (tail) out = { ...e, message: `${e.message} ${tail}` };
         }
         if (e.type === "done" || e.type === "error") {
+          yield* heldUsage();
           // After the wait above, so a warning the CLI wrote last is in.
           yield* warnings(true);
           state.finished = true;
@@ -352,7 +407,7 @@ export async function* claudeTurn(
         yield out;
       }
       if (started && !state.finished) yield* warnings();
-      if (msg.type === "result") return;
+      if (msg.type === "result" && !more) return;
     }
     // The CLI exited before its result. Its last stderr lines often say why.
     if (tap) yield* tap.events();

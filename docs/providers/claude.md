@@ -222,7 +222,25 @@ Not supported. `fastMode` is a Claude Code setting, but in SDK-style runs the CL
 
 With `createFunnel({ sessions: { keepAlive: true } })` stdin stays open after `result`, and the next turn writes another `user` line to the same process. Claude Code sends a new `system` / `init` message for each turn, with the same session id. Closing an idle session closes stdin and gives Claude Code two seconds to exit on its own.
 
-There is no `steer`. A `user` line written while a turn runs does not join that turn: Claude Code answers it afterwards as a turn of its own, with a second `result`. See [Live sessions](../sessions.md).
+### Steer
+
+`funnel.steer(sessionId, text)` writes a `user` line with a fresh `uuid` and `priority: "next"` to the live process. Claude Code reads such a message in the running turn as soon as the tool calls it is running finish. A message that arrives while the model only writes text, or after the turn's work is done, waits in Claude Code's queue and runs after the turn as a turn of its own, with its own `result`.
+
+cli-funnel tells the two cases apart from the stream, so a funnel turn still ends exactly once:
+
+- Claude Code reports each message sent with a `uuid` in `command_lifecycle` lines: `queued` when it arrives, `started` when a turn takes it in, then one of `completed`, `cancelled`, `discarded` or `refused`. A `result` also lists the messages its turn took in, in `user_message_uuids`.
+- When a `result` arrives while a steer message is still `queued`, the funnel turn goes on. The `done` of that result is held back, the next turn's `init` is not reported again, and the turn ends at the next `result`. Its `done.text` is that last answer, and its `usage` is the sum of both.
+- A queued message that ends as `cancelled`, `discarded` or `refused` gets no answer, so the turn ends with the held `done`.
+- A turn that fails while a steer message is queued ends with its error, and the process stops, because Claude Code would answer the message as the next turn. The next turn resumes the session in a new process.
+
+`steer` needs the `msg_lifecycle_v1` capability in the `system` / `init` message. A version without it lists `steer: false` in `funnel.sessions()`, and `steer` throws `unsupported`. Once the turn has decided to end at a `result`, `steer` throws `invalid-selection`.
+
+Tested on 2.1.319 with `claude-haiku-4-5-20251001`:
+
+- A steer sent at the first Bash call of a turn that ran `sleep 3` three times was read after that call. The turn had one `result`, with `num_turns: 4`, and answered `DONE. PINEAPPLE.` as the steer asked.
+- A steer sent while the model wrote a story was answered after it in a second `result`. The funnel turn ended once, with `MANGO.` as its text.
+- A steer written when the last text block arrived, 14 ms before `result`, was not in that result. Claude Code answered it in a second turn.
+- A steer blocked by a `UserPromptSubmit` hook ended as `completed` with no answer when it arrived during tool calls. When it arrived after the work, it still got a `result` of its own, with the hook's notice as its text and `num_turns: 0`.
 
 ## Subscription limits and the entry point
 

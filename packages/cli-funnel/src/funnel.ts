@@ -325,8 +325,8 @@ export function createFunnel(options: FunnelOptions = {}) {
     stream,
 
     /**
-     * Adds a user message to the turn running in a live session. Needs `sessions.keepAlive`. Codex only: other
-     * providers throw `unsupported`. Pass `provider` when two providers could share a session id.
+     * Adds a user message to the turn running in a live session. Needs `sessions.keepAlive`. Codex and Claude Code:
+     * other providers throw `unsupported`. Pass `provider` when two providers could share a session id.
      */
     async steer(sessionId: string, text: string, provider?: ProviderId): Promise<void> {
       if (!pool) throw new FunnelError("steer needs createFunnel({ sessions: { keepAlive: true } }).", "unsupported");
