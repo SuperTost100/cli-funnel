@@ -631,7 +631,7 @@ describe("codex threads, fork and rate limits", () => {
   it("throws unsupported on providers that cannot", async () => {
     const f = make();
     await expect(f.listThreads("claude")).rejects.toMatchObject({ code: "unsupported" });
-    await expect(f.rateLimits("claude")).rejects.toMatchObject({ code: "unsupported" });
+    await expect(f.rateLimits("agent")).rejects.toMatchObject({ code: "unsupported" });
     await expect(f.forkSession("claude", "x")).rejects.toMatchObject({ code: "unsupported", message: expect.stringContaining("forkSession") });
   });
 });

@@ -1,5 +1,5 @@
 import { isAbsolute, resolve } from "node:path";
-import type { AccessLevel, FileChange, FinishReason, FunnelEvent, PlanStep, Usage } from "../../types.js";
+import type { AccessLevel, FileChange, FinishReason, FunnelEvent, Limit, PlanStep, RateLimits, Usage, UsageWindow } from "../../types.js";
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -343,9 +343,41 @@ const WINDOWS: Record<string, string> = {
 function parseRateLimit(info: Obj): FunnelEvent[] {
   if (info.status !== "rejected") return [];
   const window = typeof info.rateLimitType === "string" ? info.rateLimitType : undefined;
-  const name = (window && WINDOWS[window]) ?? "usage";
   const resetAt = typeof info.resetsAt === "number" ? new Date(info.resetsAt * 1000).toISOString() : undefined;
-  return [{ type: "limit", kind: window === "five_hour" ? "rate" : "quota", detail: `Claude ${name} limit reached.`, ...(resetAt ? { resetAt } : {}) }];
+  return [{ type: "limit", ...windowLimit(window, resetAt) }];
+}
+
+/** The limit for a full usage window, worded the same in a `limit` event and in `RateLimits.limit`. */
+function windowLimit(window: string | undefined, resetAt: string | undefined): Limit {
+  const name = (window && WINDOWS[window]) ?? "usage";
+  return { kind: window === "five_hour" ? "rate" : "quota", detail: `Claude ${name} limit reached.`, ...(resetAt ? { resetAt } : {}) };
+}
+
+/** One entry of `rate_limits` in the `get_usage` answer. `utilization` is a percentage from 0 to 100 and `resets_at` is ISO 8601. */
+function usageWindow(w: unknown, windowMinutes: number): UsageWindow | undefined {
+  if (!isObj(w) || typeof w.utilization !== "number") return undefined;
+  const at = typeof w.resets_at === "string" ? Date.parse(w.resets_at) : NaN;
+  return { usedPercent: w.utilization, windowMinutes, ...(Number.isNaN(at) ? {} : { resetsAt: new Date(at).toISOString() }) };
+}
+
+/**
+ * The inner `response` of a successful `get_usage` control request. `primary` is the five-hour window and `secondary`
+ * the seven-day one. `limit` is set when a window is full (100%), the five-hour one first, as Codex does. A login with
+ * an API key has `rate_limits: null`, which gives a result with no windows.
+ */
+export function parseUsage(response: unknown): RateLimits {
+  const r = isObj(response) ? response : {};
+  const windows = isObj(r.rate_limits) ? r.rate_limits : {};
+  const primary = usageWindow(windows.five_hour, 300);
+  const secondary = usageWindow(windows.seven_day, 10_080);
+  const full = primary && primary.usedPercent >= 100 ? (["five_hour", primary] as const) : secondary && secondary.usedPercent >= 100 ? (["seven_day", secondary] as const) : undefined;
+  return {
+    provider: "claude",
+    ...(typeof r.subscription_type === "string" ? { plan: r.subscription_type } : {}),
+    ...(primary ? { primary } : {}),
+    ...(secondary ? { secondary } : {}),
+    ...(full ? { limit: windowLimit(full[0], full[1].resetsAt) } : {}),
+  };
 }
 
 function parseResult(r: Obj, track: ClaudeTrack): FunnelEvent[] {

@@ -457,4 +457,4 @@ A limit usually ends the run with an `error` event right after. The API provider
 
 `useRun().result.limit` has the same value in the browser. `cli-funnel run` prints the limit on stderr.
 
-To check Codex before a run, `funnel.rateLimits("codex")` reads the usage windows and the limit that is reached. See [Live sessions](sessions.md#read-usage-and-limits).
+To check before a run, `funnel.rateLimits("codex")`, `funnel.rateLimits("claude")` and `funnel.rateLimits("antigravity")` read the usage windows and the limit that is reached. See [Live sessions](sessions.md#read-usage-and-limits).

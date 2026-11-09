@@ -106,7 +106,7 @@ const next = await funnel.listThreads("codex", { cursor: nextCursor });
 
 ## Read usage and limits
 
-`funnel.rateLimits("codex")` calls `account/rateLimits/read` and resolves with the account's plan and usage windows. `limit` is set when a window is full, and it is the same value a `limit` event carries, so one handler can read both.
+`funnel.rateLimits(provider)` resolves with the account's plan and usage windows. It works for `codex`, `claude` and `antigravity`. `primary` is the five-hour window and `secondary` the weekly one. `limit` is set when a window is full, and it is the same value a `limit` event carries, so one handler can read both. On Antigravity, `groups` lists the limits per model group, and `primary` and `secondary` hold the fullest window of each kind. Codex reads `account/rateLimits/read`, and Claude Code answers a `get_usage` control request: see the [Codex](providers/codex.md) and [Claude Code](providers/claude.md#usage-windows) pages. Neither call starts a model turn.
 
 ```ts
 const usage = await funnel.rateLimits("codex");
@@ -116,7 +116,7 @@ const usage = await funnel.rateLimits("codex");
 if (usage.limit) wait(usage.limit.resetAt);
 ```
 
-During a run, Codex still reports a reached limit as a `limit` event. See [Limits](run-options.md#rate-limits-and-quotas). The call is for checking before you start a run. Other providers throw `unsupported`.
+During a run, a reached limit still arrives as a `limit` event. See [Limits](run-options.md#rate-limits-and-quotas). The call is for checking before you start a run. Other providers throw `unsupported`, and so does Claude Code when its version does not answer the request.
 
 ## Over HTTP
 

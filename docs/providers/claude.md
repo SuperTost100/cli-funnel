@@ -30,7 +30,7 @@ Runs the real `claude` binary in print mode and reads its stream-json output. Te
 | `control_request` `can_use_tool` | `approval.request`, or `question.request` for AskUserQuestion |
 | `result` | `usage`, then `done` (or `error` when `is_error`) |
 | `system` / `notification` with priority `high` or `immediate` | `warning` |
-| A `Warning: ` or `⚠ ` line on stderr | `warning` |
+| A stderr line that starts with `Warning:` or `⚠` | `warning` |
 
 `usage` carries `cacheCreationInputTokens` (from `cache_creation_input_tokens`) and `reasoningTokens` (from `output_tokens_details.thinking_tokens`) when they are above zero. The CLI's `input_tokens` leaves out cache reads and writes, so `inputTokens` is the sum of all three, and `outputTokens` already includes the thinking tokens. Usage has no `costUsd`. The CLI reports a list-price estimate, not what a subscription is charged. Subagent messages are dropped. See [Agent callbacks and events](#agent-callbacks-and-events) for `plan`, `file.change` and `question.request`.
 
@@ -38,7 +38,7 @@ Runs the real `claude` binary in print mode and reads its stream-json output. Te
 
 Claude Code reports notices in two places, and both become `warning` events, which also fill `RunResult.warnings`.
 
-- **Stderr.** A line that starts with `Warning: ` or `⚠ ` starts a warning, and the message is the text after the marker. Lines right after it that start with whitespace belong to it, joined with one space. Examples from 2.1.319 are an unknown `--effort` value that the CLI ignores, the claude.ai connectors that an API key turns off, and a sandbox that cannot start because `bubblewrap` or `socat` is missing (a two-line notice). Lines that start with `Error:` are not warnings: they go into the error of a failed run. Every other line is ignored, unless the run is verbose, which sends all of stderr as `raw` events. The CLI prints these before `init` and keeps running.
+- **Stderr.** A line that starts with `Warning:` or `⚠`, followed by a space, starts a warning, and the message is the text after the marker. Lines right after it that start with whitespace belong to it, joined with one space. Examples from 2.1.319 are an unknown `--effort` value that the CLI ignores, the claude.ai connectors that an API key turns off, and a sandbox that cannot start because `bubblewrap` or `socat` is missing (a two-line notice). Lines that start with `Error:` are not warnings: they go into the error of a failed run. Every other line is ignored, unless the run is verbose, which sends all of stderr as `raw` events. The CLI prints these before `init` and keeps running.
 - **Stream.** A `system` message with `subtype: "notification"` and `priority` of `high` or `immediate` becomes a warning with its `text`, for example "Fast mode disabled · usage credit limit reached". `low` and `medium` notices are hints and are left out.
 
 Stderr is a separate pipe from stdout, so stderr warnings are held until the turn's `session` event (and `access.reduced`) have been sent, and come right after. A warning that arrives later comes after the next line the CLI prints, and a run that ends without a `session` event sends them just before its last event. Nothing follows `done` or `error`. The run's API key and other secrets are masked in the text. In a live session the process outlives the turn: warnings from startup belong to the first turn, and each warning is reported once.
@@ -166,6 +166,22 @@ The CLI sends the request at every level with tools: it was checked live at `byp
 | its thinking | nothing: the CLI sends it empty |
 
 See [Provider options](#provider-options) for how each one works.
+
+## Usage windows
+
+`funnel.rateLimits("claude")` starts the CLI, sends the control request `{"subtype": "get_usage", "skip_behaviors": true}` and stops it. No model turn runs and nothing is saved: the process starts with `--tools ""`, `--strict-mcp-config`, `--setting-sources ""` and `--no-session-persistence`, so none of your hooks, MCP servers or settings start. An answer took about 0.5 s on 2.1.319. `skip_behaviors` stops the CLI from scanning your local transcripts for the part of the answer that cli-funnel does not read. A recorded answer is in `test/fixtures/claude/get-usage.json`, with the account data left out.
+
+| Answer field | `RateLimits` |
+| --- | --- |
+| `subscription_type` (`"max"`) | `plan` |
+| `rate_limits.five_hour` | `primary`, with `windowMinutes: 300` |
+| `rate_limits.seven_day` | `secondary`, with `windowMinutes: 10080` |
+| `utilization` | `usedPercent`, a percentage from 0 to 100 as the CLI's own schema says |
+| `resets_at` (`"2026-11-10T00:40:00.921556+00:00"`) | `resetsAt`, as an ISO 8601 timestamp in UTC |
+
+The CLI also reports weekly windows per model and the extra usage balance. They are not read. `limit` is set when a window is at 100%, the five-hour window first, with the same wording as the `limit` event ("Claude five-hour limit reached."). The answer has no separate flag for a full window, so a window at 100% is the only signal, and no full window was seen while testing. A login with an API key has no windows (`rate_limits` is `null`), so the result is `{ provider: "claude" }` with no `plan`.
+
+The CLI calls this request experimental and says its shape may change. The call throws `unsupported` when the CLI answers with an error, exits without an answer, or does not answer in 30 seconds, and `not-installed` when there is no `claude` binary.
 
 ## Models
 

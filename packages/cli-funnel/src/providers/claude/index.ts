@@ -6,11 +6,13 @@ import {
   type Capabilities,
   type FunnelEvent,
   type McpServer,
+  type ProcessOptions,
   type Provider,
   type ProviderContext,
   type Question,
   type QuestionAnswers,
   type QuestionRequest,
+  type RateLimits,
   type RunInput,
 } from "../../types.js";
 import { askApproval, askQuestion, detectInstallation, exitedEarly, findBinary, rawTap, runLogout, runUpdate, spawnLogin, stderrTail } from "../base.js";
@@ -22,7 +24,7 @@ import { exec, spawnStream, type Streamed } from "../../util/process.js";
 import { openClaudeSession } from "./live.js";
 import { FEEDBACK_CHANNELS } from "../feedback.js";
 import { requireMachine } from "../../selection.js";
-import { editPath, newClaudeTrack, parseClaudeMessage, PERMISSION_MODE, type ClaudeTrack, type ForwardSubagents } from "./parser.js";
+import { editPath, newClaudeTrack, parseClaudeMessage, parseUsage, PERMISSION_MODE, type ClaudeTrack, type ForwardSubagents } from "./parser.js";
 
 const BIN = "claude";
 const TESTED_RANGE = { min: "2.1.0" };
@@ -496,6 +498,48 @@ async function authStatus(): Promise<AuthStatus> {
   }
 }
 
+/** How long `rateLimits` waits for the CLI to answer, the same as Codex's calls. */
+const USAGE_TIMEOUT_MS = 30_000;
+const USAGE_REQUEST_ID = "cli-funnel-usage";
+
+/**
+ * Starts the CLI, sends the `get_usage` control request, reads the answer and stops it. No model turn runs. The
+ * request is experimental in the CLI ("the shape may change"), so no answer, an error answer, or a CLI that exits first
+ * all mean this version does not support it. `skip_behaviors` stops the CLI from scanning local transcripts. The tool,
+ * MCP and settings flags are the ones access `none` uses: nothing of the user's starts.
+ */
+export async function readUsage(options: ProcessOptions = {}, timeoutMs = USAGE_TIMEOUT_MS): Promise<RateLimits> {
+  const bin = findBinary(BIN);
+  if (!bin) throw new FunnelError("Claude Code is not installed.", "not-installed");
+  const args = [...NO_TOOLS, "--no-session-persistence", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"];
+  const proc = spawnStream(bin, args, { env: options.env, signal: options.signal, closeStdin: false });
+  const unsupported = (why: string) => new FunnelError(`This Claude Code version cannot report its usage windows: ${why}`, "unsupported");
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    proc.write(JSON.stringify({ type: "control_request", request_id: USAGE_REQUEST_ID, request: { subtype: "get_usage", skip_behaviors: true } }));
+    const answer = (async () => {
+      for await (const raw of proc.lines) {
+        const response = isObj(raw) && raw.type === "control_response" && isObj(raw.response) ? raw.response : undefined;
+        if (response?.request_id !== USAGE_REQUEST_ID) continue;
+        if (response.subtype !== "success") throw unsupported(String(response.error ?? "the request failed."));
+        return parseUsage(response.response);
+      }
+      throw unsupported(`it exited (${await proc.exited}) without an answer.${stderrTail(proc.stderr()) ? ` ${stderrTail(proc.stderr())}` : ""}`);
+    })();
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(unsupported(`it did not answer in ${timeoutMs / 1000} s.`)), timeoutMs);
+    });
+    return await Promise.race([answer, timeout]);
+  } catch (e) {
+    if (options.signal?.aborted) throw new FunnelError("The request was aborted.", "aborted");
+    throw e;
+  } finally {
+    clearTimeout(timer);
+    proc.closeStdin();
+    proc.kill();
+  }
+}
+
 export const claudeProvider: Provider = {
   id: "claude",
   displayName: "Claude Code",
@@ -511,4 +555,5 @@ export const claudeProvider: Provider = {
   models: (ctx?: ProviderContext) => manifestModels("claude", ctx?.manifestUrl, claudeProvider.detect().then((i) => i.version)),
   run,
   openSession: openClaudeSession,
+  rateLimits: (options) => readUsage(options),
 };

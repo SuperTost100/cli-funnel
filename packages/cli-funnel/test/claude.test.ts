@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildArgs, claudeProvider } from "../src/providers/claude/index.js";
-import { newClaudeTrack, parseClaudeMessage, StderrWarnings } from "../src/providers/claude/parser.js";
+import { newClaudeTrack, parseClaudeMessage, parseUsage, StderrWarnings } from "../src/providers/claude/parser.js";
 import { collect } from "./helpers.js";
 import type { FunnelEvent, RunInput, Selection } from "../src/types.js";
 
@@ -103,6 +103,42 @@ describe("claude parser", () => {
       expect(parseClaudeMessage(notification({ priority: undefined }))).toEqual([]);
       expect(parseClaudeMessage(notification({ text: "" }))).toEqual([]);
       expect(parseClaudeMessage(notification({ text: 5 }))).toEqual([]);
+    });
+  });
+
+  describe("parseUsage", () => {
+    // Recorded from claude 2.1.319 with `get_usage`: `utilization` is a percentage and `resets_at` is ISO 8601.
+    const recorded = JSON.parse(readFileSync(new URL("./fixtures/claude/get-usage.json", import.meta.url), "utf8")).response.response;
+    const window = (utilization: number, resets_at = "2026-11-10T00:40:00.921556+00:00") => ({ utilization, resets_at });
+    const answer = (rate_limits: unknown) => ({ subscription_type: "pro", rate_limits_available: true, rate_limits });
+
+    it("maps the plan and the five-hour and seven-day windows", () => {
+      expect(parseUsage(recorded)).toEqual({
+        provider: "claude",
+        plan: "max",
+        primary: { usedPercent: 23, windowMinutes: 300, resetsAt: "2026-11-10T00:40:00.921Z" },
+        secondary: { usedPercent: 6, windowMinutes: 10080, resetsAt: "2026-11-12T14:00:00.921Z" },
+      });
+    });
+
+    it("sets limit for a full window, the five-hour one first", () => {
+      expect(parseUsage(answer({ five_hour: window(100), seven_day: window(40) })).limit).toEqual({ kind: "rate", detail: "Claude five-hour limit reached.", resetAt: "2026-11-10T00:40:00.921Z" });
+      expect(parseUsage(answer({ five_hour: window(30), seven_day: window(100, "2026-11-12T14:00:00+00:00") })).limit).toEqual({ kind: "quota", detail: "Claude weekly limit reached.", resetAt: "2026-11-12T14:00:00.000Z" });
+      expect(parseUsage(answer({ five_hour: window(100), seven_day: window(100) })).limit).toMatchObject({ kind: "rate" });
+      expect(parseUsage(answer({ five_hour: window(99.9), seven_day: window(0) })).limit).toBeUndefined();
+    });
+
+    it("keeps the wording of the limit event for the same window", () => {
+      const event = parseClaudeMessage({ type: "rate_limit_event", rate_limit_info: { status: "rejected", rateLimitType: "five_hour", resetsAt: Date.parse("2026-11-10T00:40:00Z") / 1000 } });
+      const { type: _, ...limit } = event[0] as FunnelEvent & { type: "limit" };
+      expect(parseUsage(answer({ five_hour: window(100, "2026-11-10T00:40:00+00:00") })).limit).toEqual(limit);
+    });
+
+    it("returns what there is for an API key login, a null window or an unreadable time", () => {
+      expect(parseUsage({ subscription_type: null, rate_limits_available: false, rate_limits: null })).toEqual({ provider: "claude" });
+      expect(parseUsage(answer({ five_hour: null, seven_day: { utilization: 12, resets_at: null } }))).toEqual({ provider: "claude", plan: "pro", secondary: { usedPercent: 12, windowMinutes: 10080 } });
+      expect(parseUsage(answer({ five_hour: { utilization: null, resets_at: "x" }, seven_day: window(5, "not a date") }))).toEqual({ provider: "claude", plan: "pro", secondary: { usedPercent: 5, windowMinutes: 10080 } });
+      expect(parseUsage(undefined)).toEqual({ provider: "claude" });
     });
   });
 
