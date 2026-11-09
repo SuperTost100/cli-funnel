@@ -64,8 +64,14 @@ function toUsage(u: Json | undefined): Usage | undefined {
 const FIVE_HOURS = 300;
 const WEEK = 10_080;
 
-/** `remaining_fraction` as a used percentage, clamped to 0 to 100 and rounded to one decimal. */
-const usedPercent = (remaining: number): number => Math.round((1 - Math.min(1, Math.max(0, remaining))) * 1000) / 10;
+/**
+ * `remaining_fraction` as a used percentage, clamped to 0 to 100. Not rounded: "full" and "fullest" are decided on this
+ * value, so a window with a little quota left is not full. `roundWindow` rounds what the caller gets.
+ */
+const usedPercent = (remaining: number): number => (1 - Math.min(1, Math.max(0, remaining))) * 100;
+
+/** A window with `usedPercent` rounded to one decimal. */
+const roundWindow = (w: UsageWindow | undefined): UsageWindow | undefined => w && { ...w, usedPercent: Math.round(w.usedPercent * 10) / 10 };
 
 /** The `window` bucket of a group as a `UsageWindow`, or undefined when the group has none or it has no usable fraction. */
 function usageWindow(buckets: Json[], window: "5h" | "weekly", windowMinutes: number): UsageWindow | undefined {
@@ -128,11 +134,12 @@ export function parseRateLimits(data: Json): RateLimits {
   const primary = fullest(groups.map((g) => g.primary));
   const secondary = fullest(groups.map((g) => g.secondary));
   const limit = accountLimit(groups);
+  const rounded = groups.map((g) => ({ name: g.name, ...(g.primary ? { primary: roundWindow(g.primary) } : {}), ...(g.secondary ? { secondary: roundWindow(g.secondary) } : {}) }));
   return {
     provider: "antigravity",
-    ...(primary ? { primary } : {}),
-    ...(secondary ? { secondary } : {}),
-    ...(groups.length ? { groups } : {}),
+    ...(primary ? { primary: roundWindow(primary) } : {}),
+    ...(secondary ? { secondary: roundWindow(secondary) } : {}),
+    ...(groups.length ? { groups: rounded } : {}),
     ...(limit ? { limit } : {}),
   };
 }

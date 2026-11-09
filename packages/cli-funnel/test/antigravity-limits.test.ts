@@ -83,6 +83,14 @@ describe("antigravity parseRateLimits", () => {
     expect(r.groups?.[0]).toMatchObject({ primary: { usedPercent: 100 }, secondary: { usedPercent: 33.3 } });
   });
 
+  it("does not call a window full when a little quota is left, and compares windows before rounding", () => {
+    const small = parseRateLimits({ groups: [group("a", bucket("5h", 0.0004))] });
+    expect(small.primary?.usedPercent).toBe(100);
+    expect(small.limit).toBeUndefined();
+    const r = parseRateLimits({ groups: [group("a", bucket("5h", 0.5004, "2026-11-10T01:00:00Z")), group("b", bucket("5h", 0.5003, "2026-11-10T02:00:00Z"))] });
+    expect(r.primary).toMatchObject({ usedPercent: 50, resetsAt: "2026-11-10T02:00:00.000Z" });
+  });
+
   it("returns only the provider when there are no groups", () => {
     expect(parseRateLimits({ groups: [] })).toEqual({ provider: "antigravity" });
     expect(parseRateLimits({})).toEqual({ provider: "antigravity" });
@@ -133,6 +141,20 @@ describe("antigravity rateLimits", () => {
   it("throws unsupported when the result reports an error", async () => {
     fakeAgy(`echo '{"event":"result","result":{"status":"ERROR","error":"usage is not available"}}'`);
     await expect(antigravityProvider.rateLimits!()).rejects.toMatchObject({ code: "unsupported", message: expect.stringContaining("usage is not available") });
+  });
+
+  it("throws when the usage line is followed by a failed result and a non-zero exit", async () => {
+    fakeAgy(`head -n 1 "${sh(fixture)}"
+echo '{"event":"result","result":{"status":"ERROR","error":"late failure"}}'
+exit 2`);
+    await expect(antigravityProvider.rateLimits!()).rejects.toMatchObject({ code: "unsupported", message: expect.stringContaining("late failure") });
+  });
+
+  it("throws cli-failed when the usage line is followed by a non-zero exit", async () => {
+    fakeAgy(`head -n 1 "${sh(fixture)}"
+echo "crashed" >&2
+exit 2`);
+    await expect(antigravityProvider.rateLimits!()).rejects.toMatchObject({ code: "cli-failed", message: expect.stringContaining("crashed") });
   });
 
   it("throws not-logged-in when agy asks for a sign-in", async () => {

@@ -8,7 +8,7 @@ Runs use `agy --print=<prompt> --output-format stream-json` with stdin closed. L
 
 `agy` prints warnings on stderr as lines that start with `warning:` and a space, for example `warning: --mode plan has no effect while slash command expansion is disabled.` or `warning: ignoring unsupported stream input message event "bogus"`. Each one becomes a `warning` event with the rest of the line as its message, and `RunResult.warnings` lists them in order. Lines with other prefixes (`error:`, `jetski:`, `[agy]`, `AGY_ERROR:`) are not warnings and are handled as before. Checked on 1.5.3.
 
-Stderr is a separate pipe from the stream, so a warning can be read before or after the `init` line that produced `session`. Warnings are therefore held until `session` (and `access.reduced`, when there is one) has gone out, and are emitted right after them. A warning that arrives later goes out before the next event. If the run ends without a `session` event, the held warnings come just before the `done` or `error`. Warnings are masked with the run's secrets, as `raw` events are.
+Stderr is a separate pipe from the stream, so a warning can be read before or after the `init` line that produced `session`. Warnings are therefore held until `session` (and `access.reduced`, when there is one) has gone out, and are emitted right after them. A warning that arrives later goes out before the next event. If the run ends without a `session` event, the held warnings come just before the `done` or `error`. Before the `done` or `error` goes out, cli-funnel waits for `agy` to exit, so the last stderr line is read, and stops a process that is still running after one second. Warnings are masked with the run's secrets, as `raw` events are.
 
 ## Capabilities
 

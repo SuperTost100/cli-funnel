@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFil
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { fakeShCli, sh } from "./fake-cli.js";
+import { fakeNodeCli, fakeShCli, sh } from "./fake-cli.js";
 import { collect } from "./helpers.js";
 import { antigravityProvider, buildArgs, NONE_MATCHER, noneHooks, noneWorkspace } from "../src/providers/antigravity/index.js";
 import { createMapper, parseModels, parseWarning } from "../src/providers/antigravity/parser.js";
@@ -410,6 +410,20 @@ exit 3`);
     const events = await drain(input());
     expect(types(events)).toEqual(["warning", "error"]);
   });
+
+  it("emits a warning with no line break that is written before the result, also when the process lingers", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cf-agy-"));
+    process.env.CLI_FUNNEL_AGY_BIN = fakeShCli(
+      join(dir, "agy"),
+      `printf 'warning: unterminated' >&2
+echo '{"event":"init","conversation_id":"c1","init":{"model":"m","cwd":"/w","permission_mode":"always-proceed"}}'
+echo '{"event":"result","result":{"status":"SUCCESS","response":"ok"}}'
+sleep 30`,
+    );
+    const events = await drain(input());
+    expect(types(events)).toEqual(["session", "warning", "done"]);
+    expect(events[1]).toEqual({ type: "warning", message: "unterminated" });
+  });
 });
 
 describe("antigravity resume", () => {
@@ -438,6 +452,21 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"ok"}}'`,
     expect(events.map((e) => e.type)).toEqual(["warning", "error"]);
     expect(events.at(-1)).toMatchObject({ type: "error", code: "cli-failed", message: expect.stringContaining("abc") });
     expect((events.at(-1) as { message: string }).message).toMatch(/not found.*new conversation/i);
+  });
+
+  it("stops the CLI at once when a resume started a new conversation", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cf-agy-"));
+    const pidFile = join(dir, "pid");
+    process.env.CLI_FUNNEL_AGY_BIN = fakeNodeCli(
+      join(dir, "agy"),
+      `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+console.log('{"event":"init","conversation_id":"other-id","init":{"model":"m","cwd":"/w"}}');
+setInterval(() => {}, 1000);`,
+    );
+    const events = await drain({ ...input(), sessionId: "abc" });
+    expect(events.map((e) => e.type)).toEqual(["error"]);
+    const pid = Number(readFileSync(pidFile, "utf8"));
+    expect(() => process.kill(pid, 0)).toThrow();
   });
 
   it("resumes when init reports the conversation that was asked for", async () => {
