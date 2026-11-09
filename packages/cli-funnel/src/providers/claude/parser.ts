@@ -314,11 +314,17 @@ function parseResult(r: Obj, track: ClaudeTrack): FunnelEvent[] {
   if (isObj(r.usage)) {
     const u = r.usage;
     const cached = num(u.cache_read_input_tokens);
-    const input = num(u.input_tokens) + cached + num(u.cache_creation_input_tokens);
+    // The API's `input_tokens` leaves out what was read from or written to the prompt cache, so both are added here.
+    const written = num(u.cache_creation_input_tokens);
+    const input = num(u.input_tokens) + cached + written;
+    const thinking = isObj(u.output_tokens_details) ? num(u.output_tokens_details.thinking_tokens) : 0;
     const usage: Usage = {
       inputTokens: input,
       outputTokens: num(u.output_tokens),
       cachedInputTokens: cached,
+      ...(written > 0 ? { cacheCreationInputTokens: written } : {}),
+      // `output_tokens` already counts the thinking tokens.
+      ...(thinking > 0 ? { reasoningTokens: thinking } : {}),
       totalTokens: input + num(u.output_tokens),
     };
     events.push({ type: "usage", usage });

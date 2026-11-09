@@ -26,6 +26,20 @@ describe("claude parser", () => {
     expect(ev.find((e) => e.type === "usage")).toBeTruthy();
   });
 
+  it("reports cache writes and thinking tokens in usage, only when they are above zero", () => {
+    const usage = (name: string) => fixture(name).find((e) => e.type === "usage");
+    // Recorded from claude 2.1.316. `input_tokens` is 50, so inputTokens is 50 + 167097 read + 10683 written.
+    expect(usage("file-changes")).toEqual({
+      type: "usage",
+      usage: { inputTokens: 177830, outputTokens: 932, cachedInputTokens: 167097, cacheCreationInputTokens: 10683, reasoningTokens: 353, totalTokens: 178762 },
+    });
+    // A run with no thinking details leaves the field out. Cache writes were there.
+    expect(usage("text")).toEqual({ type: "usage", usage: { inputTokens: 21983, outputTokens: 93, cachedInputTokens: 17290, cacheCreationInputTokens: 4683, totalTokens: 22076 } });
+    // Zero values leave both fields out.
+    const zero = parseClaudeMessage({ type: "result", subtype: "success", result: "", usage: { input_tokens: 5, cache_creation_input_tokens: 0, output_tokens: 2, output_tokens_details: { thinking_tokens: 0 } } });
+    expect(zero.find((e) => e.type === "usage")).toEqual({ type: "usage", usage: { inputTokens: 5, outputTokens: 2, cachedInputTokens: 0, totalTokens: 7 } });
+  });
+
   it("maps tool calls and results", () => {
     const ev = fixture("tool-allow");
     const start = ev.find((e) => e.type === "tool.start");
