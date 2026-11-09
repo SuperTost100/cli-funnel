@@ -206,8 +206,8 @@ To set it for one run, pass it in `env`. A value in `env` wins over the parent e
 
 ```ts
 await funnel.run({
-  prompt: "Summarise the open issues",
-  selection: { provider: "claude", model: "claude-fable-5-1", cwd: projectDir, access: "none" },
+  prompt: `Summarise this issue in one sentence:\n\n${issueText}`,
+  selection: { provider: "claude", model: "claude-sonnet-5", cwd: projectDir, access: "none" },
   env: { CLAUDE_CODE_ENTRYPOINT: "my-app" },
 });
 ```
