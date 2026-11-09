@@ -481,7 +481,7 @@ export const claudeProvider: Provider = {
   id: "claude",
   displayName: "Claude Code",
   // `/feedback` and `/bug` work only in the interactive terminal, behind a consent screen.
-  feedbackChannel: FEEDBACK_CHANNELS.anthropic,
+  feedbackChannel: FEEDBACK_CHANNELS.claudeCode,
   capabilities,
   detect: () => detectInstallation(BIN, TESTED_RANGE),
   authStatus,

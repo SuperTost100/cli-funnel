@@ -376,7 +376,8 @@ export function createFunnel(options: FunnelOptions = {}) {
     /**
      * Sends a feedback report about a session to the vendor through the CLI's own feedback path. Only Codex has one.
      * Other providers resolve with `sent: false` and the vendor's manual channel, and nothing leaves the machine. With
-     * `includeLogs`, Codex also uploads its logs and the saved conversation.
+     * `includeLogs`, Codex also uploads its logs and the saved conversation. A `cli-failed` error after a timeout does
+     * not prove the report was not sent.
      */
     async sendFeedback(id: ProviderId, report: FeedbackReport, opts?: ProcessOptions): Promise<FeedbackResult> {
       const p = provider(id);

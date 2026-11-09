@@ -72,6 +72,7 @@ describe("codex feedback/upload", () => {
   it("refuses values Codex would file under the wrong kind", () => {
     expect(() => feedbackParams({ classification: "bad" as never })).toThrow(expect.objectContaining({ code: "invalid-selection" }));
     expect(() => feedbackParams({ classification: "bug", sessionId: "" })).toThrow("sessionId");
+    expect(() => feedbackParams({ classification: "bug", sessionId: "   " })).toThrow("sessionId");
     expect(() => feedbackParams({ classification: "bug", includeLogs: "yes" as never })).toThrow("includeLogs");
     expect(() => feedbackParams({ classification: "bug", reason: 3 as never })).toThrow("reason");
   });

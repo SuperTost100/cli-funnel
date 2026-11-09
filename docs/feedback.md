@@ -55,7 +55,7 @@ The third argument takes `env` and `signal`, like the other one-off calls. Pass 
 | `sessionId` | `threadId` |
 | `includeLogs` | `includeLogs` |
 
-The answer's `threadId` becomes `reportId`. Codex sets it to the reported thread id, or to `no-active-thread-<uuid>` without a session. The TUI's `/feedback` puts the same id in the issue link it shows. The call waits up to two minutes, because Codex gathers logs and a diagnostics report before the upload. A Codex error, such as `sending feedback is disabled by configuration` or more than three uploads at once, comes back as `FunnelError` with code `cli-failed`.
+The answer's `threadId` becomes `reportId`. Codex sets it to the reported thread id, or to `no-active-thread-<uuid>` without a session. The TUI's `/feedback` puts the same id in the issue link it shows. The call waits up to two minutes, because Codex gathers logs and a diagnostics report before the upload. A Codex error, such as `sending feedback is disabled by configuration` or more than three uploads at once, comes back as `FunnelError` with code `cli-failed`. A timeout or a Codex exit before the answer does not prove the report was not sent, so do not retry on your own: let the user decide.
 
 The five classifications are the ones Codex itself uses:
 
@@ -70,12 +70,12 @@ Checked on 2026-11-09. None of these vendors documents a headless path other tha
 | Provider | Path | Channel | Source |
 | --- | --- | --- | --- |
 | Codex | headless, `feedback/upload` | Also [OpenAI's report form](https://openai.com/form/report-content/) | [openai/codex](https://github.com/openai/codex/blob/e54a5713caf331f42a6eef0166186df5f7563c29/codex-rs/app-server-protocol/src/protocol/v2/feedback.rs), [OpenAI help](https://help.openai.com/en/articles/10245791) |
-| Claude Code | manual | [Anthropic's content form](https://claude.com/form/anthropic-content-reporting), `usersafety@anthropic.com` for safety issues | [Claude help center](https://support.claude.com/en/articles/7996906) |
+| Claude Code | manual | [Anthropic's content form](https://claude.com/form/anthropic-content-reporting), `usersafety@anthropic.com` for safety issues, `/feedback` in the interactive terminal or a GitHub issue for bugs | [Claude help center](https://support.claude.com/en/articles/7996906), [troubleshooting](https://code.claude.com/docs/en/troubleshooting) |
 | Cursor Agent | manual | [Cursor forum, Bug Reports](https://forum.cursor.com/c/bug-report/6), `hi@cursor.com`, with the request id | [Reporting bugs](https://cursor.com/help/troubleshooting/reporting-bugs), [Cursor abuse page](https://cursor.com/abuse) |
 | Antigravity | manual | In the app: Settings, then Provide Feedback | [Getting started codelab](https://codelabs.developers.google.com/getting-started-google-antigravity) |
-| Anthropic API | manual | Same as Claude Code | [Claude help center](https://support.claude.com/en/articles/7996906) |
+| Anthropic API | manual | [Anthropic's content form](https://claude.com/form/anthropic-content-reporting), `usersafety@anthropic.com` for safety issues | [Claude help center](https://support.claude.com/en/articles/7996906) |
 | OpenAI API | manual | [OpenAI's report form](https://openai.com/form/report-content/) | [OpenAI help](https://help.openai.com/en/articles/10245791) |
-| Gemini API | manual | [Google Cloud's report form](https://support.google.com/code/contact/cloud_platform_report) | [Vertex AI responsible AI](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/learn/responsible-ai) |
+| Gemini API | manual | [Google Cloud's report form](https://support.google.com/code/contact/cloud_platform_report), and ratings on logged calls in AI Studio for the project owner | [Vertex AI responsible AI](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/learn/responsible-ai), [Gemini API logs](https://aistudio.google.com/docs/logs-policy) |
 | Ollama | none | The server's operator or the model's publisher | |
 | OpenAI-compatible | none | The server's operator or the model's publisher | |
 
@@ -84,7 +84,7 @@ Why the others stay manual:
 - **Claude Code**: `/feedback` and `/bug` open a dialog with a consent screen in the interactive terminal, and `claude --help` has no feedback subcommand. The [commands page](https://code.claude.com/docs/en/commands) and the [data usage page](https://code.claude.com/docs/en/data-usage) document no endpoint.
 - **Cursor Agent**: `/feedback <message>` is an interactive [slash command](https://cursor.com/docs/cli/reference/slash-commands). The docs do not say it works with `-p`, and testing it would send a real report.
 - **Antigravity**: `agy --help` lists no feedback subcommand. Its feedback box is part of the interactive app.
-- **Gemini API**: the Gemini API docs name no reporting channel. Google documents the Cloud form for Gemini on Vertex AI, so that is the channel cli-funnel returns.
+- **Gemini API**: the project owner can rate logged calls in AI Studio's Logs and Datasets page, when billing and logging are on for the project. That is not a channel for the app's users, so cli-funnel returns the Cloud form Google documents for Gemini on Vertex AI and names AI Studio in the note.
 - **Anthropic, OpenAI and Gemini APIs**: none has a documented feedback endpoint.
 
 The channels live in `packages/cli-funnel/src/providers/feedback.ts`. Update them there when a vendor changes its pages.

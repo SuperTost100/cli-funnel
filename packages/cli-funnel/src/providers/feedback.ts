@@ -11,6 +11,12 @@ export const FEEDBACK_CHANNELS = {
     note: "The form takes content that breaks Anthropic's usage policies or the law. The address takes safety issues, with enough detail to replicate them.",
     sources: ["https://support.claude.com/en/articles/7996906"],
   },
+  claudeCode: {
+    url: "https://claude.com/form/anthropic-content-reporting",
+    email: "usersafety@anthropic.com",
+    note: "The form takes content that breaks Anthropic's usage policies or the law, and the address takes safety issues. For a bug, run /feedback in Claude Code's interactive terminal or open an issue on GitHub.",
+    sources: ["https://support.claude.com/en/articles/7996906", "https://code.claude.com/docs/en/troubleshooting"],
+  },
   openai: {
     url: "https://openai.com/form/report-content/",
     note: "Takes content that breaks OpenAI's terms or the law.",
@@ -28,8 +34,8 @@ export const FEEDBACK_CHANNELS = {
   },
   google: {
     url: "https://support.google.com/code/contact/cloud_platform_report",
-    note: "Google documents this form for inappropriate or inaccurate output from Gemini on Vertex AI. The Gemini API docs name no channel of their own.",
-    sources: ["https://docs.cloud.google.com/vertex-ai/generative-ai/docs/learn/responsible-ai"],
+    note: "Google documents this form for inappropriate or inaccurate output from Gemini on Vertex AI. The project owner can also rate logged Gemini API calls in AI Studio, when billing and logging are on.",
+    sources: ["https://docs.cloud.google.com/vertex-ai/generative-ai/docs/learn/responsible-ai", "https://aistudio.google.com/docs/logs-policy"],
   },
 } satisfies Record<string, FeedbackChannel>;
 
@@ -38,7 +44,7 @@ export function checkFeedbackReport(report: FeedbackReport): void {
   if (!(FEEDBACK_CLASSIFICATIONS as readonly unknown[]).includes(report?.classification)) {
     throw new FunnelError(`classification must be one of ${FEEDBACK_CLASSIFICATIONS.join(", ")}.`, "invalid-selection");
   }
-  if (report.sessionId !== undefined && (typeof report.sessionId !== "string" || !report.sessionId)) {
+  if (report.sessionId !== undefined && (typeof report.sessionId !== "string" || !report.sessionId.trim())) {
     throw new FunnelError("sessionId must be a non-empty string.", "invalid-selection");
   }
   if (report.reason !== undefined && typeof report.reason !== "string") throw new FunnelError("reason must be a string.", "invalid-selection");

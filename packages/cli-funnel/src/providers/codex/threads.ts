@@ -135,7 +135,10 @@ export function parseFeedback(result: Json): string {
   return id;
 }
 
-/** `feedback/upload` sends the report to OpenAI, the same request the TUI's `/feedback` makes. */
+/**
+ * `feedback/upload` sends the report to OpenAI, the same request the TUI's `/feedback` makes. After a timeout or an
+ * exit before the answer, the report may still have reached OpenAI, so a retry can send it twice.
+ */
 export async function sendFeedback(report: FeedbackReport, options: ProcessOptions = {}): Promise<string> {
   const params = feedbackParams(report);
   return parseFeedback(await call("feedback/upload", params, options, FEEDBACK_TIMEOUT_MS));
