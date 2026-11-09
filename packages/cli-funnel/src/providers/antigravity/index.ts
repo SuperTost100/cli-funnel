@@ -15,13 +15,15 @@ import {
   type McpServer,
   type ModelInfo,
   type Provider,
+  type ProcessOptions,
   type ProviderContext,
+  type RateLimits,
   type RunInput,
   type Selection,
 } from "../../types.js";
-import { detectInstallation, exitedEarly, findBinary, isTerminal, LOGIN_TIMEOUT_MS, rawTap, runUpdate, SETTLE_MS } from "../base.js";
+import { detectInstallation, exitedEarly, findBinary, isTerminal, LOGIN_TIMEOUT_MS, rawTap, runUpdate, SETTLE_MS, stderrTail } from "../base.js";
 import { runSecrets } from "../../util/redact.js";
-import { createMapper, parseModels, parseWarning } from "./parser.js";
+import { createMapper, parseModels, parseRateLimits, parseWarning } from "./parser.js";
 import { SubagentTranscripts, type ForwardSubagents } from "./transcript.js";
 import { composePrompt } from "../prompt.js";
 import { FEEDBACK_CHANNELS } from "../feedback.js";
@@ -420,6 +422,45 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   }
 }
 
+/** How long `/usage` may take. It runs no model turn, so it answers at once. */
+const USAGE_TIMEOUT_MS = 30_000;
+
+/**
+ * `agy --print=/usage` prints the account's limits in a `command_result` line and ends with a `result` that has no
+ * turns. It spends no quota. It runs in the folder that `none` uses, which holds nothing of the user's.
+ */
+async function rateLimits(options: ProcessOptions = {}): Promise<RateLimits> {
+  const path = findBinary("agy");
+  if (!path) throw new FunnelError("agy is not installed.", "not-installed");
+  const res = await exec(path, ["--print=/usage", "--output-format", "stream-json"], {
+    cwd: await noneWorkspace(),
+    env: options.env,
+    signal: options.signal,
+    timeoutMs: USAGE_TIMEOUT_MS,
+  }).catch((e: unknown) => {
+    throw new FunnelError(`agy could not run: ${e instanceof Error ? e.message : String(e)}`, "cli-failed");
+  });
+  if (options.signal?.aborted) throw new FunnelError("The request was aborted.", "aborted");
+  const lines: Record<string, any>[] = [];
+  for (const line of res.stdout.split("\n")) {
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed && typeof parsed === "object") lines.push(parsed);
+    } catch {
+      // Not a stream line. Only the JSON lines matter here.
+    }
+  }
+  const usage = lines.find((l) => l.event === "command_result" && l.command?.name === "usage");
+  if (usage) return parseRateLimits(usage.command.data);
+  const output = (res.stderr + res.stdout).trim();
+  if (/sign in|authentication required|not logged in/i.test(output)) throw new FunnelError("Run agy in a terminal and sign in.", "not-logged-in");
+  const failed = lines.find((l) => l.event === "result" && (l.result?.status === "ERROR" || l.result?.error));
+  if (failed) throw new FunnelError(`agy could not report its usage: ${String(failed.result.error ?? "the run failed")}`, "unsupported");
+  if (res.code === null) throw new FunnelError("agy did not answer /usage in time.", "cli-failed");
+  if (res.code !== 0) throw new FunnelError(stderrTail(res.stderr) || `agy exited with code ${res.code}.`, "cli-failed");
+  throw new FunnelError("This agy does not report usage with /usage. Update agy.", "unsupported");
+}
+
 export const antigravityProvider: Provider = {
   id: "antigravity",
   displayName: "Antigravity",
@@ -449,6 +490,7 @@ export const antigravityProvider: Provider = {
     );
   },
   update: () => runUpdate("agy", ["update"]),
+  rateLimits,
   async models(ctx?: ProviderContext) {
     const fallback = await manifestModels("antigravity", ctx?.manifestUrl);
     const path = findBinary("agy");

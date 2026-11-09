@@ -1,5 +1,5 @@
 import { isAbsolute, posix, win32 } from "node:path";
-import type { AccessLevel, EffortOption, FunnelEvent, ModelInfo, PlanStep, Usage } from "../../types.js";
+import type { AccessLevel, EffortOption, FunnelEvent, Limit, ModelInfo, PlanStep, RateLimits, Usage, UsageWindow } from "../../types.js";
 
 const EFFORTS = ["low", "medium", "high", "max"];
 const EFFORT_RE = /^(.+)-(low|medium|high|max)$/;
@@ -58,6 +58,82 @@ function toUsage(u: Json | undefined): Usage | undefined {
     cachedInputTokens: u.cache_read_tokens || undefined,
     reasoningTokens: u.thinking_tokens || undefined,
     totalTokens: u.total_tokens ?? input + output,
+  };
+}
+
+const FIVE_HOURS = 300;
+const WEEK = 10_080;
+
+/** `remaining_fraction` as a used percentage, clamped to 0 to 100 and rounded to one decimal. */
+const usedPercent = (remaining: number): number => Math.round((1 - Math.min(1, Math.max(0, remaining))) * 1000) / 10;
+
+/** The `window` bucket of a group as a `UsageWindow`, or undefined when the group has none or it has no usable fraction. */
+function usageWindow(buckets: Json[], window: "5h" | "weekly", windowMinutes: number): UsageWindow | undefined {
+  const b = buckets.find((x) => x?.window === window && typeof x.remaining_fraction === "number" && Number.isFinite(x.remaining_fraction));
+  if (!b) return undefined;
+  const reset = typeof b.reset_time === "string" ? new Date(b.reset_time) : undefined;
+  return {
+    usedPercent: usedPercent(b.remaining_fraction),
+    windowMinutes,
+    ...(reset && !Number.isNaN(reset.getTime()) ? { resetsAt: reset.toISOString() } : {}),
+  };
+}
+
+type UsageGroup = NonNullable<RateLimits["groups"]>[number];
+
+const fullest = (windows: (UsageWindow | undefined)[]): UsageWindow | undefined =>
+  windows.reduce<UsageWindow | undefined>((best, w) => (w && (!best || w.usedPercent > best.usedPercent) ? w : best), undefined);
+
+/** Milliseconds since the epoch, or Infinity when the reset time is unknown. */
+const resetTime = (w: UsageWindow): number => (w.resetsAt ? Date.parse(w.resetsAt) : Infinity);
+
+/**
+ * The limit that stops every run, or undefined. A group with a full window blocks only its own models, so one full group
+ * is no limit while another still has room. Only when every group has a full window is the account stopped, until the
+ * first group is back. A group is back when all of its full windows have reset, so the latest of them counts.
+ */
+function accountLimit(groups: UsageGroup[]): Limit | undefined {
+  if (!groups.length) return undefined;
+  const holds = groups.map((g) => {
+    const full = [g.primary, g.secondary].filter((w): w is UsageWindow => !!w && w.usedPercent >= 100);
+    const last = full.reduce<UsageWindow | undefined>((a, w) => (!a || resetTime(w) > resetTime(a) ? w : a), undefined);
+    return last && { name: g.name, window: last };
+  });
+  let first: { name: string; window: UsageWindow } | undefined;
+  for (const h of holds) {
+    if (!h) return undefined;
+    if (!first || resetTime(h.window) < resetTime(first.window)) first = h;
+  }
+  if (!first) return undefined;
+  const short = (first.window.windowMinutes ?? WEEK) <= FIVE_HOURS;
+  return {
+    kind: short ? "rate" : "quota",
+    detail: `Every model group has reached a limit. ${first.name} is back first, when its ${short ? "5-hour" : "weekly"} limit resets.`,
+    ...(first.window.resetsAt ? { resetAt: first.window.resetsAt } : {}),
+  };
+}
+
+/**
+ * The `data` of the `usage` `command_result` that `agy --print=/usage` prints, as `RateLimits`. Each group has a 5-hour
+ * and a weekly bucket, and a group may have only one of them. `primary` and `secondary` hold the fullest window of
+ * each kind across the groups. The output names no plan.
+ */
+export function parseRateLimits(data: Json): RateLimits {
+  const groups: UsageGroup[] = (Array.isArray(data?.groups) ? (data.groups as Json[]) : []).map((g) => {
+    const buckets: Json[] = Array.isArray(g?.buckets) ? g.buckets : [];
+    const primary = usageWindow(buckets, "5h", FIVE_HOURS);
+    const secondary = usageWindow(buckets, "weekly", WEEK);
+    return { name: String(g?.name ?? ""), ...(primary ? { primary } : {}), ...(secondary ? { secondary } : {}) };
+  });
+  const primary = fullest(groups.map((g) => g.primary));
+  const secondary = fullest(groups.map((g) => g.secondary));
+  const limit = accountLimit(groups);
+  return {
+    provider: "antigravity",
+    ...(primary ? { primary } : {}),
+    ...(secondary ? { secondary } : {}),
+    ...(groups.length ? { groups } : {}),
+    ...(limit ? { limit } : {}),
   };
 }
 

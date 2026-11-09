@@ -6,7 +6,7 @@ Runs use `agy --print=<prompt> --output-format stream-json` with stdin closed. L
 
 ## Warnings
 
-`agy` prints warnings on stderr as lines that start with `warning: `, for example `warning: --mode plan has no effect while slash command expansion is disabled.` or `warning: ignoring unsupported stream input message event "bogus"`. Each one becomes a `warning` event with the rest of the line as its message, and `RunResult.warnings` lists them in order. Lines with other prefixes (`error: `, `jetski: `, `[agy] `, `AGY_ERROR: `) are not warnings and are handled as before. Checked on 1.5.3.
+`agy` prints warnings on stderr as lines that start with `warning:` and a space, for example `warning: --mode plan has no effect while slash command expansion is disabled.` or `warning: ignoring unsupported stream input message event "bogus"`. Each one becomes a `warning` event with the rest of the line as its message, and `RunResult.warnings` lists them in order. Lines with other prefixes (`error:`, `jetski:`, `[agy]`, `AGY_ERROR:`) are not warnings and are handled as before. Checked on 1.5.3.
 
 Stderr is a separate pipe from the stream, so a warning can be read before or after the `init` line that produced `session`. Warnings are therefore held until `session` (and `access.reduced`, when there is one) has gone out, and are emitted right after them. A warning that arrives later goes out before the next event. If the run ends without a `session` event, the held warnings come just before the `done` or `error`. Warnings are masked with the run's secrets, as `raw` events are.
 
@@ -156,6 +156,27 @@ The `--model` string is the base id plus `--effort <effort>`. Passing a full id 
 `authStatus()` runs `agy models`. Exit code 0 with at least one model means signed in, whether the token is in the keyring or in the file, so cli-funnel does not look for the file. A failure that asks you to sign in means signed out. Any other failure (a timeout, a crash, an empty list) also returns `loggedIn: false`, but `detail` says what went wrong instead of asking for a sign-in. Checks never overlap: a call that arrives while one is running shares its result. It does not read the token and does not spend quota.
 
 `login()` emits `needs-terminal` with command `["agy"]`, then polls `authStatus()` every three seconds for up to ten minutes and emits `done` once signed in.
+
+## Usage limits
+
+`funnel.rateLimits("antigravity")` runs `agy --print=/usage --output-format stream-json` and reads its `command_result` line. The command runs no model turn and spends no quota. It runs in the folder that `none` uses, so it never touches your project, and it times out after 30 seconds. `env` and `signal` from the options apply to the process. Checked on 1.5.3.
+
+The account has several model groups, such as "Gemini Models" and "Claude and GPT models", and each group has its own 5-hour and weekly limit. Some groups have only a weekly limit. The result has one entry in `groups` per group, and for each window:
+
+| Field | Value |
+| --- | --- |
+| `primary` | the group's `5h` bucket, `windowMinutes: 300` |
+| `secondary` | the group's `weekly` bucket, `windowMinutes: 10080` |
+| `usedPercent` | `(1 - remaining_fraction) * 100`, rounded to one decimal |
+| `resetsAt` | the bucket's `reset_time`, as an ISO 8601 timestamp |
+
+The top-level `primary` and `secondary` hold the fullest window of each kind across the groups. `plan` is not set, because the output does not name one.
+
+A full group stops only its own models, so `limit` is set only when every group has a full window. It is a `rate` limit when the window that holds the first group back is the 5-hour one, and a `quota` limit when it is the weekly one, and `resetAt` is when that group is back. A group with two full windows is back when both have reset.
+
+Errors: `not-installed` when `agy` is missing, `not-logged-in` when the output asks for a sign-in (not tested, because that needs a signed-out account), `unsupported` when the output has no `usage` result, as on an older `agy`, or when the `result` reports an error, `aborted` when `signal` was aborted, and `cli-failed` for a timeout or any other failure.
+
+`test/fixtures/antigravity/usage.ndjson` is the recorded output.
 
 ## Logout and update
 
