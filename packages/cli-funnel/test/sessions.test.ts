@@ -1,9 +1,10 @@
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createClient } from "../src/client/index.js";
 import { createFunnel, type Funnel } from "../src/funnel.js";
+import { StderrWarnings } from "../src/providers/claude/parser.js";
 import { createHandler } from "../src/server/handler.js";
 import { fingerprint, type SessionOptions } from "../src/sessions.js";
 import type { FunnelEvent, RunInput } from "../src/types.js";
@@ -46,8 +47,7 @@ process.stdin.on("data", (d) => {
     const answer = text + "#" + n + "@" + process.pid;
     send({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: answer } } });
     send({ type: "result", subtype: "success", is_error: false, result: answer, session_id: sid });
-    // The mark is written once the late line has left this process, so the test knows when to go on.
-    if (process.env.FAKE_LATE_STDERR && n === 1) process.stderr.write(process.env.FAKE_LATE_STDERR, () => fs.writeFileSync(process.env.FAKE_LATE_MARK, "1"));
+    if (process.env.FAKE_LATE_STDERR && n === 1) process.stderr.write(process.env.FAKE_LATE_STDERR);
   }
 });
 process.stdin.on("end", () => process.exit(0));
@@ -257,22 +257,20 @@ describe("claude live sessions", () => {
 
   it("drops a warning that arrives between two turns instead of giving it to the next turn", async () => {
     process.env.FAKE_LATE_STDERR = "Warning: belongs to turn one\n";
-    const mark = join(mkdtempSync(join(tmpdir(), "cf-late-")), "written");
-    process.env.FAKE_LATE_MARK = mark;
+    const push = vi.spyOn(StderrWarnings.prototype, "push");
     try {
       const f = make({ keepAlive: true });
       const first = await f.run(claude("one"));
       expect(first.warnings ?? []).toEqual([]);
       // A fixed wait was too short on a busy Windows runner: the late line then arrived during turn two, which reports
-      // it. Wait until the fake has written the line, then give the pipe a moment to deliver it.
-      await expect.poll(() => existsSync(mark), { timeout: 10_000, interval: 20 }).toBe(true);
-      await new Promise((r) => setTimeout(r, 300));
+      // it. So turn two starts only once the session has taken the line in.
+      await expect.poll(() => push.mock.calls.some(([line]) => String(line).includes("belongs to turn one")), { timeout: 10_000, interval: 20 }).toBe(true);
       const second = await f.run(claude("two", { sessionId: first.sessionId }));
       expect(second.warnings ?? []).toEqual([]);
       expect(spawns()).toHaveLength(1);
     } finally {
       delete process.env.FAKE_LATE_STDERR;
-      delete process.env.FAKE_LATE_MARK;
+      push.mockRestore();
     }
   });
 
