@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -47,7 +47,15 @@ process.stdin.on("data", (d) => {
     const answer = text + "#" + n + "@" + process.pid;
     send({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: answer } } });
     send({ type: "result", subtype: "success", is_error: false, result: answer, session_id: sid });
-    if (process.env.FAKE_LATE_STDERR && n === 1) process.stderr.write(process.env.FAKE_LATE_STDERR);
+    if (process.env.FAKE_LATE_STDERR && n === 1) {
+      // Written only once the test says turn one is over. Stdout and stderr are two pipes, so a line written right
+      // after the result can reach the session before the result does, and then it belongs to turn one.
+      const wait = setInterval(() => {
+        if (!fs.existsSync(process.env.FAKE_LATE_GO)) return;
+        clearInterval(wait);
+        process.stderr.write(process.env.FAKE_LATE_STDERR);
+      }, 10);
+    }
   }
 });
 process.stdin.on("end", () => process.exit(0));
@@ -257,19 +265,22 @@ describe("claude live sessions", () => {
 
   it("drops a warning that arrives between two turns instead of giving it to the next turn", async () => {
     process.env.FAKE_LATE_STDERR = "Warning: belongs to turn one\n";
+    const go = join(mkdtempSync(join(tmpdir(), "cf-late-")), "go");
+    process.env.FAKE_LATE_GO = go;
     const push = vi.spyOn(StderrWarnings.prototype, "push");
     try {
       const f = make({ keepAlive: true });
       const first = await f.run(claude("one"));
       expect(first.warnings ?? []).toEqual([]);
-      // A fixed wait was too short on a busy Windows runner: the late line then arrived during turn two, which reports
-      // it. So turn two starts only once the session has taken the line in.
+      // The fake writes the line now that turn one is over, and turn two starts only once the session has taken it in.
+      writeFileSync(go, "1");
       await expect.poll(() => push.mock.calls.some(([line]) => String(line).includes("belongs to turn one")), { timeout: 10_000, interval: 20 }).toBe(true);
       const second = await f.run(claude("two", { sessionId: first.sessionId }));
       expect(second.warnings ?? []).toEqual([]);
       expect(spawns()).toHaveLength(1);
     } finally {
       delete process.env.FAKE_LATE_STDERR;
+      delete process.env.FAKE_LATE_GO;
       push.mockRestore();
     }
   });
