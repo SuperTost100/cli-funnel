@@ -1,6 +1,6 @@
 /**
  * Feature flags that add tools or side effects. `none` turns them off. Checked against
- * `codex features list` on 0.159. Unknown keys are ignored by Codex, so a renamed flag fails open:
+ * `codex features list` on 0.166. Unknown keys are ignored by Codex, so a renamed flag fails open:
  * the read-only sandbox and the deny-all approvals still hold.
  */
 const TOOL_FEATURES = [
@@ -47,8 +47,10 @@ export function noToolsConfig(servers: string[]): Record<string, unknown> {
   return Object.fromEntries([
     ...TOOL_FEATURES.map((f) => [`features.${f}`, false]),
     ["web_search", "disabled"],
-    ["include_apply_patch_tool", false],
-    ["tools.view_image", false],
+    // Codex 0.166 ignores `tools.view_image` and `include_apply_patch_tool` with a warning. `view_image` is a feature now.
+    // `apply_patch` has no switch any more: at `none` the sandbox is read-only and every approval is denied, so it
+    // cannot change a file.
+    ["features.view_image", false],
     ...(servers.length ? [["mcp_servers", Object.fromEntries(servers.map((name) => [name, { enabled: false }]))]] : []),
   ]);
 }
