@@ -66,7 +66,7 @@ An error from Codex, such as a thread that does not exist, comes back as `Funnel
 
 | Access | Approval policy | Sandbox | Behavior |
 | --- | --- | --- | --- |
-| `none` | `untrusted` | `read-only` | Every approval is denied without calling `onApproval`. The thread starts with tool features off (`shell_tool`, `unified_exec`, `apps`, `plugins`, `multi_agent`, and more), web search disabled, and every MCP server in the effective config switched off by name. If Codex cannot list those servers, the run fails and no thread starts. |
+| `none` | `untrusted` | `read-only` | Every approval is denied without calling `onApproval`. The thread starts with tool features off (`shell_tool`, `unified_exec`, `apps`, `plugins`, `multi_agent`, and more), the `view_image` feature off, web search disabled, and every MCP server in the effective config switched off by name. If Codex cannot list those servers, the run fails and no thread starts. Codex 0.166 has no switch for `apply_patch`, and none is needed: the sandbox is read-only and every approval is denied, so it cannot change a file. |
 | `supervised` | `untrusted` | `workspace-write` | Every command that is not on Codex's known-safe list and every file change becomes an `approval.request`. |
 | `accept-edits` | `untrusted` | `workspace-write` | File changes are allowed without asking. Commands still go to `onApproval`. |
 | `auto` | `on-request` | `workspace-write` | Codex's auto review agent (`approvalsReviewer: auto_review`) decides escalations. Commands run inside the sandbox without asking. |
@@ -128,7 +128,7 @@ Codex cannot change a tool's input, so an allow with `updatedInput` is sent as a
 
 ### Questions
 
-With `onQuestion`, the thread sets the `default_mode_request_user_input` feature, so the model offers its `request_user_input` tool outside plan mode. The feature is still under development in Codex 0.164, which logs a warning about it. Each `item/tool/requestUserInput` becomes `question.request`: `isOther` becomes `allowOther` and `isSecret` becomes `secret`. Codex marks every question `isOther` and always sends options, and its tool description tells the model to ask three questions at most. There is no `multiSelect`.
+With `onQuestion`, the thread sets the `default_mode_request_user_input` feature, so the model offers its `request_user_input` tool outside plan mode. The feature is still under development, and Codex warns about that on every thread. The funnel drops that warning when the feature is the only one it lists, since the funnel switched it on. If the list names another feature, the warning is reported, because then the user's own config is involved. Each `item/tool/requestUserInput` becomes `question.request`: `isOther` becomes `allowOther` and `isSecret` becomes `secret`. Codex marks every question `isOther` and always sends options, and its tool description tells the model to ask three questions at most. There is no `multiSelect`.
 
 A chosen option goes back as its label. Other text goes back as `user_note: <text>`, the form Codex's own TUI uses. `null` sends empty answers, and the model gets `{"answers":{}}` as the tool result, since the protocol has no separate decline. Without `onQuestion` the feature stays off, and a question the model still asks gets empty answers.
 

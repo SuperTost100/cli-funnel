@@ -59,6 +59,19 @@ export function warningText(method: string, p: Params = {}): string | undefined 
   }
 }
 
+const UNSTABLE_PREFIX = "Under-development features enabled: ";
+
+/**
+ * True when `message` is Codex's under-development warning and its feature list is exactly one of `own`, the
+ * features this run switched on itself. A list that names any other feature comes from the user's config, so it
+ * is not ours. Only the text up to the end of the list is matched: the sentences after it may change.
+ */
+export function isOwnFeatureWarning(message: string, own: string[]): boolean {
+  if (!message.startsWith(UNSTABLE_PREFIX)) return false;
+  const list = message.slice(UNSTABLE_PREFIX.length).split(/\.(?:\s|$)/, 1)[0] ?? "";
+  return own.includes(list);
+}
+
 const STEP_STATUS: Record<string, PlanStep["status"]> = { pending: "pending", inProgress: "in_progress", completed: "done" };
 
 /** A `turn/plan/updated` notification as a `plan` event. A step with an unknown status counts as pending. */
