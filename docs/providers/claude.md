@@ -189,16 +189,16 @@ Claude has no list command, so models come from `data/models/claude.json`.
 
 | Id | Efforts | Notes |
 | --- | --- | --- |
-| `claude-fable-5-2` | low to max | 1M context. Needs usage credits on a Pro plan, as 5.1 does (not retested on one, see below) |
+| `claude-fable-5-2` | low to max | 1M context. Not tested on a Pro plan, where 5.1 needs usage credits (see below) |
 | `claude-fable-5-1` | low to max | Needs usage credits on a Pro plan (the run returns a 429 error) |
 | `claude-opus-5-5` | low to max | 1M context |
 | `claude-sonnet-5` | low to max | 1M context |
 | `claude-opus-4-6` | low, medium, high, max | 200k context, or 1M with `contextWindow: 1000000` |
 | `claude-haiku-4-5-20251001` | none listed | 200k context |
 
-Each id was run with `claude -p` and `init` reported the same id back, except Fable, which resolves but is then refused for credits on a Pro plan. Aliases such as `opus` are not listed.
+Each id was run with `claude -p` and `init` reported the same id back. In an earlier test on a Pro plan, Fable 5.1 resolved and was then refused for credits. Aliases such as `opus` are not listed.
 
-`claude-fable-5-2` was run on 2.1.319 with each of the five `--effort` values and once without one. `init` reported `claude-fable-5-2` every time, the result was `ok` with no error, and `modelUsage.contextWindow` was 1,000,000. The CLI prints `[claude-code:unrecognized_model]` on stderr for this id (its bundled model table predates 5.2), and cli-funnel ignores the line because it does not start with `Warning:`. The same runs with `claude-fable-5-1` also succeeded, so 5.1 stays listed. Neither Fable id was refused for credits on that subscription, whose plan was not recorded, so the Pro plan note above still comes from the earlier test.
+`claude-fable-5-2` was run on 2.1.319 with each of the five `--effort` values and once without one. `init` reported `claude-fable-5-2` every time, the result was `ok` with no error, and `modelUsage.contextWindow` was 1,000,000. The CLI prints `[claude-code:unrecognized_model]` on stderr for this id (its bundled model table predates 5.2), and cli-funnel ignores the line because it does not start with `Warning:`. The same runs with `claude-fable-5-1` also succeeded, so 5.1 stays listed. Neither Fable id was refused for credits on that subscription, whose plan was not recorded, so the Pro plan note for 5.1 still comes from the earlier test, and 5.2 has not been run on a Pro plan.
 
 Effort: the CLI accepts `--effort` values `low`, `medium`, `high`, `xhigh` and `max` for every model tried, and only warns on unknown values. It gives no per-model list, so per-model support is not checked. Haiku accepts the flag but no effort is offered for it. No default effort is set, so the CLI decides.
 
@@ -207,7 +207,7 @@ Context: Claude Code picks a model's 1M context variant through a `[1m]` suffix 
 Tested on 2.1.300 with `modelUsage.contextWindow` from the result:
 
 - `claude-opus-4-6` reports 200,000, and `claude-opus-4-6[1m]` reports 1,000,000.
-- Sonnet 5, Opus 5.5, Fable 5.1 and Fable 5.2 already report 1,000,000 without the suffix, so they list no context sizes.
+- Sonnet 5, Opus 5.5 and Fable 5.1 already report 1,000,000 without the suffix, so they list no context sizes. Fable 5.2 reported the same on 2.1.319.
 - `claude-sonnet-4-6[1m]` failed with "Usage credits required for 1M context", and `claude-haiku-4-5-20251001[1m]` with "The long context beta is not yet available for this subscription". Neither is offered. Other plans may differ.
 
 ## Fast mode
