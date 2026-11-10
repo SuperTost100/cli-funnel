@@ -26,7 +26,7 @@ export function redact(text: string, secrets: (string | undefined)[] = []): stri
 }
 
 /**
- * Redacts the message of every `error` event, the detail of every `limit` event and the reason of every
+ * Redacts the message of every `error` and `warning` event, the detail of every `limit` event and the reason of every
  * `access.reduced` event. They can quote the server's answer or the CLI's own messages.
  * An exception the stream throws is redacted the same way, since a parse error quotes the text it choked on.
  */
@@ -34,6 +34,7 @@ export async function* redactErrors(events: AsyncIterable<FunnelEvent>, secrets:
   try {
     for await (const e of events) {
       if (e.type === "error") yield { ...e, message: redact(e.message, secrets) };
+      else if (e.type === "warning") yield { ...e, message: redact(e.message, secrets) };
       else if (e.type === "limit") yield { ...e, detail: redact(e.detail, secrets) };
       else if (e.type === "access.reduced" && e.reason) yield { ...e, reason: redact(e.reason, secrets) };
       else yield e;

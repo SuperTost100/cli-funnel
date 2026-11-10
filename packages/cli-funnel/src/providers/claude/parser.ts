@@ -1,5 +1,5 @@
 import { isAbsolute, resolve } from "node:path";
-import type { AccessLevel, FileChange, FinishReason, FunnelEvent, PlanStep, Usage } from "../../types.js";
+import type { AccessLevel, FileChange, FinishReason, FunnelEvent, Limit, PlanStep, RateLimits, Usage, UsageWindow } from "../../types.js";
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -33,6 +33,8 @@ export interface ClaudeTrack {
   taskCalls: Map<string, { name: string; input: Obj }>;
   /** Forwarded subagent tool calls in this turn, by tool use id, so a denial in the `result` keeps their parent. */
   subagentCalls: Map<string, Subagent>;
+  /** The warnings the process printed on stderr and no turn has reported yet. The caller feeds it the stderr lines. */
+  notices: StderrWarnings;
 }
 
 /** The subagent a message belongs to: the id of the tool call that started it, and its type when the CLI names it. */
@@ -54,7 +56,77 @@ export const newClaudeTrack = (): ClaudeTrack => ({
   tasks: [],
   taskCalls: new Map(),
   subagentCalls: new Map(),
+  notices: new StderrWarnings(),
 });
+
+/** The most warnings kept while no turn reads them, so an idle live session cannot grow without bound. */
+const MAX_HELD_WARNINGS = 100;
+
+/** How long after its last line an open warning counts as complete. The lines of one warning arrive in one write. */
+const WARNING_QUIET_MS = 50;
+
+/**
+ * Finds the warnings in Claude Code's stderr. A line that starts with `Warning: ` or `⚠ ` starts one, and the message is
+ * the text after the marker. Lines that directly follow it and start with whitespace belong to it, joined with one space.
+ * Every other line, `Error:` lines included, is ignored: the provider puts those into the error of a failed run.
+ *
+ * A warning is complete once a line that does not continue it has followed, or once `WARNING_QUIET_MS` passed since
+ * its last line: the CLI writes the lines of one warning together, and most warnings are a single line with nothing
+ * after it. `takeComplete` returns only complete ones, so a continuation line that arrives after an ordinary drain
+ * still joins its warning. `take` is the final drain: it returns the open warning too, for the caller that is about to
+ * end the turn. `add` queues a warning the CLI sent in its stdout, so both sources share one order.
+ */
+export class StderrWarnings {
+  private open: string | undefined;
+  /** When the open warning got its last line. */
+  private openAt = 0;
+  private readonly done: string[] = [];
+
+  push(line: string, now: number = Date.now()): void {
+    const marker = line.match(/^(?:Warning: |⚠\uFE0F? )/)?.[0];
+    if (marker) {
+      this.close();
+      this.open = line.slice(marker.length).trim();
+      this.openAt = now;
+    } else if (this.open !== undefined && /^\s/.test(line) && line.trim()) {
+      this.open += ` ${line.trim()}`;
+      this.openAt = now;
+    } else {
+      this.close();
+    }
+  }
+
+  /**
+   * Queues a warning that is complete as it is. It leaves the open stderr warning open, so a continuation line that
+   * arrives next still joins it. The added message therefore comes before the open warning in the order.
+   */
+  add(message: string): void {
+    if (message && this.done.length < MAX_HELD_WARNINGS) this.done.push(message);
+  }
+
+  /** The complete warnings, oldest first. An open one that is still fresh stays, and none is returned again. */
+  takeComplete(now: number = Date.now()): string[] {
+    if (now - this.openAt >= WARNING_QUIET_MS) this.close();
+    return this.done.splice(0);
+  }
+
+  /** Every warning seen so far, the open one included, oldest first. None is returned again. */
+  take(): string[] {
+    this.close();
+    return this.done.splice(0);
+  }
+
+  /** Forgets the warnings seen so far, the open one included. */
+  clear(): void {
+    this.open = undefined;
+    this.done.length = 0;
+  }
+
+  private close(): void {
+    if (this.open && this.done.length < MAX_HELD_WARNINGS) this.done.push(this.open);
+    this.open = undefined;
+  }
+}
 
 /** Tools that write one file, and the input field that holds its path. Shell commands are not covered. */
 const EDIT_TOOLS: Record<string, string> = { Write: "file_path", Edit: "file_path", MultiEdit: "file_path", NotebookEdit: "notebook_path" };
@@ -207,6 +279,12 @@ export function parseClaudeMessage(raw: unknown, forward: ForwardSubagents = {},
 
   if (type === "rate_limit_event" && isObj(raw.rate_limit_info)) return parseRateLimit(raw.rate_limit_info);
 
+  // The CLI's own user notice, such as "Fast mode disabled · usage credit limit reached". Low and medium ones are hints.
+  if (type === "system" && raw.subtype === "notification") {
+    const urgent = raw.priority === "high" || raw.priority === "immediate";
+    return urgent && typeof raw.text === "string" && raw.text ? [{ type: "warning", message: raw.text }] : [];
+  }
+
   // Subagent traffic carries a parent id. The main thread is surfaced as it is, the subagents' messages only on request.
   if (raw.parent_tool_use_id) return forward.text || forward.tools ? subagentEvents(raw, forward, track) : [];
 
@@ -295,9 +373,41 @@ const WINDOWS: Record<string, string> = {
 function parseRateLimit(info: Obj): FunnelEvent[] {
   if (info.status !== "rejected") return [];
   const window = typeof info.rateLimitType === "string" ? info.rateLimitType : undefined;
-  const name = (window && WINDOWS[window]) ?? "usage";
   const resetAt = typeof info.resetsAt === "number" ? new Date(info.resetsAt * 1000).toISOString() : undefined;
-  return [{ type: "limit", kind: window === "five_hour" ? "rate" : "quota", detail: `Claude ${name} limit reached.`, ...(resetAt ? { resetAt } : {}) }];
+  return [{ type: "limit", ...windowLimit(window, resetAt) }];
+}
+
+/** The limit for a full usage window, worded the same in a `limit` event and in `RateLimits.limit`. */
+function windowLimit(window: string | undefined, resetAt: string | undefined): Limit {
+  const name = (window && WINDOWS[window]) ?? "usage";
+  return { kind: window === "five_hour" ? "rate" : "quota", detail: `Claude ${name} limit reached.`, ...(resetAt ? { resetAt } : {}) };
+}
+
+/** One entry of `rate_limits` in the `get_usage` answer. `utilization` is a percentage from 0 to 100 and `resets_at` is ISO 8601. */
+function usageWindow(w: unknown, windowMinutes: number): UsageWindow | undefined {
+  if (!isObj(w) || typeof w.utilization !== "number") return undefined;
+  const at = typeof w.resets_at === "string" ? Date.parse(w.resets_at) : NaN;
+  return { usedPercent: w.utilization, windowMinutes, ...(Number.isNaN(at) ? {} : { resetsAt: new Date(at).toISOString() }) };
+}
+
+/**
+ * The inner `response` of a successful `get_usage` control request. `primary` is the five-hour window and `secondary`
+ * the seven-day one. `limit` is set when a window is full (100%), the five-hour one first, as Codex does. A login with
+ * an API key has `rate_limits: null`, which gives a result with no windows.
+ */
+export function parseUsage(response: unknown): RateLimits {
+  const r = isObj(response) ? response : {};
+  const windows = isObj(r.rate_limits) ? r.rate_limits : {};
+  const primary = usageWindow(windows.five_hour, 300);
+  const secondary = usageWindow(windows.seven_day, 10_080);
+  const full = primary && primary.usedPercent >= 100 ? (["five_hour", primary] as const) : secondary && secondary.usedPercent >= 100 ? (["seven_day", secondary] as const) : undefined;
+  return {
+    provider: "claude",
+    ...(typeof r.subscription_type === "string" ? { plan: r.subscription_type } : {}),
+    ...(primary ? { primary } : {}),
+    ...(secondary ? { secondary } : {}),
+    ...(full ? { limit: windowLimit(full[0], full[1].resetsAt) } : {}),
+  };
 }
 
 function parseResult(r: Obj, track: ClaudeTrack): FunnelEvent[] {
@@ -314,11 +424,17 @@ function parseResult(r: Obj, track: ClaudeTrack): FunnelEvent[] {
   if (isObj(r.usage)) {
     const u = r.usage;
     const cached = num(u.cache_read_input_tokens);
-    const input = num(u.input_tokens) + cached + num(u.cache_creation_input_tokens);
+    // The API's `input_tokens` leaves out what was read from or written to the prompt cache, so both are added here.
+    const written = num(u.cache_creation_input_tokens);
+    const input = num(u.input_tokens) + cached + written;
+    const thinking = isObj(u.output_tokens_details) ? num(u.output_tokens_details.thinking_tokens) : 0;
     const usage: Usage = {
       inputTokens: input,
       outputTokens: num(u.output_tokens),
       cachedInputTokens: cached,
+      ...(written > 0 ? { cacheCreationInputTokens: written } : {}),
+      // `output_tokens` already counts the thinking tokens.
+      ...(thinking > 0 ? { reasoningTokens: thinking } : {}),
       totalTokens: input + num(u.output_tokens),
     };
     events.push({ type: "usage", usage });

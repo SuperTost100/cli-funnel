@@ -15,12 +15,15 @@ import {
   type McpServer,
   type ModelInfo,
   type Provider,
+  type ProcessOptions,
   type ProviderContext,
+  type RateLimits,
   type RunInput,
   type Selection,
 } from "../../types.js";
-import { detectInstallation, exitedEarly, findBinary, isTerminal, LOGIN_TIMEOUT_MS, rawTap, runUpdate } from "../base.js";
-import { createMapper, parseModels } from "./parser.js";
+import { detectInstallation, exitedEarly, findBinary, isTerminal, LOGIN_TIMEOUT_MS, rawTap, runUpdate, SETTLE_MS, stderrTail } from "../base.js";
+import { runSecrets } from "../../util/redact.js";
+import { createMapper, parseModels, parseRateLimits, parseWarning } from "./parser.js";
 import { SubagentTranscripts, type ForwardSubagents } from "./transcript.js";
 import { composePrompt } from "../prompt.js";
 import { FEEDBACK_CHANNELS } from "../feedback.js";
@@ -338,11 +341,30 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   const mapper = createMapper({
     auth: home ? "api-key" : undefined,
     access: requireMachine(input.selection).access,
+    resume: input.sessionId,
     createdInRun: createdInRunFor(input, startedAt),
     brainDir,
     readText: readTaskList,
   });
   const tap = rawTap("antigravity", input, stream);
+  // Warnings come on stderr, a pipe of their own, and can arrive before the `init` line. They wait here until the loop
+  // has sent `session`, or until the run ends without one.
+  const held: string[] = [];
+  const stopStderr = stream.onStderr((line) => {
+    const message = parseWarning(line);
+    if (message) held.push(message);
+  }, runSecrets(input));
+  const takeWarnings = (): FunnelEvent[] => held.splice(0).map((message) => ({ type: "warning", message }));
+  // Stderr may be read a moment after a stdout line that agy wrote later, so the loop waits once before it takes warnings.
+  const settle = () => new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+  // Stderr is all read once the process has closed. A one-shot agy exits right after `result`; one that lingers is stopped
+  // after the grace period. A failed resume is stopped at once, because it would go on working in the new conversation.
+  const ended = async (stopNow: boolean) => {
+    const timer = setTimeout(() => stream.kill(), stopNow ? 0 : EXIT_GRACE_MS);
+    await stream.exited;
+    clearTimeout(timer);
+  };
+  let sessionSent = false;
   const forward = antigravityForward(input);
   // Only with a forward option: the stream lines and the subagents' transcripts then go through one channel.
   let source: AsyncIterable<unknown> = stream.lines;
@@ -378,7 +400,19 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
       }
       // A subagent may still be writing when the run ends, so its transcript is read once more first.
       if (transcripts && terminal && !before) yield* await transcripts.finish();
+      // Warnings follow `session` and `access.reduced`. Before the first `session` they wait, unless the run ends here.
+      const lastOfStart = events.findLastIndex((e) => e.type === "session" || e.type === "access.reduced");
+      if (terminal) await ended(!sessionSent && events.some((e) => e.type === "error") && !!input.sessionId);
+      else if (!sessionSent && lastOfStart >= 0) await settle();
+      if (!sessionSent && lastOfStart >= 0) {
+        sessionSent = true;
+        events.splice(lastOfStart + 1, 0, ...takeWarnings());
+      } else if (sessionSent || terminal) {
+        events.unshift(...takeWarnings());
+      }
       yield* events;
+      // The terminal event ends the stream, also when the CLI keeps running (a resume that started another conversation).
+      if (terminal) break;
     }
     if (tap && !mapper.finished) yield* tap.events();
     if (transcripts && !mapper.finished) yield* await transcripts.finish();
@@ -387,9 +421,57 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
     tap?.close();
     // Runs too when the caller stops reading early. The CLI must not keep working unattended.
     stream.kill();
+    // The last unterminated stderr line comes when the process closes, so the listener goes after that.
+    void stream.exited.then(stopStderr);
     await cleanup();
   }
-  if (!mapper.finished) yield await exitedEarly(stream, "agy", () => input.signal?.aborted);
+  if (!mapper.finished) {
+    const last = await exitedEarly(stream, "agy", () => input.signal?.aborted);
+    yield* takeWarnings();
+    yield last;
+  }
+}
+
+/** How long agy gets to exit after its `result` before the run stops it. */
+const EXIT_GRACE_MS = 1000;
+
+/** How long `/usage` may take. It runs no model turn, so it answers at once. */
+const USAGE_TIMEOUT_MS = 30_000;
+
+/**
+ * `agy --print=/usage` prints the account's limits in a `command_result` line and ends with a `result` that has no
+ * turns. It spends no quota. It runs in the folder that `none` uses, which holds nothing of the user's.
+ */
+async function rateLimits(options: ProcessOptions = {}): Promise<RateLimits> {
+  const path = findBinary("agy");
+  if (!path) throw new FunnelError("agy is not installed.", "not-installed");
+  const res = await exec(path, ["--print=/usage", "--output-format", "stream-json"], {
+    cwd: await noneWorkspace(),
+    env: options.env,
+    signal: options.signal,
+    timeoutMs: USAGE_TIMEOUT_MS,
+  }).catch((e: unknown) => {
+    throw new FunnelError(`agy could not run: ${e instanceof Error ? e.message : String(e)}`, "cli-failed");
+  });
+  if (options.signal?.aborted) throw new FunnelError("The request was aborted.", "aborted");
+  const lines: Record<string, any>[] = [];
+  for (const line of res.stdout.split("\n")) {
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed && typeof parsed === "object") lines.push(parsed);
+    } catch {
+      // Not a stream line. Only the JSON lines matter here.
+    }
+  }
+  const usage = lines.find((l) => l.event === "command_result" && l.command?.name === "usage");
+  const failed = lines.find((l) => l.event === "result" && (l.result?.status === "ERROR" || l.result?.error));
+  if (usage && !failed && res.code === 0) return parseRateLimits(usage.command.data);
+  const output = (res.stderr + res.stdout).trim();
+  if (/sign in|authentication required|not logged in/i.test(output)) throw new FunnelError("Run agy in a terminal and sign in.", "not-logged-in");
+  if (failed) throw new FunnelError(`agy could not report its usage: ${String(failed.result.error ?? "the run failed")}`, "unsupported");
+  if (res.code === null) throw new FunnelError("agy did not answer /usage in time.", "cli-failed");
+  if (res.code !== 0) throw new FunnelError(stderrTail(res.stderr) || `agy exited with code ${res.code}.`, "cli-failed");
+  throw new FunnelError("This agy does not report usage with /usage. Update agy.", "unsupported");
 }
 
 export const antigravityProvider: Provider = {
@@ -421,6 +503,7 @@ export const antigravityProvider: Provider = {
     );
   },
   update: () => runUpdate("agy", ["update"]),
+  rateLimits,
   async models(ctx?: ProviderContext) {
     const fallback = await manifestModels("antigravity", ctx?.manifestUrl);
     const path = findBinary("agy");

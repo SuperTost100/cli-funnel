@@ -4,6 +4,12 @@ Provider id `antigravity`. Binary `agy`. Tested against 1.2.11 through 1.3.0 and
 
 Runs use `agy --print=<prompt> --output-format stream-json` with stdin closed. Linux refuses a single argument over 128 KiB, so a prompt over 100 KB goes on stdin instead (over 30 KB on Windows, where the whole command line is limited to 32,767 characters): `--print= --input-format stream-json` and one line `{"event":"user","message":{"content":"..."}}`. agy does not document that message shape. It is what agy 1.x decodes. The stream carries an `init` event, `step_update` events (text deltas and tool steps) and a final `result` with token usage and `denied_actions`.
 
+## Warnings
+
+`agy` prints warnings on stderr as lines that start with `warning:` and a space, for example `warning: --mode plan has no effect while slash command expansion is disabled.` or `warning: ignoring unsupported stream input message event "bogus"`. Each one becomes a `warning` event with the rest of the line as its message, and `RunResult.warnings` lists them in order. Lines with other prefixes (`error:`, `jetski:`, `[agy]`, `AGY_ERROR:`) are not warnings and are handled as before. Checked on 1.5.3.
+
+Stderr is a separate pipe from the stream, so a warning can be read before or after the `init` line that produced `session`. Warnings are therefore held until `session` (and `access.reduced`, when there is one) has gone out, and are emitted right after them. A warning that arrives later goes out before the next event. If the run ends without a `session` event, the held warnings come just before the `done` or `error`. Before the `done` or `error` goes out, cli-funnel waits for `agy` to exit, so the last stderr line is read, and stops a process that is still running after one second. Warnings are masked with the run's secrets, as `raw` events are.
+
 ## Capabilities
 
 | Feature | Supported |
@@ -151,6 +157,27 @@ The `--model` string is the base id plus `--effort <effort>`. Passing a full id 
 
 `login()` emits `needs-terminal` with command `["agy"]`, then polls `authStatus()` every three seconds for up to ten minutes and emits `done` once signed in.
 
+## Usage limits
+
+`funnel.rateLimits("antigravity")` runs `agy --print=/usage --output-format stream-json` and reads its `command_result` line. The command runs no model turn and spends no quota. It runs in the folder that `none` uses, so it never touches your project, and it times out after 30 seconds. `env` and `signal` from the options apply to the process. Checked on 1.5.3.
+
+The account has several model groups, such as "Gemini Models" and "Claude and GPT models", and each group has its own 5-hour and weekly limit. Some groups have only a weekly limit. The result has one entry in `groups` per group, and for each window:
+
+| Field | Value |
+| --- | --- |
+| `primary` | the group's `5h` bucket, `windowMinutes: 300` |
+| `secondary` | the group's `weekly` bucket, `windowMinutes: 10080` |
+| `usedPercent` | `(1 - remaining_fraction) * 100`, rounded to one decimal |
+| `resetsAt` | the bucket's `reset_time`, as an ISO 8601 timestamp |
+
+The top-level `primary` and `secondary` hold the fullest window of each kind across the groups. `plan` is not set, because the output does not name one.
+
+A full group stops only its own models, so `limit` is set only when every group has a full window. It is a `rate` limit when the window that holds the first group back is the 5-hour one, and a `quota` limit when it is the weekly one, and `resetAt` is when that group is back. A group with two full windows is back when both have reset.
+
+Errors: `not-installed` when `agy` is missing, `not-logged-in` when the output asks for a sign-in (not tested, because that needs a signed-out account), `unsupported` when the output has no `usage` result, as on an older `agy`, or when the `result` reports an error, `aborted` when `signal` was aborted, and `cli-failed` for a timeout or any other failure.
+
+`test/fixtures/antigravity/usage.ndjson` is the recorded output.
+
 ## Logout and update
 
 `logout()` throws an `unsupported` error. `agy` has no sign-out command. Sign out from the interactive screen.
@@ -181,6 +208,7 @@ This follows agy 1.4.12, which documents none of it. `scripts/check-drift.mjs` c
 ## Limits
 
 - Resume uses `--conversation <id>` with the `sessionId` from the earlier run. The whole history is replayed, so long conversations start slowly.
+- A resume of a conversation `agy` does not know does not fail in `agy`. It prints `warning: conversation "<id>" not found` on stderr and runs the prompt in a new conversation. A resume that works reports the same id in `init.conversation_id`, and a new conversation reports a different one (checked on 1.5.3). When the id differs from the requested `sessionId`, cli-funnel stops the process and ends the run with an `error` event (code `cli-failed`) that says the conversation was not found and that `agy` started a new one. It sends no `session` event for the new conversation, so the caller does not store its id. The `warning` event comes before the error.
 - Tool steps carry the input parameters. Only shell commands carry output text. The step is sent after the tool has run, not before.
 - Usage has no cost figure. It reports input, output, cached and thinking tokens.
 - Quota errors from the model API end the run with an error result. Long server retry delays are not retried.

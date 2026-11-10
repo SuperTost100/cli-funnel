@@ -29,8 +29,19 @@ Runs the real `claude` binary in print mode and reads its stream-json output. Te
 | `user` `tool_result` block | `tool.end` (`error` when `is_error`), plus `plan` for TaskCreate and TaskUpdate and `file.change` for edit tools |
 | `control_request` `can_use_tool` | `approval.request`, or `question.request` for AskUserQuestion |
 | `result` | `usage`, then `done` (or `error` when `is_error`) |
+| `system` / `notification` with priority `high` or `immediate` | `warning` |
+| A stderr line that starts with `Warning:` or `⚠` | `warning` |
 
-Usage has no `costUsd`. The CLI reports a list-price estimate, not what a subscription is charged. Subagent messages are dropped. See [Agent callbacks and events](#agent-callbacks-and-events) for `plan`, `file.change` and `question.request`.
+`usage` carries `cacheCreationInputTokens` (from `cache_creation_input_tokens`) and `reasoningTokens` (from `output_tokens_details.thinking_tokens`) when they are above zero. The CLI's `input_tokens` leaves out cache reads and writes, so `inputTokens` is the sum of all three, and `outputTokens` already includes the thinking tokens. Usage has no `costUsd`. The CLI reports a list-price estimate, not what a subscription is charged. Subagent messages are dropped. See [Agent callbacks and events](#agent-callbacks-and-events) for `plan`, `file.change` and `question.request`.
+
+### Warnings
+
+Claude Code reports notices in two places, and both become `warning` events, which also fill `RunResult.warnings`.
+
+- **Stderr.** A line that starts with `Warning:` or `⚠`, followed by a space, starts a warning, and the message is the text after the marker. Lines right after it that start with whitespace belong to it, joined with one space. Examples from 2.1.319 are an unknown `--effort` value that the CLI ignores, the claude.ai connectors that an API key turns off, and a sandbox that cannot start because `bubblewrap` or `socat` is missing (a two-line notice). Lines that start with `Error:` are not warnings: they go into the error of a failed run. Every other line is ignored, unless the run is verbose, which sends all of stderr as `raw` events. The CLI prints these before `init` and keeps running.
+- **Stream.** A `system` message with `subtype: "notification"` and `priority` of `high` or `immediate` becomes a warning with its `text`, for example "Fast mode disabled · usage credit limit reached". `low` and `medium` notices are hints and are left out.
+
+Stderr is a separate pipe from stdout, so warnings from stderr and from the stream are held until the turn's `session` event (and `access.reduced`) have been sent, and come right after. A warning that arrives later comes after the next line the CLI prints. The last warning is held for 50 ms after its last line, because a continuation line may still come. It then goes out with the next line the CLI prints, or at the latest just before `done` or `error`. A run that ends without a `session` event sends all of them just before its last event. Nothing follows `done` or `error`. The run's API key and other secrets are masked in the text. In a live session the process outlives the turn: warnings from startup belong to the first turn, a warning that arrives between two turns is dropped, and each warning is reported once.
 
 ## Access mapping
 
@@ -133,6 +144,9 @@ The CLI sends the request at every level with tools: it was checked live at `byp
 | `forwardSubagentText: boolean` | `--forward-subagent-text` | all |
 | `forwardSubagentTools: boolean` | none, the parser keeps the calls | all |
 | `betas: string[]` | `--betas=<header>` | all |
+| `ephemeral: boolean` | `--no-session-persistence`. Refused with `sessionId` | all |
+
+`ephemeral` runs without saving the session to disk, so it cannot be resumed. It works in live sessions too, checked on 2.1.319: one process with the flag answered two turns, and the second turn remembered a word from the first, because the process keeps the conversation in memory. Pass the same `ephemeral` on every turn of a live session, since a turn with other options starts a new process (see [Live sessions](../sessions.md)). That new process would have to resume a session that was never saved, and `ephemeral` with a `sessionId` is refused.
 
 `forkSession` works on live sessions: the fork gets its own process and the parent's stays up. See [Live sessions](../sessions.md#fork-a-session).
 
@@ -152,6 +166,22 @@ The CLI sends the request at every level with tools: it was checked live at `byp
 | its thinking | nothing: the CLI sends it empty |
 
 See [Provider options](#provider-options) for how each one works.
+
+## Usage windows
+
+`funnel.rateLimits("claude")` starts the CLI, sends the control request `{"subtype": "get_usage", "skip_behaviors": true}` and stops it. No model turn runs and nothing is saved: the process starts with `--tools ""`, `--strict-mcp-config`, `--setting-sources ""` and `--no-session-persistence`, so none of your hooks, MCP servers or settings start. An answer took about 0.5 s on 2.1.319. `skip_behaviors` stops the CLI from scanning your local transcripts for the part of the answer that cli-funnel does not read. A recorded answer is in `test/fixtures/claude/get-usage.json`, with the account data left out.
+
+| Answer field | `RateLimits` |
+| --- | --- |
+| `subscription_type` (`"max"`) | `plan` |
+| `rate_limits.five_hour` | `primary`, with `windowMinutes: 300` |
+| `rate_limits.seven_day` | `secondary`, with `windowMinutes: 10080` |
+| `utilization` | `usedPercent`, a percentage from 0 to 100 as the CLI's own schema says |
+| `resets_at` (`"2026-11-10T00:40:00.921556+00:00"`) | `resetsAt`, as an ISO 8601 timestamp in UTC |
+
+The CLI also reports weekly windows per model and the extra usage balance. They are not read. `limit` is set when a window is at 100%, the five-hour window first, with the same wording as the `limit` event ("Claude five-hour limit reached."). The answer has no separate flag for a full window, so a window at 100% is the only signal, and no full window was seen while testing. A login with an API key has no windows (`rate_limits` is `null`), so the result is `{ provider: "claude" }` with no `plan`.
+
+The CLI calls this request experimental and says its shape may change. The call throws `unsupported` when the CLI answers with an error, exits without an answer, or does not answer in 30 seconds, and `not-installed` when there is no `claude` binary. The messages are fixed text: the CLI's own error and stderr can hold account details, so they are not copied into them.
 
 ## Models
 
@@ -192,7 +222,25 @@ Not supported. `fastMode` is a Claude Code setting, but in SDK-style runs the CL
 
 With `createFunnel({ sessions: { keepAlive: true } })` stdin stays open after `result`, and the next turn writes another `user` line to the same process. Claude Code sends a new `system` / `init` message for each turn, with the same session id. Closing an idle session closes stdin and gives Claude Code two seconds to exit on its own.
 
-There is no `steer`. A `user` line written while a turn runs does not join that turn: Claude Code answers it afterwards as a turn of its own, with a second `result`. See [Live sessions](../sessions.md).
+### Steer
+
+`funnel.steer(sessionId, text)` writes a `user` line with a fresh `uuid` and `priority: "next"` to the live process. Claude Code reads such a message in the running turn as soon as the tool calls it is running finish. A message that arrives while the model only writes text, or after the turn's work is done, waits in Claude Code's queue and runs after the turn as a turn of its own, with its own `result`.
+
+cli-funnel tells the two cases apart from the stream, so a funnel turn still ends exactly once:
+
+- Claude Code reports each message sent with a `uuid` in `command_lifecycle` lines: `queued` when it arrives, `started` when a turn takes it in, then one of `completed`, `cancelled`, `discarded` or `refused`. A `result` also lists the messages its turn took in, in `user_message_uuids`.
+- When a `result` arrives while a steer message is still `queued`, the funnel turn goes on. The `done` of that result is held back, the next turn's `init` is not reported again, and the turn ends at the next `result`. Its `done.text` is that last answer, and its `usage` is the sum of both.
+- A queued message that ends as `cancelled`, `discarded` or `refused` gets no answer, so the turn ends with the held `done`.
+- A turn that fails while a steer message is queued ends with its error, and the process stops, because Claude Code would answer the message as the next turn. The next turn resumes the session in a new process.
+
+`steer` needs the `msg_lifecycle_v1` capability in the `system` / `init` message. A version without it lists `steer: false` in `funnel.sessions()`, and `steer` throws `unsupported`. Once the turn has decided to end at a `result`, `steer` throws `invalid-selection`.
+
+Tested on 2.1.319 with `claude-haiku-4-5-20251001`:
+
+- A steer sent at the first Bash call of a turn that ran `sleep 3` three times was read after that call. The turn had one `result`, with `num_turns: 4`, and answered `DONE. PINEAPPLE.` as the steer asked.
+- A steer sent while the model wrote a story was answered after it in a second `result`. The funnel turn ended once, with `MANGO.` as its text.
+- A steer written when the last text block arrived, 14 ms before `result`, was not in that result. Claude Code answered it in a second turn.
+- A steer blocked by a `UserPromptSubmit` hook ended as `completed` with no answer when it arrived during tool calls. When it arrived after the work, it still got a `result` of its own, with the hook's notice as its text and `num_turns: 0`.
 
 ## Subscription limits and the entry point
 

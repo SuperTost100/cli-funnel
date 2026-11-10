@@ -59,6 +59,13 @@ describe("redactErrors with access.reduced", () => {
   });
 });
 
+describe("redactErrors with warning", () => {
+  it("masks tokens in the message", async () => {
+    const out = await drain(redactErrors(events({ type: "warning", message: `bad value ${GH}` }), []));
+    expect(out).toEqual([{ type: "warning", message: "bad value [redacted]" }]);
+  });
+});
+
 describe("redactErrors with a thrown error", () => {
   it("masks the key in the message, stack and cause of an exception from the stream", async () => {
     const KEY = "sk-live-0123456789abcdef";

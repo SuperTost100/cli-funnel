@@ -361,6 +361,9 @@ export function createRunFolder(input: RunInput): RunFolder {
           result.accessReduced ??= reduced;
           break;
         }
+        case "warning":
+          (result.warnings ??= []).push(e.message);
+          break;
         case "retry":
           result.retries = (result.retries ?? 0) + 1;
           break;

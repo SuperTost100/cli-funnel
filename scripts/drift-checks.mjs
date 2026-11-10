@@ -2,12 +2,13 @@
 // Every "--flag" string in packages/cli-funnel/src/providers must be listed here. test/drift-checks.test.ts enforces it.
 export const CHECKS = {
   // Claude Code's help cannot show the stream-json fields the provider also reads: `apiKeySource` in `init`,
-  // `mcp_server` in `can_use_tool`, `tool_use_result`, AskUserQuestion's `answers`, and the per-server MCP `timeout`.
+  // `mcp_server` in `can_use_tool`, `tool_use_result`, AskUserQuestion's `answers`, the per-server MCP `timeout`, and
+  // for steer the `msg_lifecycle_v1` capability in `init`, `command_lifecycle` lines and `user_message_uuids` in `result`.
   // The recorded fixtures in test/fixtures/claude and the live tests cover those.
   claude: {
     bin: "claude",
     help: [
-      [["--help"], ["--output-format", "--input-format", "--include-partial-messages", "--permission-mode", "--permission-prompt-tool", "--model", "--effort", "--resume", "--verbose", "--tools", "--strict-mcp-config", "--setting-sources", "--json-schema", "--system-prompt", "--append-system-prompt", "--system-prompt[-file]", "--append-system-prompt[-file]", "--allowed-tools", "--disallowed-tools", "--add-dir", "--mcp-config", "--agents", "--fallback-model", "--max-budget-usd", "--fork-session", "--forward-subagent-text", "--betas", "--settings"]],
+      [["--help"], ["--output-format", "--input-format", "--include-partial-messages", "--permission-mode", "--permission-prompt-tool", "--model", "--effort", "--resume", "--verbose", "--tools", "--strict-mcp-config", "--setting-sources", "--json-schema", "--system-prompt", "--append-system-prompt", "--system-prompt[-file]", "--append-system-prompt[-file]", "--allowed-tools", "--disallowed-tools", "--add-dir", "--mcp-config", "--agents", "--fallback-model", "--max-budget-usd", "--fork-session", "--forward-subagent-text", "--betas", "--settings", "--no-session-persistence"]],
       [["auth", "--help"], ["login", "logout", "status"]],
     ],
   },

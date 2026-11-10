@@ -107,7 +107,7 @@ export interface Usage {
   inputTokens: number;
   outputTokens: number;
   cachedInputTokens?: number;
-  /** Input tokens written to the prompt cache. Counted in `inputTokens`. Anthropic only. */
+  /** Input tokens written to the prompt cache. Counted in `inputTokens`. Set by Anthropic and Codex, and only when there were any. */
   cacheCreationInputTokens?: number;
   reasoningTokens?: number;
   totalTokens: number;
@@ -335,6 +335,12 @@ export type FunnelEvent =
    */
   | ({ type: "access.reduced" } & AccessReduced)
   /**
+   * A notice from the CLI that is not an error, in the CLI's own words, such as a config value it replaced, a flag it
+   * ignored or a deprecated setting. It comes after `session` when the run has one. Codex, Claude Code and Antigravity
+   * send it. Cursor Agent prints no warnings in headless mode. The run goes on.
+   */
+  | { type: "warning"; message: string }
+  /**
    * Text the agent writes to the user. On Claude Code and Codex this includes the short notes between tool calls
    * ("I'll read the notes first"), so a stream can hold several messages. `RunResult.text` is the final message only.
    */
@@ -433,12 +439,14 @@ export interface UsageWindow {
 /** A provider's account usage right now. See `funnel.rateLimits`. */
 export interface RateLimits {
   provider: ProviderId;
-  /** The account's plan, for example "plus". */
+  /** The account's plan, for example "plus", as the provider names it. */
   plan?: string;
-  /** The short window, five hours on Codex. */
+  /** The short window: five hours on Codex, Claude Code and Antigravity. */
   primary?: UsageWindow;
-  /** The long window, a week on Codex. */
+  /** The long window: a week on Codex, Claude Code and Antigravity. */
   secondary?: UsageWindow;
+  /** Set when the account has separate limits per model group (Antigravity). `primary` and `secondary` above then hold the fullest window of each kind across the groups. */
+  groups?: { name: string; primary?: UsageWindow; secondary?: UsageWindow }[];
   /** Set when a limit is reached. The same value a `limit` event carries. */
   limit?: Limit;
 }
@@ -544,6 +552,8 @@ export interface RunResult {
   limit?: Limit;
   /** The first report that the CLI started with less access than the run asked for. Same value as the `access.reduced` event. */
   accessReduced?: AccessReduced;
+  /** The CLI's warnings, in order. Present when there are any. */
+  warnings?: string[];
   /** The last plan the agent reported. Present when there was one. */
   plan?: PlanStep[];
   /** Files the agent added, changed or deleted, in order, including refused changes. Present when there are any. */
@@ -697,6 +707,12 @@ export interface ClaudeOptions {
    * call that started the subagent. They do not count toward the run's file changes, plan or `RunResult.toolCalls`.
    */
   forwardSubagentTools?: boolean;
+  /**
+   * Run without saving the session to disk. It cannot be resumed afterwards. Refused with `sessionId`, since a resume needs
+   * the saved session. In a live session (`sessions.keepAlive`) the process keeps the conversation in memory, so later
+   * turns still see it, but a turn that cannot reach that process cannot resume it either.
+   */
+  ephemeral?: boolean;
   /** Beta headers. Only API key logins use them. */
   betas?: string[];
 }
@@ -709,6 +725,12 @@ export interface CodexOptions {
   webSearch?: "disabled" | "cached" | "indexed" | "live";
   /** Ask for approval at least as often as the access level does. A policy that asks less is refused. */
   approvalPolicy?: "untrusted" | "on-request" | "never";
+  /**
+   * More folders the `workspace-write` sandbox may write to, besides `cwd`. Absolute paths. They are added to the
+   * `writable_roots` of the user's Codex config. Refused at `none`. At `full` they apply only with `sandbox: true`,
+   * since the sandbox is off otherwise.
+   */
+  addDirs?: string[];
   /** Emit `subagent.text` events with the messages subagents write, tagged with the id of the item that started them. */
   forwardSubagentText?: boolean;
   /**
@@ -851,7 +873,7 @@ export interface Provider {
   listThreads?(options?: ListThreadsOptions): Promise<ThreadPage>;
   /** Copies a saved conversation into a new one and returns its session id. The original stays as it was. Codex only. */
   forkThread?(sessionId: string, options?: ProcessOptions): Promise<string>;
-  /** Reads the account's usage windows. Codex only. */
+  /** Reads the account's usage windows. Codex, Claude Code and Antigravity. */
   rateLimits?(options?: ProcessOptions): Promise<RateLimits>;
   /** Where users report a result by hand. See `funnel.feedbackSupport`. */
   readonly feedbackChannel?: FeedbackChannel;

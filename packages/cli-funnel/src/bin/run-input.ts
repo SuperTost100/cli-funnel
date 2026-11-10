@@ -127,7 +127,9 @@ export async function renderRun(
       opts.stderr(`\n[access] The CLI started in ${e.started}, not ${e.expected}, for access ${e.access}.${e.reason ? ` ${e.reason}` : ""}\n`);
     }
     if (opts.quiet) continue;
-    if (e.type === "text.delta" && !data) opts.stdout(e.text);
+    // A warning does not explain a failed run, so unlike the two above it stays hidden with --quiet.
+    if (e.type === "warning") opts.stderr(`\n[warning] ${e.message}\n`);
+    else if (e.type === "text.delta" && !data) opts.stdout(e.text);
     else if (e.type === "tool.start") opts.stderr(`\n[tool] ${e.name}\n`);
   }
   const result = await stream.result;

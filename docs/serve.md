@@ -113,7 +113,7 @@ npx cli-funnel serve --keep-alive --session-idle 300 --max-sessions 4
 | Route | Effect |
 | --- | --- |
 | `GET /sessions` | Live sessions: provider, session id, model, `cwd`, access, `busy`, `steer`, `lastUsed` |
-| `POST /sessions/<id>/steer` | Body `{ "text": "...", "provider": "codex" }`. Adds a message to the running turn. Codex only |
+| `POST /sessions/<id>/steer` | Body `{ "text": "...", "provider": "codex" }`. Adds a message to the running turn. Codex and Claude Code |
 | `DELETE /sessions/<id>?provider=codex` | Stops the session's process. 404 when it has none |
 
 `provider` is optional in both. Pass it when two providers could share a session id. The browser client has `sessions()`, `steer()` and `closeSession()`. See [Live sessions](sessions.md#over-http).

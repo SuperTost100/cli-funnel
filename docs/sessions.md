@@ -47,7 +47,7 @@ A consumer that stops reading before `done` or `error` also stops the process. S
 
 ## Steer a running turn
 
-`funnel.steer(sessionId, text)` adds a user message to the turn that is running. Codex sends it with `turn/steer` and the model takes it into account before the turn ends.
+`funnel.steer(sessionId, text)` adds a user message to the turn that is running in a live Codex or Claude Code session. The model reads it before the funnel turn ends, and the turn still ends with one `done`.
 
 ```ts
 const stream = funnel.stream({ selection, prompt: "Refactor the parser.", sessionId });
@@ -55,12 +55,15 @@ setTimeout(() => funnel.steer(sessionId, "Keep the public API unchanged."), 5_00
 for await (const event of stream) render(event);
 ```
 
-`steer` throws `FunnelError` with code:
+When the model reads the message depends on the provider:
 
-- `unsupported` for Claude Code, and for any funnel without `keepAlive`;
-- `invalid-selection` when the session has no live process or no turn is running.
+- **Codex** sends it with `turn/steer`, and the model takes it into account before the turn ends.
+- **Claude Code** reads it in the same turn as soon as the tool calls it is running finish. If the model is only writing text, or the turn's work is done before the message arrives, Claude Code answers it right after in a turn of its own. The funnel turn then lasts until that answer: its `done.text` is the last answer, its `usage` is the sum of both answers, and the text deltas of both arrive in order. See [Claude Code](providers/claude.md#steer).
 
-Claude Code has no steer. In stream-json mode it reads a message sent during a turn as the next turn, not as part of the current one.
+`steer` resolves once the message is sent. It throws `FunnelError` with code:
+
+- `unsupported` for a funnel without `keepAlive`, for providers other than Codex and Claude Code, and for a Claude Code version that does not report what happens to a queued message;
+- `invalid-selection` when the session has no live process or no turn is running, including a turn that has already reached its result.
 
 ## List and close sessions
 
@@ -106,7 +109,7 @@ const next = await funnel.listThreads("codex", { cursor: nextCursor });
 
 ## Read usage and limits
 
-`funnel.rateLimits("codex")` calls `account/rateLimits/read` and resolves with the account's plan and usage windows. `limit` is set when a window is full, and it is the same value a `limit` event carries, so one handler can read both.
+`funnel.rateLimits(provider)` resolves with the account's plan and usage windows. It works for `codex`, `claude` and `antigravity`. `primary` is the five-hour window and `secondary` the weekly one. `limit` is set when a window is full, and it is the same value a `limit` event carries, so one handler can read both. On Antigravity, `groups` lists the limits per model group, and `primary` and `secondary` hold the fullest window of each kind. Codex reads `account/rateLimits/read`, and Claude Code answers a `get_usage` control request: see the [Codex](providers/codex.md) and [Claude Code](providers/claude.md#usage-windows) pages. Neither call starts a model turn.
 
 ```ts
 const usage = await funnel.rateLimits("codex");
@@ -116,7 +119,7 @@ const usage = await funnel.rateLimits("codex");
 if (usage.limit) wait(usage.limit.resetAt);
 ```
 
-During a run, Codex still reports a reached limit as a `limit` event. See [Limits](run-options.md#rate-limits-and-quotas). The call is for checking before you start a run. Other providers throw `unsupported`.
+During a run, a reached limit still arrives as a `limit` event. See [Limits](run-options.md#rate-limits-and-quotas). The call is for checking before you start a run. Other providers throw `unsupported`, and so does Claude Code when its version does not answer the request.
 
 ## Over HTTP
 
@@ -128,7 +131,7 @@ During a run, Codex still reports a reached limit as a `limit` event. See [Limit
 | `POST /sessions/<id>/steer` | Body `{ "text": "...", "provider": "codex" }`. Adds a message to the running turn. `provider` is optional |
 | `DELETE /sessions/<id>?provider=codex` | Closes the session's process. 404 when it has none |
 
-A steer that Codex cannot take, such as a session with no running turn, answers 400. Claude Code sessions answer 409, since they have no steer.
+A steer the session cannot take, such as one with no running turn, answers 400. A session whose provider has no steer answers 409.
 
 ```bash
 curl http://127.0.0.1:4747/sessions

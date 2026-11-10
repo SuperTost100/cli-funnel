@@ -38,7 +38,7 @@ Antigravity's `accept-edits` writes only inside workspaces the user has already 
 
 A managed policy can leave a CLI with less access than the run asked for, and the CLI does not fail. A Codex requirements file that allows only a read-only sandbox is one case. Claude Code's `permissions.disableBypassPermissionsMode` and `permissions.disableAutoMode` are two more. Without a report, a run at `accept-edits` would get an agent that cannot write, and the caller would find out from the answer.
 
-When the CLI says it started narrower, the run gets an `access.reduced` event right after `session`, and `result.accessReduced` holds the first one. It has `access` (the level you asked for), `expected` and `started` (the CLI's own names for the two modes), and `reason` when the CLI gives one. The run goes on with what the CLI allowed. `cli-funnel run` prints a line on stderr, also with `--quiet`.
+When the CLI says it started narrower, the run gets an `access.reduced` event right after `session`, and `result.accessReduced` holds the first one. It has `access` (the level you asked for), `expected` and `started` (the CLI's own names for the two modes), and `reason` when the CLI gives one. The run goes on with what the CLI allowed. `cli-funnel run` prints a line on stderr, also with `--quiet`. On Codex the `configWarning` text in `reason` also arrives as a `warning` event.
 
 | CLI | What is compared |
 |---|---|

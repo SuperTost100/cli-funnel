@@ -213,6 +213,16 @@ describe("useRun", () => {
     expect(result.current.turns[0]?.accessReduced).toEqual(reduced);
   });
 
+  it("puts every warning on the result and the turn, in order", async () => {
+    const a = stream<RunEvent>();
+    const { result } = renderHook(() => useRun(fakeClient({ run: vi.fn(() => a.gen) })));
+    act(() => void result.current.send("one", SEL));
+    act(() => a.push({ type: "warning", message: "first" }));
+    act(() => a.push({ type: "warning", message: "second" }));
+    await waitFor(() => expect(result.current.result.warnings).toEqual(["first", "second"]));
+    expect(result.current.turns[0]?.warnings).toEqual(["first", "second"]);
+  });
+
   it("parses a JSON answer into result.structured and explains a text answer in result.structuredError", async () => {
     const answer = async (text: string) => {
       const a = stream<RunEvent>();

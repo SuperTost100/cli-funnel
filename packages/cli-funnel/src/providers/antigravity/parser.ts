@@ -1,5 +1,5 @@
 import { isAbsolute, posix, win32 } from "node:path";
-import type { AccessLevel, EffortOption, FunnelEvent, ModelInfo, PlanStep, Usage } from "../../types.js";
+import type { AccessLevel, EffortOption, FunnelEvent, Limit, ModelInfo, PlanStep, RateLimits, Usage, UsageWindow } from "../../types.js";
 
 const EFFORTS = ["low", "medium", "high", "max"];
 const EFFORT_RE = /^(.+)-(low|medium|high|max)$/;
@@ -37,6 +37,15 @@ export function parseModels(text: string): ModelInfo[] {
   return out;
 }
 
+/** agy prints its warnings on stderr, one per line. The other prefixes (`error: `, `jetski: `, `[agy] `, `AGY_ERROR: `) are not warnings. */
+const WARNING_PREFIX = "warning: ";
+
+/** The text of a stderr line that is a warning, or undefined for any other line. */
+export function parseWarning(line: string): string | undefined {
+  if (!line.startsWith(WARNING_PREFIX)) return undefined;
+  return line.slice(WARNING_PREFIX.length).trim() || undefined;
+}
+
 type Json = Record<string, any>;
 
 function toUsage(u: Json | undefined): Usage | undefined {
@@ -49,6 +58,89 @@ function toUsage(u: Json | undefined): Usage | undefined {
     cachedInputTokens: u.cache_read_tokens || undefined,
     reasoningTokens: u.thinking_tokens || undefined,
     totalTokens: u.total_tokens ?? input + output,
+  };
+}
+
+const FIVE_HOURS = 300;
+const WEEK = 10_080;
+
+/**
+ * `remaining_fraction` as a used percentage, clamped to 0 to 100. Not rounded: "full" and "fullest" are decided on this
+ * value, so a window with a little quota left is not full. `roundWindow` rounds what the caller gets.
+ */
+const usedPercent = (remaining: number): number => (1 - Math.min(1, Math.max(0, remaining))) * 100;
+
+/** A window with `usedPercent` rounded to one decimal. */
+const roundWindow = (w: UsageWindow | undefined): UsageWindow | undefined => w && { ...w, usedPercent: Math.round(w.usedPercent * 10) / 10 };
+
+/** The `window` bucket of a group as a `UsageWindow`, or undefined when the group has none or it has no usable fraction. */
+function usageWindow(buckets: Json[], window: "5h" | "weekly", windowMinutes: number): UsageWindow | undefined {
+  const b = buckets.find((x) => x?.window === window && typeof x.remaining_fraction === "number" && Number.isFinite(x.remaining_fraction));
+  if (!b) return undefined;
+  const reset = typeof b.reset_time === "string" ? new Date(b.reset_time) : undefined;
+  return {
+    usedPercent: usedPercent(b.remaining_fraction),
+    windowMinutes,
+    ...(reset && !Number.isNaN(reset.getTime()) ? { resetsAt: reset.toISOString() } : {}),
+  };
+}
+
+type UsageGroup = NonNullable<RateLimits["groups"]>[number];
+
+const fullest = (windows: (UsageWindow | undefined)[]): UsageWindow | undefined =>
+  windows.reduce<UsageWindow | undefined>((best, w) => (w && (!best || w.usedPercent > best.usedPercent) ? w : best), undefined);
+
+/** Milliseconds since the epoch, or Infinity when the reset time is unknown. */
+const resetTime = (w: UsageWindow): number => (w.resetsAt ? Date.parse(w.resetsAt) : Infinity);
+
+/**
+ * The limit that stops every run, or undefined. A group with a full window blocks only its own models, so one full group
+ * is no limit while another still has room. Only when every group has a full window is the account stopped, until the
+ * first group is back. A group is back when all of its full windows have reset, so the latest of them counts.
+ */
+function accountLimit(groups: UsageGroup[]): Limit | undefined {
+  if (!groups.length) return undefined;
+  const holds = groups.map((g) => {
+    const full = [g.primary, g.secondary].filter((w): w is UsageWindow => !!w && w.usedPercent >= 100);
+    const last = full.reduce<UsageWindow | undefined>((a, w) => (!a || resetTime(w) > resetTime(a) ? w : a), undefined);
+    return last && { name: g.name, window: last };
+  });
+  let first: { name: string; window: UsageWindow } | undefined;
+  for (const h of holds) {
+    if (!h) return undefined;
+    if (!first || resetTime(h.window) < resetTime(first.window)) first = h;
+  }
+  if (!first) return undefined;
+  const short = (first.window.windowMinutes ?? WEEK) <= FIVE_HOURS;
+  return {
+    kind: short ? "rate" : "quota",
+    detail: `Every model group has reached a limit. ${first.name} is back first, when its ${short ? "5-hour" : "weekly"} limit resets.`,
+    ...(first.window.resetsAt ? { resetAt: first.window.resetsAt } : {}),
+  };
+}
+
+/**
+ * The `data` of the `usage` `command_result` that `agy --print=/usage` prints, as `RateLimits`. Each group has a 5-hour
+ * and a weekly bucket, and a group may have only one of them. `primary` and `secondary` hold the fullest window of
+ * each kind across the groups. The output names no plan.
+ */
+export function parseRateLimits(data: Json): RateLimits {
+  const groups: UsageGroup[] = (Array.isArray(data?.groups) ? (data.groups as Json[]) : []).map((g) => {
+    const buckets: Json[] = Array.isArray(g?.buckets) ? g.buckets : [];
+    const primary = usageWindow(buckets, "5h", FIVE_HOURS);
+    const secondary = usageWindow(buckets, "weekly", WEEK);
+    return { name: String(g?.name ?? ""), ...(primary ? { primary } : {}), ...(secondary ? { secondary } : {}) };
+  });
+  const primary = fullest(groups.map((g) => g.primary));
+  const secondary = fullest(groups.map((g) => g.secondary));
+  const limit = accountLimit(groups);
+  const rounded = groups.map((g) => ({ name: g.name, ...(g.primary ? { primary: roundWindow(g.primary) } : {}), ...(g.secondary ? { secondary: roundWindow(g.secondary) } : {}) }));
+  return {
+    provider: "antigravity",
+    ...(primary ? { primary: roundWindow(primary) } : {}),
+    ...(secondary ? { secondary: roundWindow(secondary) } : {}),
+    ...(groups.length ? { groups: rounded } : {}),
+    ...(limit ? { limit } : {}),
   };
 }
 
@@ -123,6 +215,11 @@ export interface MapperOptions {
   readText?: (path: string) => string | undefined;
   /** The level the run asked for. At `full` the mapper reports an `init` that is not `always-proceed` as `access.reduced`. */
   access?: AccessLevel;
+  /**
+   * The conversation the run asked to resume. An unknown id makes agy start a new conversation, with only a warning on
+   * stderr, so an `init` that reports another id ends the run with an error and no `session` event.
+   */
+  resume?: string;
 }
 
 const slashes = (p: string) => p.replace(/\\/g, "/");
@@ -201,6 +298,10 @@ export function createMapper(options: MapperOptions = {}) {
         const id = o.conversation_id;
         if (typeof o.init?.cwd === "string") cwd = o.init.cwd;
         if (!id) return [];
+        if (options.resume && id !== options.resume) {
+          finished = true;
+          return [{ type: "error", message: `Conversation ${options.resume} was not found. agy started a new conversation instead.`, code: "cli-failed" }];
+        }
         const events: FunnelEvent[] = [{ type: "session", sessionId: id, model: o.init?.model, ...(options.auth && { auth: options.auth }) }];
         // `--dangerously-skip-permissions` reports `always-proceed`. The other levels start as `request-review` whatever
         // their flags, so only `full` can be checked.

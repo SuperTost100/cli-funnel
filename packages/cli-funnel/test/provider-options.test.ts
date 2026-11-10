@@ -109,6 +109,18 @@ describe("claude providerOptions", () => {
     expect(outcome(() => args("full", "not an object"))).toBe("invalid-selection");
   });
 
+  it("passes --no-session-persistence for ephemeral at every level and nothing for false", () => {
+    expect(acceptedAt((a) => args(a, { ephemeral: true }))).toEqual([...ACCESS_LEVELS]);
+    expect(args("auto", { ephemeral: true })).toContain("--no-session-persistence");
+    expect(args("auto", { ephemeral: false })).toEqual(args("auto", undefined));
+  });
+
+  it("refuses ephemeral with a sessionId and a value that is not a boolean", () => {
+    expect(outcome(() => args("auto", { ephemeral: true }, { sessionId: "s1" }))).toBe("invalid-selection");
+    expect(outcome(() => args("auto", { ephemeral: false }, { sessionId: "s1" }))).toBe("invalid-selection");
+    expect(outcome(() => args("auto", { ephemeral: "yes" }))).toBe("invalid-selection");
+  });
+
   it("takes a single string where a list is expected", () => {
     expect(args("auto", { addDirs: "/srv" })).toContain("--add-dir=/srv");
   });
@@ -151,6 +163,14 @@ describe("codex providerOptions", () => {
       approvalPolicy: "untrusted",
     });
     expect(opts("auto", undefined)).toEqual({ start: {}, config: {} });
+  });
+
+  it("takes addDirs as absolute paths, from the levels with a writable sandbox, and a single string as a list of one", () => {
+    expect(opts("auto", { addDirs: ["/srv/a", "/srv/b"] })).toEqual({ start: {}, config: {}, addDirs: ["/srv/a", "/srv/b"] });
+    expect(opts("auto", { addDirs: "/srv" }).addDirs).toEqual(["/srv"]);
+    expect(acceptedAt((a) => opts(a, { addDirs: ["/srv"] }))).toEqual(["supervised", "accept-edits", "auto", "full"]);
+    expect(outcome(() => opts("none", { addDirs: [] }))).toBe("invalid-selection");
+    for (const bad of [["relative/dir"], [1], [""], {}]) expect(outcome(() => opts("auto", { addDirs: bad }))).toBe("invalid-selection");
   });
 
   it("only accepts approval policies that ask at least as often as the level", () => {
@@ -286,6 +306,24 @@ describe("providerOptions through the server", () => {
     expect((await responses(join(root, "escape"))).status).toBe(403);
     expect((await responses([root])).status).toBe(200);
     expect(seen.at(-1)).toEqual({ claude: { addDirs: [realpathSync(root)] } });
+  });
+
+  it("applies the same check to providerOptions.codex.addDirs on every route", async () => {
+    const codex = createHandler(createFunnel({ providers: { codex: { ...fake, id: "codex", models: async () => [{ id: "m", name: "M", provider: "codex", efforts: [], contextWindows: [], fast: false, source: "manifest" }] } } }), { fsRoots: [root], openai: { cwd: root } });
+    const send = (path: string, body: unknown) => codex(new Request(`http://x${path}`, { method: "POST", body: JSON.stringify(body) }));
+    const opts = (addDirs: unknown) => ({ codex: { addDirs } });
+    const run = (addDirs: unknown) => send("/run", { selection: { provider: "codex", model: "m", cwd: root, access: "full" }, prompt: "go", providerOptions: opts(addDirs) });
+    const chat = (addDirs: unknown) => send("/v1/chat/completions", { model: "codex/m", messages: [{ role: "user", content: "hi" }], x_funnel: { providerOptions: opts(addDirs) } });
+    const responses = (addDirs: unknown) => send("/v1/responses", { model: "codex/m", input: "hi", x_funnel: { providerOptions: opts(addDirs) } });
+    for (const call of [run, chat, responses]) {
+      expect((await call([outside])).status).toBe(403);
+      expect((await call(join(root, "escape"))).status).toBe(403);
+      expect((await call(["/definitely/missing"])).status).toBe(403);
+      const ok = await call([root]);
+      expect(ok.status).toBe(200);
+      await ok.text();
+      expect(seen.at(-1)).toEqual({ codex: { addDirs: [realpathSync(root)] } });
+    }
   });
 
   it("hands the provider the checked real path, not the symlink", async () => {

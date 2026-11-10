@@ -30,8 +30,15 @@ Protocol flow:
 | `thread/tokenUsage/updated` | `usage` (sum of the per-call `last` breakdown, so a resumed thread reports only this turn) |
 | `turn/completed` | `done` (`cancelled` when interrupted) or `error` when the turn failed |
 | `error` with `willRetry: false` | `error` |
+| `configWarning`, `deprecationNotice`, `warning`, `guardianWarning` | `warning` (see [Warnings](#warnings)) |
 
-Usage has no cost figure. `inputTokens` includes cached tokens, as Codex reports them.
+Usage has no cost figure. `inputTokens` includes cached tokens, as Codex reports them. When Codex wrote tokens to the prompt cache (`cacheWriteInputTokens`), `cacheCreationInputTokens` has their sum. Codex counts them in `inputTokens` too, as the Responses API does with `cache_write_tokens`. The field is unset when no call wrote any.
+
+## Warnings
+
+Four notifications become `warning` events: `configWarning` and `deprecationNotice`, which send a summary and optional details, and `warning` and `guardianWarning`, which send a message. The text is the summary followed by the details, or the message. They are not errors and the run goes on. `result.warnings` lists them in order.
+
+Codex sends some of them before the thread starts, and a requirements fallback arrives twice, as `configWarning` and as `warning`. cli-funnel holds them until the turn's `session` event (and `access.reduced`, when there is one) has gone out, reports each text once per session, and emits later ones at once. A warning that arrives between turns of a live session comes with the next turn. When the session fails to start, the warnings come before the `error`, since they often give the reason.
 
 ## Live sessions
 
@@ -142,12 +149,15 @@ With `apiKey` the app-server starts with `-c cli_auth_credentials_store="ephemer
 | `ephemeral: boolean` | `ephemeral` on `thread/start`. Refused with `sessionId`, since `thread/resume` has no such param | all |
 | `webSearch: "disabled" \| "cached" \| "indexed" \| "live"` | config `web_search` | `"disabled"` at all levels, `"cached"` and `"indexed"` from `supervised` up, `"live"` at `auto` and `full` only |
 | `approvalPolicy: "untrusted" \| "on-request" \| "never"` | `approvalPolicy`, in place of the level's own | see below |
+| `addDirs: string[]` | config `sandbox_workspace_write.writable_roots` | refused at `none`, accepted from `supervised` up (see below) |
 | `forwardSubagentText: boolean` | none, the translator keeps the messages | all |
 | `forwardSubagentTools: boolean` | none, the translator keeps the calls | all |
 
 `approvalPolicy` may ask more often than the access level, never less. From most to fewest questions the order is `untrusted`, `on-request`, `never`. `none`, `supervised` and `accept-edits` use `untrusted`, so they accept only `untrusted`. `auto` uses `on-request` and also accepts `untrusted`. `full` accepts all three. The granular policy object is refused. At `none` every approval is still answered `deny`, whatever the policy. A policy stricter than the level's sends the requests Codex then raises to `onApproval`, as at `supervised`, and denies them when there is no handler. So `full` with `untrusted` asks before commands and file changes instead of allowing them.
 
 All three options were run live on 0.160 at `auto`.
+
+`addDirs` takes absolute paths and lets the `workspace-write` sandbox write to those folders as well as `cwd`. It is sent as the thread config `sandbox_workspace_write.writable_roots`, and nothing else the caller passes can change that key. A thread config replaces the list in the user's `config.toml` instead of adding to it, so when `addDirs` is set cli-funnel first reads the effective config with `config/read` and sends the user's roots followed by yours, each folder once. If that read fails, the run fails with `cli-failed` before the thread starts. `none` refuses the option, because its sandbox is read-only. At `supervised`, `accept-edits` and `auto` it adds writable roots. At `full` the sandbox is `danger-full-access`, so the option is accepted and changes nothing, and cli-funnel does not read the config. With `sandbox: true` at `full` the sandbox is `workspace-write` and the folders apply. Checked on 0.166.0 with `thread/start` and no turn: the answer listed the folder under `sandbox.writableRoots` (empty without the option), a root in `config.toml` was dropped when the thread config set the key, and a `read-only` or `danger-full-access` thread listed no roots. Whether a command can write to such a folder was not run, since that needs a model turn. Through the HTTP server each folder must sit inside `fsRoots`, as for the other providers (see [Run options](../run-options.md)).
 
 ## Subagents
 
@@ -173,7 +183,7 @@ The context window is not selectable. The catalog reports `context_window` and `
 
 ## Login, logout, update
 
-- `authStatus()` parses `codex login status` (the text goes to stderr). It reads `Logged in using ChatGPT`, `Logged in using an API key` and `Not logged in`. The command has no JSON or account output, so `account` and `plan` are not set. API keys are never echoed.
+- `authStatus()` starts a short-lived `codex app-server` and sends `account/read` (without a token refresh). A ChatGPT account gives `method: "ChatGPT"`, `account` (the email) and `plan` (the `planType`, such as `plus` or `pro`). An API key gives `method: "API key"` and nothing else. If the app-server fails, does not answer within three seconds, or reports no account or a Bedrock or GCP login, `authStatus()` parses the text of `codex login status` instead (it goes to stderr). It reads `Logged in using ChatGPT`, `Logged in using an API key` and `Not logged in`, and sets no `account` or `plan`. API keys are never echoed. `account/read` answered in about 260 ms on 0.166.0.
 - `login()` runs `codex login`. It opens the browser and waits for the callback on a local port, and on a headless machine Codex switches to a device code by itself. The callback URL it prints first (`http://localhost:1455`) is skipped, so the `open-url` event carries the sign-in link. `login({ device: true })` runs `codex login --device-auth` instead: it prints a URL and a one-time code in `log` events and needs no local port, but works only after device code login is enabled in your ChatGPT security settings. Over HTTP, `POST /providers/codex/login?device=1` does the same. `codex login --with-api-key` and `--with-access-token` read from stdin and are not used.
 - `logout()` runs `codex logout`. `update()` runs `codex update`. Both were implemented from `--help` and never executed during development.
 

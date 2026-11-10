@@ -425,6 +425,8 @@ export function useRun(client: FunnelClient, opts: { keepTranscript?: boolean } 
       limit: last?.limit,
       /** Set when the CLI started with less access than the run asked for, as in RunResult.accessReduced. */
       accessReduced: last?.accessReduced,
+      /** The CLI's warnings, as in RunResult.warnings. */
+      warnings: last?.warnings,
     }),
     [last],
   );

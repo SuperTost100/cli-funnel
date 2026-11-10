@@ -16,6 +16,7 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] === "--version") { console.log("2.1.300 (Claude Code)"); process.exit(0); }
 fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ pid: process.pid, args }) + "\\n");
+if (process.env.FAKE_STDERR) process.stderr.write(process.env.FAKE_STDERR);
 const r = args.indexOf("--resume");
 const sid = args.includes("--fork-session") ? "fork-" + process.pid : r >= 0 ? args[r + 1] : "sess-" + process.pid;
 const send = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
@@ -45,6 +46,7 @@ process.stdin.on("data", (d) => {
     const answer = text + "#" + n + "@" + process.pid;
     send({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: answer } } });
     send({ type: "result", subtype: "success", is_error: false, result: answer, session_id: sid });
+    if (process.env.FAKE_LATE_STDERR && n === 1) process.stderr.write(process.env.FAKE_LATE_STDERR);
   }
 });
 process.stdin.on("end", () => process.exit(0));
@@ -175,6 +177,8 @@ beforeEach(() => {
   log = join(mkdtempSync(join(tmpdir(), "cf-log-")), "log");
   process.env.FAKE_LOG = log;
   process.env.CLI_FUNNEL_CLAUDE_BIN = fake("claude", FAKE_CLAUDE);
+  // A missing override makes the provider look for the real `claude` on PATH, so a test must never run without the fake.
+  expect(existsSync(process.env.CLI_FUNNEL_CLAUDE_BIN)).toBe(true);
   process.env.CLI_FUNNEL_CODEX_BIN = fake("codex", FAKE_CODEX);
 });
 
@@ -219,6 +223,50 @@ describe("claude live sessions", () => {
     expect(b.text).toBe(`two#2@${spawns()[0]!.pid}`);
     expect(b.sessionId).toBe(a.sessionId);
     expect(f.sessions()).toMatchObject([{ provider: "claude", sessionId: a.sessionId, busy: false, steer: false }]);
+  });
+
+  it("starts an ephemeral session with --no-session-persistence and keeps it for the next turn", async () => {
+    const f = make({ keepAlive: true });
+    const options = { providerOptions: { claude: { ephemeral: true } } };
+    const a = await f.run(claude("one", options));
+    // A turn with the same options reuses the process, so it needs no resume.
+    const b = await f.run(claude("two", { ...options, sessionId: a.sessionId }));
+    expect(spawns()).toHaveLength(1);
+    expect(spawns()[0]!.args).toContain("--no-session-persistence");
+    expect(b.text).toBe(`two#2@${spawns()[0]!.pid}`);
+  });
+
+  it("reports the startup warnings on stderr in the first turn only", async () => {
+    process.env.FAKE_STDERR = "Warning: startup notice\n  second line\n";
+    try {
+      const f = make({ keepAlive: true });
+      const warnings = async (i: RunInput) => {
+        const out: string[] = [];
+        for await (const e of f.stream(i)) if (e.type === "warning") out.push(e.message);
+        return out;
+      };
+      const first = await f.run(claude("one"));
+      expect(first.warnings).toEqual(["startup notice second line"]);
+      expect(await warnings(claude("two", { sessionId: first.sessionId }))).toEqual([]);
+      expect(spawns()).toHaveLength(1);
+    } finally {
+      delete process.env.FAKE_STDERR;
+    }
+  });
+
+  it("drops a warning that arrives between two turns instead of giving it to the next turn", async () => {
+    process.env.FAKE_LATE_STDERR = "Warning: belongs to turn one\n";
+    try {
+      const f = make({ keepAlive: true });
+      const first = await f.run(claude("one"));
+      expect(first.warnings ?? []).toEqual([]);
+      await new Promise((r) => setTimeout(r, 150));
+      const second = await f.run(claude("two", { sessionId: first.sessionId }));
+      expect(second.warnings ?? []).toEqual([]);
+      expect(spawns()).toHaveLength(1);
+    } finally {
+      delete process.env.FAKE_LATE_STDERR;
+    }
   });
 
   it("passes a long system prompt through a file and removes it after the first turn", async () => {
@@ -309,7 +357,7 @@ describe("claude live sessions", () => {
     expect(await waitFor(() => !alive(spawns()[0]!.pid))).toBe(true);
   });
 
-  it("refuses steer with unsupported", async () => {
+  it("refuses steer with unsupported when the CLI does not report the message lifecycle", async () => {
     const f = make({ keepAlive: true });
     const a = await f.run(claude("one"));
     await expect(f.steer(a.sessionId!, "more")).rejects.toMatchObject({ code: "unsupported" });
@@ -601,7 +649,7 @@ describe("codex threads, fork and rate limits", () => {
   it("throws unsupported on providers that cannot", async () => {
     const f = make();
     await expect(f.listThreads("claude")).rejects.toMatchObject({ code: "unsupported" });
-    await expect(f.rateLimits("claude")).rejects.toMatchObject({ code: "unsupported" });
+    await expect(f.rateLimits("agent")).rejects.toMatchObject({ code: "unsupported" });
     await expect(f.forkSession("claude", "x")).rejects.toMatchObject({ code: "unsupported", message: expect.stringContaining("forkSession") });
   });
 });

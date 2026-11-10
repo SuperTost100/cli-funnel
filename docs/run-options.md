@@ -311,9 +311,10 @@ Options never give the agent more than `selection.access` allows. An option that
 | Claude Code | `allowedTools` | refused | refused | refused | refused | yes |
 | Claude Code | `mcpConfig` | refused | refused | refused | refused | yes |
 | Claude Code | `addDirs`, `agents` | refused | yes | yes | yes | yes |
-| Claude Code | `disallowedTools`, `fallbackModel`, `maxBudgetUsd`, `forkSession`, `forwardSubagentText`, `forwardSubagentTools`, `betas` | yes | yes | yes | yes | yes |
+| Claude Code | `disallowedTools`, `fallbackModel`, `maxBudgetUsd`, `forkSession`, `forwardSubagentText`, `forwardSubagentTools`, `betas`, `ephemeral` | yes | yes | yes | yes | yes |
 | Codex | `approvalPolicy` | `untrusted` | `untrusted` | `untrusted` | `untrusted`, `on-request` | any |
 | Codex | `webSearch` | `disabled` only | `disabled`, `cached`, `indexed` | `disabled`, `cached`, `indexed` | yes | yes |
+| Codex | `addDirs` | refused | yes | yes | yes | yes |
 | Codex | `ephemeral`, `forwardSubagentText`, `forwardSubagentTools` | yes | yes | yes | yes | yes |
 | Cursor Agent | `addDirs` | refused | | | yes | yes |
 | Cursor Agent | `sandbox` | `enabled` only | | | `enabled` only | yes |
@@ -331,6 +332,7 @@ Why these lines:
 - `mcpConfig` starts each stdio MCP server as a command before any permission check, so it needs `full`.
 - `agents` accepts only `description`, `prompt`, `tools`, `disallowedTools` and `model` per subagent. Keys such as `permissionMode`, `mcpServers` and `hooks` are refused.
 - `addDirs` takes absolute paths. Through the HTTP server each one must sit inside the handler's `fsRoots`, the same check `cwd` gets, or the request fails with 403. The server passes the resolved real path to the CLI, so a symlink changed after the check cannot point the run elsewhere.
+- Codex `addDirs` becomes writable roots of the `workspace-write` sandbox, added to the roots in the user's Codex config. It is refused at `none`, whose sandbox is read-only. At `full` the sandbox is off, so the folders change nothing unless the run sets `sandbox: true`.
 - At `none` Cursor Agent and Antigravity run in an empty folder cli-funnel owns. Another directory would undo that, so `addDirs` is refused there. Cursor's plan mode is refused there too, since nobody has tested where it writes its plan.
 - Codex `webSearch: "live"` fetches pages and nobody approves it, so only `auto` and `full` accept it. `"cached"` and `"indexed"` search an index and are accepted from `supervised` up.
 - `fallbackModel` and a subagent's `model` go to the CLI unchecked. The catalog check that `selection.model` gets does not apply to them.
@@ -455,4 +457,4 @@ A limit usually ends the run with an `error` event right after. The API provider
 
 `useRun().result.limit` has the same value in the browser. `cli-funnel run` prints the limit on stderr.
 
-To check Codex before a run, `funnel.rateLimits("codex")` reads the usage windows and the limit that is reached. See [Live sessions](sessions.md#read-usage-and-limits).
+To check before a run, `funnel.rateLimits("codex")`, `funnel.rateLimits("claude")` and `funnel.rateLimits("antigravity")` read the usage windows and the limit that is reached. See [Live sessions](sessions.md#read-usage-and-limits).

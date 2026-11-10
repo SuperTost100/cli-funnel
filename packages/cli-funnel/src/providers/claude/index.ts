@@ -6,22 +6,26 @@ import {
   type Capabilities,
   type FunnelEvent,
   type McpServer,
+  type ProcessOptions,
   type Provider,
   type ProviderContext,
   type Question,
   type QuestionAnswers,
   type QuestionRequest,
+  type RateLimits,
   type RunInput,
+  type Usage,
 } from "../../types.js";
 import { askApproval, askQuestion, detectInstallation, exitedEarly, findBinary, rawTap, runLogout, runUpdate, spawnLogin, stderrTail } from "../base.js";
 import { bool, dirList, flag, invalidOption, mcpServersFor, object, optionsFor, positive, requireAccess, str, stringList } from "../options.js";
+import { runSecrets } from "../../util/redact.js";
 import { manifestModels } from "../../catalog/manifest.js";
 import { needsArgFile, writeArgFile, type ArgFile } from "../../util/argfile.js";
 import { exec, spawnStream, type Streamed } from "../../util/process.js";
-import { openClaudeSession } from "./live.js";
+import { openClaudeSession, type Steers } from "./live.js";
 import { FEEDBACK_CHANNELS } from "../feedback.js";
 import { requireMachine } from "../../selection.js";
-import { editPath, newClaudeTrack, parseClaudeMessage, PERMISSION_MODE, type ClaudeTrack, type ForwardSubagents } from "./parser.js";
+import { editPath, newClaudeTrack, parseClaudeMessage, parseUsage, PERMISSION_MODE, type ClaudeTrack, type ForwardSubagents } from "./parser.js";
 
 const BIN = "claude";
 const TESTED_RANGE = { min: "2.1.0" };
@@ -160,7 +164,7 @@ function schemaInit(input: RunInput): string | undefined {
   return JSON.stringify({ type: "control_request", request_id: "cli-funnel-init", request });
 }
 
-const OPTION_KEYS = ["allowedTools", "disallowedTools", "addDirs", "mcpConfig", "agents", "fallbackModel", "maxBudgetUsd", "forkSession", "forwardSubagentText", "forwardSubagentTools", "betas"];
+const OPTION_KEYS = ["allowedTools", "disallowedTools", "addDirs", "mcpConfig", "agents", "fallbackModel", "maxBudgetUsd", "forkSession", "forwardSubagentText", "forwardSubagentTools", "betas", "ephemeral"];
 const AGENT_KEYS = ["description", "prompt", "tools", "disallowedTools", "model"];
 const NOT_NONE = ACCESS_LEVELS.filter((a) => a !== "none");
 
@@ -218,6 +222,10 @@ function optionArgs(input: RunInput, mcpFile?: string): string[] {
   // Claude Code sends subagent tool calls without a flag. Checked here so a bad value fails like the other options.
   bool(o.forwardSubagentTools, "forwardSubagentTools");
   for (const b of stringList(o.betas, "betas") ?? []) args.push(flag("--betas", b));
+  if (bool(o.ephemeral, "ephemeral") !== undefined) {
+    if (input.sessionId) invalidOption("ephemeral applies to new sessions only. Leave it out when you pass sessionId.");
+    if (o.ephemeral) args.push("--no-session-persistence");
+  }
   return args;
 }
 
@@ -279,11 +287,29 @@ export async function launchClaude(input: RunInput, signal?: AbortSignal): Promi
   return { proc, removeFiles };
 }
 
+/** Two usages added up, for a funnel turn that spans more than one Claude Code turn. */
+function addUsage(a: Usage | undefined, b: Usage): Usage {
+  if (!a) return b;
+  const out: Usage = { ...b };
+  for (const k of Object.keys(a) as (keyof Usage)[]) out[k] = (a[k] ?? 0) + (b[k] ?? 0);
+  return out;
+}
+
 /**
  * Reads one turn from `lines`: answers control requests and yields events up to and including `result`.
  * `state.finished` is set before a terminal event is yielded, since a consumer that stops at `done` never comes back.
- * `onResult` runs when `result` arrives, before its events are yielded. `track` lives as long as the process.
+ * `onResult` runs when the last `result` arrives, before its events are yielded. `track` lives as long as the process.
  * With `input.verbose` each line, and the stderr printed before it, is yielded as `raw` events first.
+ *
+ * `steers` holds the messages a live session added to this turn. When a `result` arrives while one of them is still
+ * queued, Claude Code answers it next as a turn of its own, so the funnel turn goes on through that turn: the `done` of
+ * the earlier result is held back, its usage is added to the next one, and the next turn's `init` is skipped.
+ *
+ * Warnings, from stderr (see `watchStderr`) and from `notification` messages, are yielded as `warning` events after the
+ * turn's `session` event and its `access.reduced`, and later ones after the stdout line that follows them. Stderr comes
+ * through another pipe, so they are held until then. A warning whose continuation line may still come is held until
+ * the next line that does not continue it, or until the terminal event, which yields every warning just before it.
+ * A run that ends without a `session` event yields them just before its last event.
  */
 export async function* claudeTurn(
   proc: Pick<Streamed, "write" | "exited" | "stderr" | "onStderr">,
@@ -293,9 +319,19 @@ export async function* claudeTurn(
   state: { finished: boolean },
   track: ClaudeTrack,
   onResult?: () => void,
+  steers?: Steers,
 ): AsyncGenerator<FunnelEvent> {
   const { cwd, access } = requireMachine(input.selection);
   const tap = rawTap("claude", input, proc);
+  const warnings = (final = false): FunnelEvent[] =>
+    (final ? track.notices.take() : track.notices.takeComplete()).map((message) => ({ type: "warning", message }));
+  let started = false;
+  // What earlier results of this funnel turn left to report, while a steer message runs as a turn of its own.
+  let held: { done?: Extract<FunnelEvent, { type: "done" }>; usage?: Usage; denied: boolean } = { denied: false };
+  const heldUsage = function* (): Generator<FunnelEvent> {
+    if (held.usage) yield { type: "usage", usage: held.usage };
+    held.usage = undefined;
+  };
   try {
     for await (const raw of lines) {
       const msg = raw as Record<string, any>;
@@ -307,43 +343,104 @@ export async function* claudeTurn(
         yield* answerControlRequest(proc, msg, input, track);
         continue;
       }
-      if (msg.type === "result") onResult?.();
-      for (const e of parseClaudeMessage(raw, forward, track, access)) {
+      if (steers && msg.type === "command_lifecycle") {
+        steers.lifecycle(String(msg.command_uuid), String(msg.state));
+        // A steer message dropped before any turn took it in gets no result. With nothing else on the way, the turn ends.
+        if (held.done && steers.idle) {
+          steers.ended = true;
+          yield* heldUsage();
+          yield* warnings(true);
+          state.finished = true;
+          yield held.done;
+          return;
+        }
+        continue;
+      }
+      // The turn that answers a late steer message reports the same session again. It is the same funnel turn.
+      if (held.done && msg.type === "system" && msg.subtype === "init") continue;
+      const events = parseClaudeMessage(raw, forward, track, access);
+      // True when a steer message is still queued: Claude Code answers it in a turn of its own after this result.
+      const more = msg.type === "result" && steers !== undefined && steers.result(msg.user_message_uuids) && !events.some((e) => e.type === "error");
+      if (msg.type === "result" && !more) {
+        if (steers) steers.ended = true;
+        onResult?.();
+      }
+      for (let e of events) {
+        if (e.type === "warning") {
+          // Queued with the stderr warnings, so none comes before `session`.
+          track.notices.add(e.message);
+          continue;
+        }
         // A subagent's edits are not tracked as the run's file changes.
         if (e.type === "tool.start" && !e.parentId) {
           // The kind of a file change depends on whether the file was there before the tool ran.
           const path = editPath(e.name, e.input, cwd);
           if (path) track.edits.set(e.id, { path, existed: existsSync(path) });
         }
-        if (e.type === "done" || e.type === "error") state.finished = true;
+        if (more && e.type === "usage") {
+          held.usage = addUsage(held.usage, e.usage);
+          continue;
+        }
+        if (more && e.type === "done") {
+          // A denial from any result of the turn decides the finish reason, whichever path ends the turn.
+          const denied = held.denied || e.finishReason === "denied";
+          held = { ...held, done: denied && e.finishReason === "stop" ? { ...e, finishReason: "denied" } : e, denied };
+          continue;
+        }
+        if (e.type === "usage") {
+          e = { type: "usage", usage: addUsage(held.usage, e.usage) };
+          held.usage = undefined;
+        }
+        if (e.type === "done" && held.denied && e.finishReason === "stop") e = { ...e, finishReason: "denied" };
+        let out = e;
         if (e.type === "error" && !msg.result) {
           // A run that fails before its first turn, such as a sandbox that cannot start, prints the reason on stderr.
           await Promise.race([proc.exited, new Promise((r) => setTimeout(r, 1000).unref())]);
           const tail = stderrTail(proc.stderr());
-          if (tail) {
-            yield { ...e, message: `${e.message} ${tail}` };
-            continue;
-          }
+          if (tail) out = { ...e, message: `${e.message} ${tail}` };
         }
-        yield e;
+        if (e.type === "done" || e.type === "error") {
+          yield* heldUsage();
+          // After the wait above, so a warning the CLI wrote last is in.
+          yield* warnings(true);
+          state.finished = true;
+        }
+        if (e.type === "session") started = true;
+        yield out;
       }
-      if (msg.type === "result") return;
+      if (started && !state.finished) yield* warnings();
+      if (msg.type === "result" && !more) return;
     }
     // The CLI exited before its result. Its last stderr lines often say why.
     if (tap) yield* tap.events();
+    // The turn of an earlier result did finish, so its tokens count even though the funnel turn did not.
+    yield* heldUsage();
+    yield* warnings(true);
   } finally {
     tap?.close();
   }
+}
+
+/**
+ * Starts collecting the warnings in the process's stderr into `track.notices`, with the run's secrets masked. Call the
+ * returned function to stop. A one-shot run does that when it ends. A live session keeps listening, so the warnings
+ * the CLI prints at startup, before the first turn reads, wait for that turn and are reported once.
+ */
+export function watchStderr(proc: Pick<Streamed, "onStderr">, input: RunInput, track: ClaudeTrack): () => void {
+  return proc.onStderr((line) => track.notices.push(line), runSecrets(input));
 }
 
 async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   const { proc, removeFiles } = await launchClaude(input, input.signal);
   proc.write(userMessage(input));
   const state = { finished: false };
+  const track = newClaudeTrack();
+  const unwatch = watchStderr(proc, input, track);
   try {
     // Claude Code waits on stdin for another turn until it closes, so close it as soon as the result arrives.
-    yield* claudeTurn(proc, proc.lines, input, forwardsSubagents(input), state, newClaudeTrack(), () => proc.closeStdin());
+    yield* claudeTurn(proc, proc.lines, input, forwardsSubagents(input), state, track, () => proc.closeStdin());
   } finally {
+    unwatch();
     proc.closeStdin();
     // After a result Claude Code exits on its own once stdin closes. Give it a moment to save the session, then stop it.
     if (state.finished) setTimeout(() => proc.kill(), 2000).unref();
@@ -467,6 +564,49 @@ async function authStatus(): Promise<AuthStatus> {
   }
 }
 
+/** How long `rateLimits` waits for the CLI to answer, the same as Codex's calls. */
+const USAGE_TIMEOUT_MS = 30_000;
+const USAGE_REQUEST_ID = "cli-funnel-usage";
+
+/**
+ * Starts the CLI, sends the `get_usage` control request, reads the answer and stops it. No model turn runs. The
+ * request is experimental in the CLI ("the shape may change"), so no answer, an error answer, or a CLI that exits first
+ * all mean this version does not support it. `skip_behaviors` stops the CLI from scanning local transcripts. The tool,
+ * MCP and settings flags are the ones access `none` uses: nothing of the user's starts.
+ */
+export async function readUsage(options: ProcessOptions = {}, timeoutMs = USAGE_TIMEOUT_MS): Promise<RateLimits> {
+  const bin = findBinary(BIN);
+  if (!bin) throw new FunnelError("Claude Code is not installed.", "not-installed");
+  const args = [...NO_TOOLS, "--no-session-persistence", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"];
+  const proc = spawnStream(bin, args, { env: options.env, signal: options.signal, closeStdin: false });
+  // The CLI's error text and stderr can hold account details and the caller's secrets, so none of it goes into a message.
+  const unsupported = (message: string) => new FunnelError(message, "unsupported");
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    proc.write(JSON.stringify({ type: "control_request", request_id: USAGE_REQUEST_ID, request: { subtype: "get_usage", skip_behaviors: true } }));
+    const answer = (async () => {
+      for await (const raw of proc.lines) {
+        const response = isObj(raw) && raw.type === "control_response" && isObj(raw.response) ? raw.response : undefined;
+        if (response?.request_id !== USAGE_REQUEST_ID) continue;
+        if (response.subtype !== "success") throw unsupported("This Claude Code version does not answer usage requests.");
+        return parseUsage(response.response);
+      }
+      throw unsupported("Claude Code exited before it answered the usage request.");
+    })();
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(unsupported(`Claude Code did not answer the usage request in ${timeoutMs / 1000} s.`)), timeoutMs);
+    });
+    return await Promise.race([answer, timeout]);
+  } catch (e) {
+    if (options.signal?.aborted) throw new FunnelError("The request was aborted.", "aborted");
+    throw e;
+  } finally {
+    clearTimeout(timer);
+    proc.closeStdin();
+    proc.kill();
+  }
+}
+
 export const claudeProvider: Provider = {
   id: "claude",
   displayName: "Claude Code",
@@ -482,4 +622,5 @@ export const claudeProvider: Provider = {
   models: (ctx?: ProviderContext) => manifestModels("claude", ctx?.manifestUrl, claudeProvider.detect().then((i) => i.version)),
   run,
   openSession: openClaudeSession,
+  rateLimits: (options) => readUsage(options),
 };

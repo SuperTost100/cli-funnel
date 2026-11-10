@@ -11,6 +11,8 @@ type Json = Record<string, any>;
 const CALL_TIMEOUT_MS = 30_000;
 // With logs, Codex gathers its log database, the saved conversation and a diagnostics report before it uploads.
 const FEEDBACK_TIMEOUT_MS = 120_000;
+// `account/read` answers about 260 ms after `initialize`. `authStatus` falls back to `codex login status` when it takes longer.
+const ACCOUNT_TIMEOUT_MS = 3_000;
 
 /** A `Thread` from `thread/list` or `thread/fork`. Times are Unix seconds on the wire. */
 export function parseThread(t: Json): ThreadInfo {
@@ -110,6 +112,11 @@ export async function forkThread(sessionId: string, options: ProcessOptions = {}
   const id = result?.thread?.id;
   if (typeof id !== "string") throw new FunnelError("thread/fork answered without a thread id.", "cli-failed");
   return id;
+}
+
+/** The answer to `account/read` without a token refresh. It holds the account's email, so callers keep only what they need. */
+export async function readAccount(timeoutMs = ACCOUNT_TIMEOUT_MS): Promise<Json> {
+  return call("account/read", { refreshToken: false }, {}, timeoutMs);
 }
 
 export async function rateLimits(options: ProcessOptions = {}): Promise<RateLimits> {

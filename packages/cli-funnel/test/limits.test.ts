@@ -169,3 +169,21 @@ describe("access.reduced in the result", () => {
     expect((await collect(events(), input)).accessReduced).toEqual(first);
   });
 });
+
+describe("warnings in the result", () => {
+  const input: RunInput = { prompt: "x", selection: { provider: "codex", model: "m", cwd: "/tmp", access: "accept-edits" } };
+  it("keeps every warning in order on RunResult.warnings", async () => {
+    async function* events(): AsyncGenerator<FunnelEvent> {
+      yield { type: "warning", message: "first" };
+      yield { type: "warning", message: "second" };
+      yield { type: "done", text: "ok", finishReason: "stop" };
+    }
+    expect((await collect(events(), input)).warnings).toEqual(["first", "second"]);
+  });
+  it("leaves warnings out when there were none", async () => {
+    async function* events(): AsyncGenerator<FunnelEvent> {
+      yield { type: "done", text: "ok", finishReason: "stop" };
+    }
+    expect("warnings" in (await collect(events(), input))).toBe(false);
+  });
+});

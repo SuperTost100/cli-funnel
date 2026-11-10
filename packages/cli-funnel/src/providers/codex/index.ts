@@ -3,11 +3,11 @@ import { manifestModels } from "../../catalog/manifest.js";
 import type { AuthStatus, FunnelEvent, ModelInfo, Provider, ProviderContext, RunInput } from "../../types.js";
 import { exec } from "../../util/process.js";
 import { detectInstallation, findBinary, runLogout, runUpdate, spawnLogin } from "../base.js";
-import { parseLoginStatus } from "./auth.js";
+import { accountStatus, parseLoginStatus } from "./auth.js";
 import { FEEDBACK_CHANNELS } from "../feedback.js";
 import { parseCatalog } from "./models.js";
 import { openCodexSession } from "./live.js";
-import { forkThread, listThreads, rateLimits, sendFeedback } from "./threads.js";
+import { forkThread, listThreads, rateLimits, readAccount, sendFeedback } from "./threads.js";
 
 export const BINARY = "codex";
 const TESTED_RANGE = { min: "0.150.0" };
@@ -15,6 +15,9 @@ const TESTED_RANGE = { min: "0.150.0" };
 async function authStatus(): Promise<AuthStatus> {
   const path = findBinary(BINARY);
   if (!path) return { loggedIn: false, detail: "codex is not installed." };
+  // The app-server knows the account and plan. When it fails, times out or knows neither, the login status text answers.
+  const account = await readAccount().then(accountStatus, () => undefined);
+  if (account) return account;
   const res = await exec(path, ["login", "status"], { timeoutMs: 15_000 });
   return parseLoginStatus(res.stdout + res.stderr);
 }

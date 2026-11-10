@@ -113,7 +113,7 @@ export function createClient(options: ClientOptions) {
 
     /** Live sessions of a server made with `sessions.keepAlive`. Every call fails with a 409 when the server has no live sessions. */
     sessions: (signal?: AbortSignal) => request<LiveSessionInfo[]>("/sessions", { signal }),
-    /** Adds a message to the turn running in a live session. Codex only. Pass `provider` when two providers could share an id. */
+    /** Adds a message to the turn running in a live session. Codex and Claude Code. Pass `provider` when two providers could share an id. */
     steer: (sessionId: string, text: string, provider?: ProviderId) => post(`/sessions/${encodeURIComponent(sessionId)}/steer`, { text, provider }),
     /** Stops the live process of a session. The next turn resumes it in a new process. */
     closeSession: (sessionId: string, provider?: ProviderId) =>

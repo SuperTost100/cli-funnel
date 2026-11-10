@@ -50,6 +50,21 @@ describe("codex events", () => {
     const { events } = replay("approve-command.ndjson");
     const usage = events.filter((e) => e.type === "usage").at(-1) as Extract<FunnelEvent, { type: "usage" }>;
     expect(usage.usage.totalTokens).toBe(19245 + 19273);
+    // The recording wrote no cache, so the field stays unset rather than 0.
+    expect(usage.usage).not.toHaveProperty("cacheCreationInputTokens");
+  });
+
+  it("sums the cache writes of each call into cacheCreationInputTokens", () => {
+    const t = new Translator("thr");
+    const call = (cacheWriteInputTokens?: number) => ({
+      threadId: "thr",
+      tokenUsage: { last: { totalTokens: 110, inputTokens: 100, cachedInputTokens: 40, outputTokens: 10, reasoningOutputTokens: 0, ...(cacheWriteInputTokens === undefined ? {} : { cacheWriteInputTokens }) } },
+    });
+    const last = (p: object) => (t.handle("thread/tokenUsage/updated", p).events[0] as Extract<FunnelEvent, { type: "usage" }>).usage;
+    expect(last(call(60))).toMatchObject({ inputTokens: 100, cachedInputTokens: 40, cacheCreationInputTokens: 60 });
+    expect(last(call(0))).toMatchObject({ inputTokens: 200, cacheCreationInputTokens: 60 });
+    expect(last(call())).toMatchObject({ inputTokens: 300, cacheCreationInputTokens: 60 });
+    expect(last(call(5))).toMatchObject({ inputTokens: 400, cacheCreationInputTokens: 65 });
   });
 
   it("streams commentary as text but keeps it out of the final text", () => {

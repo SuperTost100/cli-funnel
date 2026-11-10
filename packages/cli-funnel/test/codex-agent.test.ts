@@ -5,10 +5,11 @@ import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { denyNote, effectiveReply, isQuestion, toApprovalRequest, toQuestionReply, toQuestionRequest, toReply } from "../src/providers/codex/approvals.js";
 import { startedAccess } from "../src/providers/codex/access.js";
-import { authKind } from "../src/providers/codex/auth.js";
-import { fileChangeEvents, planEvent, Translator } from "../src/providers/codex/events.js";
+import { accountStatus, authKind } from "../src/providers/codex/auth.js";
+import { fileChangeEvents, planEvent, Translator, warningText } from "../src/providers/codex/events.js";
 import { codexProvider } from "../src/providers/codex/index.js";
 import { appServerArgs } from "../src/providers/codex/live.js";
+import { readAccount } from "../src/providers/codex/threads.js";
 import { agentConfig, mcpConfig } from "../src/providers/codex/options.js";
 import { collect } from "./helpers.js";
 import type { AccessLevel, FunnelEvent, McpServer, RunInput } from "../src/types.js";
@@ -85,6 +86,28 @@ describe("codex started access", () => {
     expect(startedAccess("auto", auto, answer("workspaceWrite", "untrusted"), [])).toBeUndefined();
     expect(startedAccess("auto", auto, { sandbox: { type: "workspaceWrite" } }, [])).toBeUndefined();
     expect(startedAccess("auto", auto, answer("workspaceWrite", "granular"), [])).toBeUndefined();
+  });
+});
+
+describe("codex warning text", () => {
+  it("joins the summary and the details of configWarning and deprecationNotice", () => {
+    expect(warningText("configWarning", { summary: "Codex could not find bubblewrap on PATH.", details: null })).toBe("Codex could not find bubblewrap on PATH.");
+    expect(warningText("configWarning", { summary: "Bad value.", details: "" })).toBe("Bad value.");
+    expect(warningText("deprecationNotice", { summary: "`foo` is deprecated.", details: "Use `bar`." })).toBe("`foo` is deprecated. Use `bar`.");
+  });
+
+  it("takes the message of warning and guardianWarning, with or without a thread", () => {
+    expect(warningText("warning", { threadId: "t", message: "Falling back." })).toBe("Falling back.");
+    expect(warningText("warning", { threadId: null, message: "Falling back." })).toBe("Falling back.");
+    expect(warningText("guardianWarning", { threadId: "t", message: "Paused." })).toBe("Paused.");
+  });
+
+  it("gives nothing for another method or a notification without text", () => {
+    expect(warningText("error", { message: "x" })).toBeUndefined();
+    expect(warningText("item/started", { summary: "x" })).toBeUndefined();
+    expect(warningText("configWarning", { details: "x" })).toBeUndefined();
+    expect(warningText("warning", { threadId: "t", message: "" })).toBeUndefined();
+    expect(warningText("warning", undefined)).toBeUndefined();
   });
 });
 
@@ -287,6 +310,29 @@ describe("codex MCP servers and feature config", () => {
 
 });
 
+describe("codex account status", () => {
+  it("gives the email, plan and method of a ChatGPT account", () => {
+    expect(accountStatus({ account: { type: "chatgpt", email: "user@example.com", planType: "plus", workspaceName: null } })).toEqual({
+      loggedIn: true,
+      method: "ChatGPT",
+      account: "user@example.com",
+      plan: "plus",
+      detail: "Logged in using ChatGPT",
+    });
+    expect(accountStatus({ account: { type: "chatgpt", email: null, planType: "unknown" } })).toEqual({ loggedIn: true, method: "ChatGPT", plan: "unknown", detail: "Logged in using ChatGPT" });
+  });
+
+  it("gives only the method for an API key", () => {
+    expect(accountStatus({ account: { type: "apiKey" } })).toEqual({ loggedIn: true, method: "API key", detail: "Logged in using an API key" });
+  });
+
+  it("gives nothing for no account, another login or a bad answer, so the login status text decides", () => {
+    for (const res of [{ account: null }, { account: { type: "amazonBedrock", usesCodexManagedCredentials: true } }, { account: { type: "gcp" } }, {}, null, undefined]) {
+      expect(accountStatus(res)).toBeUndefined();
+    }
+  });
+});
+
 describe("codex API key and auth", () => {
   it("keeps credentials in memory only when an API key is passed", () => {
     expect(appServerArgs(input("auto", { apiKey: "sk-x" }))).toEqual(["app-server", "-c", 'cli_auth_credentials_store="ephemeral"']);
@@ -305,6 +351,10 @@ describe("codex API key and auth", () => {
 const FAKE = `const fs = require("node:fs");
 const log = (o) => fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify(o) + "\\n");
 log({ args: process.argv.slice(2) });
+if (process.argv[2] === "login") {
+  process.stderr.write(process.env.FAKE_LOGIN_STATUS || "");
+  process.exit(0);
+}
 const send = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
 const thread = "thr-1";
 let turn;
@@ -312,6 +362,8 @@ let prompt;
 const done = (text) => {
   send({ method: "item/completed", params: { threadId: thread, item: { type: "agentMessage", text } } });
   send({ method: "turn/completed", params: { threadId: thread, turn: { id: turn, status: "completed" } } });
+  // Warnings that arrive right after the turn ended, before the next one starts.
+  for (const message of JSON.parse(process.env.FAKE_AFTER_DONE || "[]")) send({ method: "warning", params: { threadId: thread, message } });
 };
 const question = ${JSON.stringify(load("question.ndjson").find((r) => r.m.method === "item/tool/requestUserInput")!.m.params)};
 let buf = "";
@@ -328,13 +380,17 @@ process.stdin.on("data", (d) => {
     switch (m.method) {
       case "initialize": send({ id: m.id, result: {} }); break;
       case "account/login/start": send({ id: m.id, result: { type: "apiKey" } }); break;
-      case "account/read": send({ id: m.id, result: { account: { type: "chatgpt", email: null, planType: "plus" }, requiresOpenaiAuth: true } }); break;
+      case "account/read":
+        if (process.env.FAKE_ACCOUNT === "error") send({ id: m.id, error: { code: -32601, message: "unknown method" } });
+        else if (process.env.FAKE_ACCOUNT !== "hang") send({ id: m.id, result: { account: JSON.parse(process.env.FAKE_ACCOUNT || '{"type":"chatgpt","email":null,"planType":"plus"}'), requiresOpenaiAuth: true } });
+        break;
       case "config/read":
         if (process.env.FAKE_MCP === "error") send({ id: m.id, error: { code: -32601, message: "unknown method" } });
-        else send({ id: m.id, result: { config: { model: null, mcp_servers: JSON.parse(process.env.FAKE_MCP || "{}") }, origins: {} } });
+        else send({ id: m.id, result: { config: { model: null, mcp_servers: JSON.parse(process.env.FAKE_MCP || "{}"), sandbox_workspace_write: JSON.parse(process.env.FAKE_SANDBOX_CONFIG || "null") }, origins: {} } });
         break;
       case "thread/start":
         for (const summary of JSON.parse(process.env.FAKE_WARNINGS || "[]")) send({ method: "configWarning", params: { summary, details: null } });
+        for (const n of JSON.parse(process.env.FAKE_NOTES || "[]")) send(n);
         send({ id: m.id, result: { thread: { id: thread }, model: p.model, cwd: p.cwd, ...JSON.parse(process.env.FAKE_STARTED || "{}") } });
         break;
       case "turn/steer": send({ id: m.id, result: { turnId: turn } }); break;
@@ -358,6 +414,13 @@ process.stdin.on("data", (d) => {
           send({ method: "item/completed", params: { threadId: "child-1", item: { type: "agentMessage", id: "m1", text: "a.txt", phase: "final_answer" } } });
           send({ method: "turn/completed", params: { threadId: "child-1", turn: { id: "child-turn", status: "completed" } } });
           done("ok");
+        } else if (prompt === "late-warning") {
+          // After the turn's session event has gone out. A warning from another thread counts too.
+          setTimeout(() => {
+            send({ method: "warning", params: { threadId: thread, message: "mid-turn" } });
+            send({ method: "guardianWarning", params: { threadId: "other-thread", message: "from elsewhere" } });
+            done("ok");
+          }, 200);
         } else if (prompt === "fail") {
           process.stderr.write("auth failed for " + process.env.FAKE_KEY + "\\n");
           send({ method: "turn/completed", params: { threadId: thread, turn: { id: turn, status: "failed", error: { message: "Incorrect API key provided: " + process.env.FAKE_KEY } } } });
@@ -402,7 +465,12 @@ describe("codex agent features through the app-server", () => {
     delete process.env.FAKE_KEY;
     delete process.env.FAKE_MCP;
     delete process.env.FAKE_WARNINGS;
+    delete process.env.FAKE_AFTER_DONE;
     delete process.env.FAKE_STARTED;
+    delete process.env.FAKE_NOTES;
+    delete process.env.FAKE_SANDBOX_CONFIG;
+    delete process.env.FAKE_ACCOUNT;
+    delete process.env.FAKE_LOGIN_STATUS;
   });
 
   it("reports a thread that started in a narrower sandbox, on the result and after session", async () => {
@@ -413,6 +481,70 @@ describe("codex agent features through the app-server", () => {
     expect(events.map((e) => e.type).slice(0, 2)).toEqual(["session", "access.reduced"]);
     expect(events[1]).toEqual({ type: "access.reduced", ...reduced });
     expect(res.accessReduced).toEqual(reduced);
+    // The warnings follow, so a caller that stops reading at the reduction still saw it first.
+    expect(events.map((e) => e.type).slice(0, 4)).toEqual(["session", "access.reduced", "warning", "warning"]);
+    expect(res.warnings).toEqual([BUBBLEWRAP_WARNING, SANDBOX_WARNING]);
+  });
+
+  it("reports warnings after session in order, and drops a text it already reported", async () => {
+    const requirements = "Configured value for `approval_policy` is disallowed by requirements; falling back to required value OnRequest.";
+    process.env.FAKE_WARNINGS = JSON.stringify([requirements]);
+    process.env.FAKE_NOTES = JSON.stringify([
+      { method: "deprecationNotice", params: { summary: "`foo` is deprecated.", details: "Use `bar`." } },
+      { method: "warning", params: { threadId: "thr-1", message: requirements } },
+      { method: "guardianWarning", params: { threadId: "thr-1", message: "Guardian paused." } },
+    ]);
+    const { res, events } = await run("hi");
+    expect(events.map((e) => e.type)).toEqual(["session", "warning", "warning", "warning", "done"]);
+    expect(events.filter((e) => e.type === "warning")).toEqual([
+      { type: "warning", message: requirements },
+      { type: "warning", message: "`foo` is deprecated. Use `bar`." },
+      { type: "warning", message: "Guardian paused." },
+    ]);
+    expect(res.warnings).toEqual([requirements, "`foo` is deprecated. Use `bar`.", "Guardian paused."]);
+  });
+
+  it("emits a warning that arrives during the turn at once, from any thread", async () => {
+    const { res, events } = await run("late-warning");
+    expect(events.map((e) => e.type)).toEqual(["session", "warning", "warning", "done"]);
+    expect(res.warnings).toEqual(["mid-turn", "from elsewhere"]);
+  });
+
+  it("masks secrets in a warning on a saved-login run, which has no API key", async () => {
+    process.env.FAKE_WARNINGS = JSON.stringify(["MCP server failed: https://mcp.example.test/?token=review-private-marker"]);
+    const { res, events } = await run("hi");
+    expect(events.filter((e) => e.type === "warning")).toEqual([{ type: "warning", message: "MCP server failed: https://mcp.example.test/" }]);
+    expect(res.warnings).toEqual(["MCP server failed: https://mcp.example.test/"]);
+    expect(JSON.stringify(events)).not.toContain("review-private-marker");
+  });
+
+  it("reports a warning from between two turns once, at the start of the next turn, and not again", async () => {
+    const first = "Configured value is disallowed by requirements.";
+    process.env.FAKE_WARNINGS = JSON.stringify([first]);
+    process.env.FAKE_AFTER_DONE = JSON.stringify(["Guardian paused.", first]);
+    const session = await codexProvider.openSession!({ selection: { provider: "codex", model: "m", cwd, access: "supervised" }, prompt: "first" });
+    try {
+      const turn = async (prompt: string) => {
+        const out: FunnelEvent[] = [];
+        for await (const e of session.turn({ selection: { provider: "codex", model: "m", cwd, access: "supervised" }, prompt })) out.push(e);
+        return out;
+      };
+      const one = await turn("first");
+      expect(one.map((e) => e.type)).toEqual(["session", "warning", "done"]);
+      const two = await turn("second");
+      expect(two.map((e) => e.type)).toEqual(["session", "warning", "done"]);
+      expect(two[1]).toEqual({ type: "warning", message: "Guardian paused." });
+    } finally {
+      session.close();
+    }
+  });
+
+  it("sends the warnings before the error when the session fails to start", async () => {
+    process.env.FAKE_WARNINGS = JSON.stringify([APPROVAL_WARNING]);
+    process.env.FAKE_STARTED = JSON.stringify({ sandbox: { type: "workspaceWrite" }, approvalPolicy: "never" });
+    await run("hi").catch(() => undefined);
+    expect(events.map((e) => e.type)).toEqual(["warning", "error"]);
+    expect(events[0]).toEqual({ type: "warning", message: APPROVAL_WARNING });
   });
 
   it("fails the run when Codex forces an approval policy that asks less often than the level needs", async () => {
@@ -575,6 +707,85 @@ describe("codex agent features through the app-server", () => {
   it("does not read the config above none when the caller adds no MCP servers", async () => {
     await run("plain");
     expect(entries().some((e) => e.method === "config/read")).toBe(false);
+  });
+
+  describe("authStatus", () => {
+    const status = () => codexProvider.authStatus();
+
+    it("reads the account and plan from account/read and does not run codex login", async () => {
+      process.env.FAKE_ACCOUNT = JSON.stringify({ type: "chatgpt", email: "user@example.com", planType: "pro", workspaceName: null });
+      expect(await status()).toEqual({ loggedIn: true, method: "ChatGPT", account: "user@example.com", plan: "pro", detail: "Logged in using ChatGPT" });
+      const sent = entries();
+      expect(sent.find((e) => e.method === "account/read").params).toEqual({ refreshToken: false });
+      expect(sent.some((e) => e.args?.[0] === "login")).toBe(false);
+    });
+
+    it("falls back to codex login status when account/read fails or knows no account", async () => {
+      process.env.FAKE_LOGIN_STATUS = "Logged in using ChatGPT\n";
+      process.env.FAKE_ACCOUNT = "error";
+      expect(await status()).toEqual({ loggedIn: true, method: "ChatGPT", detail: "Logged in using ChatGPT" });
+      process.env.FAKE_LOGIN_STATUS = "Not logged in\n";
+      process.env.FAKE_ACCOUNT = "null";
+      expect(await status()).toEqual({ loggedIn: false, detail: "Not logged in" });
+      expect(entries().filter((e) => e.args?.[0] === "login")).toHaveLength(2);
+    });
+
+    it("gives up on an app-server that does not answer", async () => {
+      process.env.FAKE_ACCOUNT = "hang";
+      await expect(readAccount(150)).rejects.toMatchObject({ code: "cli-failed", message: expect.stringContaining("account/read") });
+    });
+  });
+
+  describe("addDirs", () => {
+    const root = (name: string) => resolve("/", "srv", name);
+    const threadConfig = () => entries().find((e) => e.method === "thread/start").params.config ?? {};
+    const KEY = "sandbox_workspace_write.writable_roots";
+    const dirs = (access: AccessLevel, extra: Partial<RunInput> = {}) =>
+      run("plain", { selection: { provider: "codex", model: "m", cwd, access }, providerOptions: { codex: { addDirs: [root("a"), root("b")] } }, ...extra });
+
+    it("sets the writable roots where the sandbox is workspace-write, and sends nothing else for them", async () => {
+      for (const access of ["supervised", "accept-edits", "auto"] as const) {
+        await dirs(access);
+        expect(threadConfig()[KEY]).toEqual([root("a"), root("b")]);
+      }
+      await dirs("full", { sandbox: true });
+      expect(entries().filter((e) => e.method === "thread/start").at(-1).params).toMatchObject({ sandbox: "workspace-write", config: { [KEY]: [root("a"), root("b")] } });
+    });
+
+    it("changes nothing at full without a sandbox, where nothing limits writes", async () => {
+      await dirs("full");
+      expect(entries().find((e) => e.method === "thread/start").params).toMatchObject({ sandbox: "danger-full-access" });
+      expect(threadConfig()).not.toHaveProperty(KEY);
+      expect(entries().some((e) => e.method === "config/read")).toBe(false);
+    });
+
+    it("refuses addDirs at none before it starts a process", async () => {
+      await expect(dirs("none")).rejects.toMatchObject({ code: "invalid-selection", message: expect.stringContaining("addDirs") });
+      expect(existsSync(logFile)).toBe(false);
+    });
+
+    it("adds to the roots in the user's config and keeps each folder once", async () => {
+      process.env.FAKE_SANDBOX_CONFIG = JSON.stringify({ writable_roots: [root("user"), root("a")], network_access: false });
+      await dirs("auto");
+      expect(entries().find((e) => e.method === "config/read").params).toEqual({ cwd });
+      expect(threadConfig()[KEY]).toEqual([root("user"), root("a"), root("b")]);
+    });
+
+    it("sets the roots after every other config key and leaves the MCP servers to none", async () => {
+      process.env.FAKE_MCP = JSON.stringify({ srv: { command: "x" } });
+      await dirs("auto", { mcpServers: { app: http() } });
+      expect(threadConfig()).toMatchObject({ [KEY]: [root("a"), root("b")], "mcp_servers.app.url": "http://127.0.0.1:7777/mcp" });
+    });
+
+    it("fails the run before the thread starts when the config cannot be read", async () => {
+      process.env.FAKE_MCP = "error";
+      const failed = await dirs("auto").then(
+        () => undefined,
+        (e: Error) => e,
+      );
+      expect(failed?.message).toMatch(/Could not read the writable folders/);
+      expect(entries().some((e) => e.method === "thread/start")).toBe(false);
+    });
   });
 
   it("asks onApproval at full when the caller chose a stricter approvalPolicy", async () => {

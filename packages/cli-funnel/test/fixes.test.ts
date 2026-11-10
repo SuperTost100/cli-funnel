@@ -243,14 +243,15 @@ describe.skipIf(process.platform === "win32")("codex login", () => {
     delete process.env.CLI_FUNNEL_CODEX_BIN;
   });
 
-  // A stand-in codex that records its arguments and prints what `codex login` prints.
+  // A stand-in codex that records its arguments and prints what `codex login` prints. It has no app-server, which
+  // authStatus tries first, so that call exits before it records anything.
   function fakeCodex() {
     const dir = mkdtempSync(join(tmpdir(), "cf-codex-"));
     const bin = join(dir, "codex");
     const args = join(dir, "args");
     writeFileSync(
       bin,
-      `#!/bin/sh\nif [ "$1 $2" = "login status" ]; then echo "Not logged in" >&2; exit 1; fi\necho "$@" > ${args}\nprintf 'Starting local login server on http://localhost:1455.\\nIf your browser did not open, navigate to this URL to authenticate:\\n\\nhttps://auth.openai.com/oauth/authorize?state=z\\n' >&2\n`,
+      `#!/bin/sh\nif [ "$1" = "app-server" ]; then exit 1; fi\nif [ "$1 $2" = "login status" ]; then echo "Not logged in" >&2; exit 1; fi\necho "$@" > ${args}\nprintf 'Starting local login server on http://localhost:1455.\\nIf your browser did not open, navigate to this URL to authenticate:\\n\\nhttps://auth.openai.com/oauth/authorize?state=z\\n' >&2\n`,
     );
     chmodSync(bin, 0o755);
     process.env.CLI_FUNNEL_CODEX_BIN = bin;

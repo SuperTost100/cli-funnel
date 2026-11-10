@@ -36,6 +36,29 @@ export function snapshotLimit(snapshot: Params | undefined): LimitEvent[] {
   return [limit];
 }
 
+/** The value when it is a non-empty string. */
+const text = (v: unknown): string | undefined => (typeof v === "string" && v ? v : undefined);
+
+/**
+ * The text of a warning notification, or undefined for any other method. `configWarning` and `deprecationNotice` send a
+ * `summary` and optional `details`, `warning` and `guardianWarning` send a `message`. None of them is an error: the
+ * run goes on. They are not tied to a turn, and the first two do not name a thread.
+ */
+export function warningText(method: string, p: Params = {}): string | undefined {
+  switch (method) {
+    case "configWarning":
+    case "deprecationNotice": {
+      const summary = text(p.summary);
+      return summary && (text(p.details) ? `${summary} ${p.details}` : summary);
+    }
+    case "warning":
+    case "guardianWarning":
+      return text(p.message);
+    default:
+      return undefined;
+  }
+}
+
 const STEP_STATUS: Record<string, PlanStep["status"]> = { pending: "pending", inProgress: "in_progress", completed: "done" };
 
 /** A `turn/plan/updated` notification as a `plan` event. A step with an unknown status counts as pending. */
@@ -144,6 +167,8 @@ export class Translator {
         u.outputTokens += l.outputTokens;
         u.cachedInputTokens = (u.cachedInputTokens ?? 0) + l.cachedInputTokens;
         u.reasoningTokens = (u.reasoningTokens ?? 0) + l.reasoningOutputTokens;
+        // Counted in inputTokens, like the cached ones. Older servers send no such field.
+        if (typeof l.cacheWriteInputTokens === "number" && l.cacheWriteInputTokens > 0) u.cacheCreationInputTokens = (u.cacheCreationInputTokens ?? 0) + l.cacheWriteInputTokens;
         u.totalTokens += l.totalTokens;
         return { events: [{ type: "usage", usage: { ...u } }] };
       }
