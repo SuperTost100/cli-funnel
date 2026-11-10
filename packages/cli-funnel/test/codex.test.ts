@@ -274,6 +274,13 @@ describe("codex none: configured MCP servers", () => {
     }
   });
 
+  it("sends only keys Codex 0.166 knows: view_image is a feature, and the removed settings are gone", () => {
+    const config = noToolsConfig([]);
+    expect(config["features.view_image"]).toBe(false);
+    expect(config).not.toHaveProperty("tools.view_image");
+    expect(config).not.toHaveProperty("include_apply_patch_tool");
+  });
+
   it("switches the servers off in a nested table, so a dotted name stays one server", () => {
     const config = noToolsConfig(["a.b", "plain"]);
     expect(config.mcp_servers).toEqual({ "a.b": { enabled: false }, plain: { enabled: false } });

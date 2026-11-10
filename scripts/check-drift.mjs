@@ -64,6 +64,14 @@ function checkCodexSchema() {
     if (!JSON.stringify(defs.LoginAccountParams ?? {}).includes('"apiKey"')) report("apiKey login", "LoginAccountParams");
     if (!defs.GetAccountResponse?.properties?.account) report("account", "GetAccountResponse");
     if (!defs.CliAuthCredentialsStoreMode?.enum?.includes("ephemeral")) report("ephemeral", "CliAuthCredentialsStoreMode");
+    // Feature names cli-funnel switches. Codex ignores an unknown or removed key with a warning, so a rename would
+    // show up as a warning on every run. TOOL_FEATURES is read from the source, so the list is kept in one place.
+    const tools = readFileSync(new URL("../packages/cli-funnel/src/providers/codex/tools.ts", import.meta.url), "utf8");
+    const names = [...(tools.match(/TOOL_FEATURES = \[([^\]]*)\]/)?.[1].match(/"(\w+)"/g) ?? []).map((n) => n.slice(1, -1)), "view_image", "default_mode_request_user_input"];
+    const features = spawnSync("codex", ["features", "list"], { encoding: "utf8" });
+    const stages = new Map((features.stdout ?? "").split("\n").map((l) => l.trim().split(/\s{2,}/)).filter((c) => c.length > 1).map((c) => [c[0], c[1]]));
+    if (features.status !== 0 || !stages.size) report("feature list", "codex features list");
+    else for (const n of names) if (!stages.has(n) || stages.get(n) === "removed") report(`feature ${n}`, "codex features list");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

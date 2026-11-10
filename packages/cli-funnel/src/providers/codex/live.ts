@@ -7,7 +7,7 @@ import { askApproval, askQuestion, findBinary, rawEvent, SETTLE_MS, stderrTail }
 import { configWritableRoots, planAccess, sandboxFor, startedAccess } from "./access.js";
 import { denyNote, effectiveReply, isQuestion, toApprovalRequest, toQuestionReply, toQuestionRequest, toReply, type Reply, type ServerRequest } from "./approvals.js";
 import { authKind } from "./auth.js";
-import { Translator, warningText } from "./events.js";
+import { isOwnFeatureWarning, Translator, warningText } from "./events.js";
 import { BINARY, INITIALIZE_PARAMS } from "./index.js";
 import { agentConfig, codexForward, threadOptions } from "./options.js";
 import { RpcClient } from "./rpc.js";
@@ -173,6 +173,8 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
   const stricter = approvalPolicy !== undefined && approvalPolicy !== planAccess(requireMachine(first.selection).access).approvalPolicy;
   const agent = agentConfig(first);
   const forward = codexForward(first);
+  // Features this run switched on itself. Codex warns about them when they are still under development.
+  const ownFeatures = Object.keys(agent).filter((k) => k.startsWith("features.") && agent[k] === true).map((k) => k.slice("features.".length));
   // No abort signal here: the process outlives the turn. Each turn handles its own signal.
   const proc = spawnStream(path, appServerArgs(first), { cwd: first.selection.cwd, env: first.env });
   proc.hold(false);
@@ -253,7 +255,7 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
       if (method === "configWarning" && typeof params?.summary === "string") warnings.push(params.summary);
       // Before the checks below: a warning is not tied to this turn or this thread.
       const warning = warningText(method, params);
-      if (warning) warn(warning);
+      if (warning && !isOwnFeatureWarning(warning, ownFeatures)) warn(warning);
       const t = current;
       if (!t || t.finished) return;
       if (method === "turn/started" && params?.threadId === threadId && params.turn?.id) t.setTurnId(params.turn.id);

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { denyNote, effectiveReply, isQuestion, toApprovalRequest, toQuestionReply, toQuestionRequest, toReply } from "../src/providers/codex/approvals.js";
 import { startedAccess } from "../src/providers/codex/access.js";
 import { accountStatus, authKind } from "../src/providers/codex/auth.js";
-import { fileChangeEvents, planEvent, Translator, warningText } from "../src/providers/codex/events.js";
+import { fileChangeEvents, isOwnFeatureWarning, planEvent, Translator, warningText } from "../src/providers/codex/events.js";
 import { codexProvider } from "../src/providers/codex/index.js";
 import { appServerArgs } from "../src/providers/codex/live.js";
 import { readAccount } from "../src/providers/codex/threads.js";
@@ -159,6 +159,23 @@ describe("codex file changes", () => {
     const item = { id: "i", status: "failed", changes: [{ path: "src/a.ts", kind: { type: "update", move_path: "src/b.ts" } }, { path: "x", kind: { type: "weird" } }] };
     expect(fileChangeEvents(item, "/w")).toEqual([{ type: "file.change", id: "i", path: resolve("/w", "src/a.ts"), kind: "update", movedTo: resolve("/w", "src/b.ts"), status: "failed" }]);
     expect(fileChangeEvents({ ...item, status: "inProgress" }, "/w")).toEqual([]);
+  });
+});
+
+describe("codex under-development warning", () => {
+  const own = ["default_mode_request_user_input"];
+  const recorded = load("question.ndjson").find((r) => r.m.method === "warning")!.m.params.message as string;
+
+  it("matches the recorded warning that lists only the feature the run switched on", () => {
+    expect(isOwnFeatureWarning(recorded, own)).toBe(true);
+    expect(isOwnFeatureWarning("Under-development features enabled: default_mode_request_user_input.", own)).toBe(true);
+  });
+
+  it("lets through a list with another feature, and a warning about another feature", () => {
+    expect(isOwnFeatureWarning(recorded.replace(": default_mode_request_user_input.", ": apply_patch_streaming_events, default_mode_request_user_input."), own)).toBe(false);
+    expect(isOwnFeatureWarning(recorded.replace("default_mode_request_user_input", "apply_patch_streaming_events"), own)).toBe(false);
+    expect(isOwnFeatureWarning(recorded, [])).toBe(false);
+    expect(isOwnFeatureWarning("Codex is ignoring 1 unrecognized configuration settings.", own)).toBe(false);
   });
 });
 
@@ -508,6 +525,18 @@ describe("codex agent features through the app-server", () => {
     const { res, events } = await run("late-warning");
     expect(events.map((e) => e.type)).toEqual(["session", "warning", "warning", "done"]);
     expect(res.warnings).toEqual(["mid-turn", "from elsewhere"]);
+  });
+
+  it("drops the under-development warning for the feature onQuestion switched on, and keeps one that names another", async () => {
+    const message = (list: string) => `Under-development features enabled: ${list}. Under-development features are incomplete and may behave unpredictably.`;
+    process.env.FAKE_NOTES = JSON.stringify([
+      { method: "warning", params: { threadId: "thr-1", message: message("default_mode_request_user_input") } },
+      { method: "warning", params: { threadId: "thr-1", message: message("apply_patch_streaming_events, default_mode_request_user_input") } },
+    ]);
+    const { res } = await run("hi", { onQuestion: () => null });
+    expect(res.warnings).toEqual([message("apply_patch_streaming_events, default_mode_request_user_input")]);
+    const { res: without } = await run("hi");
+    expect(without.warnings).toEqual([message("default_mode_request_user_input"), message("apply_patch_streaming_events, default_mode_request_user_input")]);
   });
 
   it("masks secrets in a warning on a saved-login run, which has no API key", async () => {
