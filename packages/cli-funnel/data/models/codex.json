@@ -66,6 +66,39 @@
     "fast": true
   },
   {
+    "id": "gpt-6.1-terra",
+    "name": "GPT-6.1 Terra",
+    "efforts": [
+      {
+        "id": "low",
+        "label": "Low"
+      },
+      {
+        "id": "medium",
+        "label": "Medium"
+      },
+      {
+        "id": "high",
+        "label": "High"
+      },
+      {
+        "id": "xhigh",
+        "label": "Extra high"
+      },
+      {
+        "id": "max",
+        "label": "Max"
+      },
+      {
+        "id": "ultra",
+        "label": "Ultra"
+      }
+    ],
+    "defaultEffort": "low",
+    "contextWindows": [],
+    "fast": true
+  },
+  {
     "id": "gpt-6-sol",
     "name": "GPT-6-Sol",
     "efforts": [

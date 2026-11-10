@@ -103,6 +103,8 @@ describe("models", () => {
     expect(byId("claude-opus-5-thinking")).toBeDefined();
     expect(byId("claude-4.6-opus-thinking")).toBeDefined();
     expect(byId("claude-sonnet-5-5")?.fast).toBe(false);
+    expect(byId("claude-fable-5-2")).toMatchObject({ fast: true, defaultEffort: "medium" });
+    expect(byId("claude-fable-5-2")?.efforts.map((e) => e.id)).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(byId("composer-2.5")).toMatchObject({ fast: true, efforts: [] });
   });
 
@@ -115,6 +117,7 @@ describe("models", () => {
     expect(toCliModel(sel({ model: "claude-4.6-opus-thinking", effort: "max" }), known)).toBe("claude-4.6-opus-max-thinking");
     expect(toCliModel(sel({ model: "claude-4.5-sonnet-thinking" }), known)).toBe("claude-4.5-sonnet-thinking");
     expect(toCliModel(sel({ model: "composer-2.5", fast: true }), known)).toBe("composer-2.5-fast");
+    expect(toCliModel(sel({ model: "claude-fable-5-2", effort: "xhigh", fast: true }), known)).toBe("claude-fable-5-2-xhigh-fast");
     expect(toCliModel(sel({ model: "gpt-5.2", fast: true }), known)).toBe("gpt-5.2-fast");
   });
 

@@ -15,8 +15,11 @@
  {"id":"claude-opus-5","name":"Claude Opus 5 1M","efforts":[{"id":"low","label":"Low"},{"id":"medium","label":"Medium"},{"id":"high","label":"High"}],"defaultEffort":"medium","contextWindows":[],"fast":true},
  {"id":"claude-opus-4-8","name":"Claude Opus 4.8 1M","efforts":[{"id":"low","label":"Low"},{"id":"medium","label":"Medium"},{"id":"high","label":"High"},{"id":"xhigh","label":"Extra High"},{"id":"max","label":"Max"}],"defaultEffort":"medium","contextWindows":[],"fast":true},
  {"id":"claude-opus-4-8-thinking","name":"Claude Opus 4.8 1M Thinking","efforts":[{"id":"low","label":"Low"},{"id":"medium","label":"Medium"},{"id":"high","label":"High"},{"id":"xhigh","label":"Extra High"},{"id":"max","label":"Max"}],"defaultEffort":"medium","contextWindows":[],"fast":true},
+ {"id":"gemini-4-carbon","name":"Gemini 4 Carbon","efforts":[{"id":"low","label":"Low"},{"id":"medium","label":"Medium"},{"id":"high","label":"High"}],"defaultEffort":"medium","contextWindows":[],"fast":false},
  {"id":"gemini-4-argon","name":"Gemini 4 Argon","efforts":[{"id":"low","label":"Low"},{"id":"medium","label":"Medium"},{"id":"high","label":"High"}],"defaultEffort":"medium","contextWindows":[],"fast":false},
+ {"id":"muse-wonder-1.0","name":"Muse Wonder","efforts":[{"id":"minimal","label":"Minimal"},{"id":"low","label":"Low"},{"id":"medium","label":"Medium"},{"id":"high","label":"High"},{"id":"xhigh","label":"Extra High"},{"id":"max","label":"Max"}],"defaultEffort":"medium","contextWindows":[],"fast":false},
  {"id":"gpt-5.5","name":"GPT-5.5","efforts":[{"id":"none","label":"None"},{"id":"low","label":"Low"},{"id":"medium","label":"Medium"},{"id":"high","label":"High"},{"id":"xhigh","label":"Extra High"}],"defaultEffort":"medium","contextWindows":[],"fast":true},
+ {"id":"claude-fable-5-2","name":"Claude Fable 5.2 1M (NO ZDR)","efforts":[{"id":"low","label":"Low"},{"id":"medium","label":"Medium"},{"id":"high","label":"High"},{"id":"xhigh","label":"Extra High"},{"id":"max","label":"Max"}],"defaultEffort":"medium","contextWindows":[],"fast":true},
  {"id":"claude-fable-5-1","name":"Claude Fable 5.1 1M (NO ZDR)","efforts":[{"id":"low","label":"Low"},{"id":"medium","label":"Medium"},{"id":"high","label":"High"},{"id":"xhigh","label":"Extra High"},{"id":"max","label":"Max"}],"defaultEffort":"medium","contextWindows":[],"fast":false},
  {"id":"claude-fable-5-1-thinking","name":"Claude Fable 5.1 1M Thinking (NO ZDR)","efforts":[{"id":"low","label":"Low"},{"id":"medium","label":"Medium"},{"id":"high","label":"High"},{"id":"xhigh","label":"Extra High"},{"id":"max","label":"Max"}],"defaultEffort":"medium","contextWindows":[],"fast":false},
  {"id":"claude-fable-5","name":"Claude Fable 5 1M (NO ZDR)","efforts":[{"id":"low","label":"Low"},{"id":"medium","label":"Medium"},{"id":"high","label":"High"},{"id":"xhigh","label":"Extra High"},{"id":"max","label":"Max"}],"defaultEffort":"medium","contextWindows":[],"fast":false},
@@ -50,5 +53,6 @@
  {"id":"gpt-5-mini","name":"GPT-5 Mini","efforts":[],"contextWindows":[],"fast":false},
  {"id":"kimi-k3","name":"Kimi K3","efforts":[{"id":"low","label":"Low"},{"id":"high","label":"High"},{"id":"max","label":"Max"}],"defaultEffort":"high","contextWindows":[],"fast":false},
  {"id":"kimi-k2.7-code","name":"Kimi K2.7 Code","efforts":[],"contextWindows":[],"fast":false},
- {"id":"glm-5.2","name":"GLM 5.2","efforts":[{"id":"high","label":"High"},{"id":"max","label":"Max"}],"defaultEffort":"high","contextWindows":[],"fast":false}
+ {"id":"glm-5.2","name":"GLM 5.2","efforts":[{"id":"high","label":"High"},{"id":"max","label":"Max"}],"defaultEffort":"high","contextWindows":[],"fast":false},
+ {"id":"deepseek-v41-flash-1017","name":"DeepSeek V4.1 Flash 1017","efforts":[{"id":"none","label":"None"},{"id":"low","label":"Low"},{"id":"medium","label":"Medium"},{"id":"high","label":"High"},{"id":"max","label":"Max"}],"defaultEffort":"medium","contextWindows":[],"fast":false}
 ]

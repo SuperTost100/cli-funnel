@@ -2,8 +2,71 @@
   {
     "contextWindows": [],
     "fast": false,
+    "id": "gemini-4-argon",
+    "name": "Gemini 4 Argon",
+    "efforts": [
+      {
+        "id": "low",
+        "label": "Low"
+      },
+      {
+        "id": "medium",
+        "label": "Medium"
+      },
+      {
+        "id": "high",
+        "label": "High"
+      }
+    ],
+    "defaultEffort": "high"
+  },
+  {
+    "contextWindows": [],
+    "fast": false,
     "id": "gemini-3.8-flash",
     "name": "Gemini 3.8 Flash",
+    "efforts": [
+      {
+        "id": "low",
+        "label": "Low"
+      },
+      {
+        "id": "medium",
+        "label": "Medium"
+      },
+      {
+        "id": "high",
+        "label": "High"
+      }
+    ],
+    "defaultEffort": "high"
+  },
+  {
+    "contextWindows": [],
+    "fast": false,
+    "id": "claude-opus-5-5",
+    "name": "Claude Opus 5.5",
+    "efforts": [
+      {
+        "id": "low",
+        "label": "Low"
+      },
+      {
+        "id": "medium",
+        "label": "Medium"
+      },
+      {
+        "id": "high",
+        "label": "High"
+      }
+    ],
+    "defaultEffort": "high"
+  },
+  {
+    "contextWindows": [],
+    "fast": false,
+    "id": "claude-sonnet-5-5",
+    "name": "Claude Sonnet 5.5",
     "efforts": [
       {
         "id": "low",
