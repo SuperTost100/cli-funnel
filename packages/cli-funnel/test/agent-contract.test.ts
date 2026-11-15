@@ -156,6 +156,84 @@ describe("funnel checks", () => {
     await expect(runPartial("instructions")).rejects.toMatchObject({ code: "unsupported", message: expect.stringContaining('It takes "load", "ignore".') });
   });
 
+  describe("folderConfig and the installed CLI version", () => {
+    const counted = (version: string | undefined, min: string | null = "2.1.314") => {
+      const started = { count: 0 };
+      const provider: Provider = {
+        ...base,
+        capabilities: { ...base.capabilities, folderConfig: ["instructions", "ignore"], folderConfigMinVersion: min ?? undefined },
+        detect: async () => ({ installed: true, testedRange: { min: "1.0.0" }, version }),
+        async *run(): AsyncGenerator<FunnelEvent> {
+          started.count++;
+          yield { type: "done", text: "", finishReason: "stop" };
+        },
+      };
+      const f = createFunnel({ providers: { claude: provider } });
+      const go = (folderConfig: RunInput["folderConfig"]) => f.run({ selection: { provider: "claude", model: "m", cwd: root, access: "full" }, prompt: "go", folderConfig });
+      return { started, go };
+    };
+
+    it("refuses a version below the minimum before the CLI starts, and names both versions", async () => {
+      const { started, go } = counted("2.1.313");
+      for (const value of ["ignore", "instructions"] as const) {
+        await expect(go(value)).rejects.toMatchObject({ code: "unsupported", message: `Fake 2.1.313 is too old for folderConfig "${value}". It needs 2.1.314 or newer.` });
+      }
+      expect(started.count).toBe(0);
+    });
+
+    it("compares numbers, so 2.1.99 is below 2.1.314 and 2.2.0 and 10.0.0 are above", async () => {
+      await expect(counted("2.1.99").go("ignore")).rejects.toMatchObject({ code: "unsupported" });
+      await expect(counted("2.2.0").go("ignore")).resolves.toBeDefined();
+      await expect(counted("10.0.0").go("ignore")).resolves.toBeDefined();
+    });
+
+    it("runs at the minimum and above it", async () => {
+      for (const version of ["2.1.314", "2.1.323"]) {
+        const { started, go } = counted(version);
+        await expect(go("ignore")).resolves.toBeDefined();
+        await expect(go("instructions")).resolves.toBeDefined();
+        expect(started.count).toBe(2);
+      }
+    });
+
+    it("refuses when the version could not be read", async () => {
+      const { started, go } = counted(undefined);
+      await expect(go("ignore")).rejects.toMatchObject({ code: "unsupported", message: expect.stringContaining("Fake has no readable version") });
+      await expect(go("instructions")).rejects.toMatchObject({ code: "unsupported" });
+      expect(started.count).toBe(0);
+    });
+
+    it("leaves load, an unset option and a provider without a minimum alone, whatever the version", async () => {
+      const old = counted("1.0.0");
+      await expect(old.go("load")).resolves.toBeDefined();
+      await expect(old.go(undefined)).resolves.toBeDefined();
+      await expect(counted(undefined).go("load")).resolves.toBeDefined();
+      await expect(counted("1.0.0", null).go("ignore")).resolves.toBeDefined();
+    });
+  });
+
+  it("holds the real providers to their minimums: Claude Code 2.1.314, Codex 0.150.0", async () => {
+    const at = (id: "claude" | "codex", version: string | undefined) => {
+      const provider: Provider = {
+        ...PROVIDERS[id],
+        detect: async () => ({ installed: true, testedRange: { min: "0" }, version }),
+        async *run(): AsyncGenerator<FunnelEvent> {
+          yield { type: "done", text: "", finishReason: "stop" };
+        },
+      };
+      const f = createFunnel({ providers: { [id]: provider }, allowUnlistedModels: true });
+      return f.run({ selection: { provider: id, model: "m", cwd: root, access: "full" }, prompt: "go", folderConfig: "ignore" });
+    };
+    expect(PROVIDERS.claude.capabilities.folderConfigMinVersion).toBe("2.1.314");
+    expect(PROVIDERS.codex.capabilities.folderConfigMinVersion).toBe("0.150.0");
+    await expect(at("claude", "2.1.313")).rejects.toMatchObject({ code: "unsupported", message: expect.stringContaining("2.1.313") });
+    await expect(at("claude", "2.1.314")).resolves.toBeDefined();
+    await expect(at("claude", undefined)).rejects.toMatchObject({ code: "unsupported" });
+    await expect(at("codex", "0.149.1")).rejects.toMatchObject({ code: "unsupported", message: expect.stringContaining("0.149.1") });
+    await expect(at("codex", "0.150.0")).resolves.toBeDefined();
+    await expect(at("codex", undefined)).rejects.toMatchObject({ code: "unsupported" });
+  });
+
   it("accepts any folderConfig value on a provider without machine access, which reads no folder", async () => {
     const text: Provider = { ...base, capabilities: { ...base.capabilities, access: [] } };
     const f = createFunnel({ providers: { claude: text } });

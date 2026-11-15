@@ -1,4 +1,5 @@
-import { ACCESS_LEVELS, FOLDER_CONFIGS, FunnelError, PROVIDER_OPTION_IDS, type AccessLevel, type ModelInfo, type Provider, type Selection } from "./types.js";
+import { ACCESS_LEVELS, FOLDER_CONFIGS, FunnelError, PROVIDER_OPTION_IDS, type AccessLevel, type Installation, type ModelInfo, type Provider, type Selection } from "./types.js";
+import { compareVersions } from "./util/process.js";
 import { existsSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 
@@ -60,16 +61,30 @@ export function validateProviderOptions(options: unknown): void {
 
 /**
  * Checks `RunInput.folderConfig` against what the provider can honour. A provider without machine access reads no
- * folder, so every value is a no-op there. `load` needs nothing.
+ * folder, so every value is a no-op there. `load` needs nothing. A value the provider honours still needs a CLI at or
+ * above `capabilities.folderConfigMinVersion`, and a CLI whose version could not be read is refused too, since the
+ * option promises that the folder's config stays out.
  */
-export function checkFolderConfig(value: unknown, provider: Provider): void {
+export function checkFolderConfig(value: unknown, provider: Provider, install: Installation): void {
   if (value === undefined) return;
   if (!FOLDER_CONFIGS.includes(value as never)) {
     throw new FunnelError(`folderConfig must be one of ${FOLDER_CONFIGS.join(", ")}.`, "invalid-selection");
   }
   if (value === "load" || provider.capabilities.access.length === 0) return;
   const honoured = provider.capabilities.folderConfig ?? [];
-  if (honoured.includes(value as never)) return;
+  if (honoured.includes(value as never)) return underMinVersion(String(value), provider, install);
   const offers = honoured.length ? `It takes ${["load", ...honoured].map((v) => `"${v}"`).join(", ")}.` : `It loads whatever the folder carries.`;
   throw new FunnelError(`${provider.displayName} cannot run with folderConfig "${String(value)}". ${offers}`, "unsupported");
+}
+
+function underMinVersion(value: string, provider: Provider, install: Installation): void {
+  const min = provider.capabilities.folderConfigMinVersion;
+  if (!min) return;
+  const name = `${provider.displayName}${install.version ? ` ${install.version}` : ""}`;
+  if (!install.version) {
+    throw new FunnelError(`${name} has no readable version, so cli-funnel cannot tell whether it keeps folderConfig "${value}" as promised. It needs ${min} or newer.`, "unsupported");
+  }
+  if (compareVersions(install.version, min) < 0) {
+    throw new FunnelError(`${name} is too old for folderConfig "${value}". It needs ${min} or newer.`, "unsupported");
+  }
 }

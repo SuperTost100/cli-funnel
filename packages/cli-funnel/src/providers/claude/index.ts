@@ -30,6 +30,16 @@ import { editPath, newClaudeTrack, parseClaudeMessage, parseUsage, PERMISSION_MO
 const BIN = "claude";
 const TESTED_RANGE = { min: "2.1.0" };
 
+/**
+ * The oldest Claude Code that keeps `folderConfig` as promised. Both values rest on `--setting-sources user`, and
+ * releases up to 2.1.313 still let an excluded settings file supply auto mode rules and saved permission consents
+ * (2.1.314), nested `.claude/rules` files load (2.1.211) and spawned sessions such as teammates start without the
+ * restriction (2.1.281). Older releases also leave out pieces `instructions` needs: `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD`
+ * arrived in 2.1.20, and 2.1.281 stopped sending an `--add-dir` folder inside `cwd` to the model twice. The behaviour
+ * was checked on 2.1.323. See docs/providers/claude.md#folder-config.
+ */
+const FOLDER_CONFIG_MIN = "2.1.314";
+
 const capabilities: Capabilities = {
   access: ["none", "supervised", "accept-edits", "auto", "full"],
   effort: true,
@@ -48,6 +58,7 @@ const capabilities: Capabilities = {
   questions: true,
   sandbox: true,
   folderConfig: ["instructions", "ignore"],
+  folderConfigMinVersion: FOLDER_CONFIG_MIN,
 };
 
 const MCP_KINDS: McpServer["type"][] = ["http", "stdio"];

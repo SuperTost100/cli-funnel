@@ -253,13 +253,15 @@ await funnel.run({
 
 | Provider | `ignore` | `instructions` |
 | --- | --- | --- |
-| Claude Code | `--setting-sources user` | `--setting-sources user`, plus `--add-dir=<cwd>` with `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1`. Only `cwd`'s own `CLAUDE.md`, `.claude/CLAUDE.md` and `.claude/rules/` load |
+| Claude Code | `--setting-sources user` | `--setting-sources user`, plus `--add-dir=<cwd>` with `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1`. The `CLAUDE.md`, `.claude/CLAUDE.md` and `.claude/rules/` files of `cwd` load, and so do those of each folder in the caller's `addDirs`, which go to `--add-dir` too. Settings, hooks, permission rules, skills, agents and commands from those folders stay out |
 | Codex | every folder from `cwd` up is marked untrusted for the thread, `project_doc_max_bytes = 0`, and the folder's skills are switched off | refused: an untrusted folder's `AGENTS.md` does not load, and a trusted one brings its hooks and rules |
 | Cursor Agent | refused: no flag or setting turns folder config off | refused |
 | Antigravity | refused: no flag or setting turns folder config off | refused |
 | API providers, Ollama, OpenAI-compatible servers | no effect, they read no folder | no effect |
 
-`capabilities.folderConfig` lists the values a provider takes besides `load`. A run with any other value fails with `unsupported` before the CLI starts, and the message names the values the provider takes. A value outside the three fails with `invalid-selection`. Over HTTP, send `"folderConfig": "ignore"` in the `/run` body.
+`capabilities.folderConfig` lists the values a provider takes besides `load`. A run with any other value fails with `unsupported` before the CLI starts, and the message names the values the provider takes. A value outside the three fails with `invalid-selection`.
+
+The values also need a CLI version that keeps the folder's config out, which `capabilities.folderConfigMinVersion` holds: Claude Code 2.1.314 and Codex 0.150.0. A run with `ignore` or `instructions` on an older version, or on one whose version cannot be read, fails with `unsupported` before the CLI starts, and the message names the installed version and the minimum. `load` runs on any version. The provider pages say why each minimum was chosen: [Claude Code](providers/claude.md#folder-config) and [Codex](providers/codex.md#folder-config). Over HTTP, send `"folderConfig": "ignore"` in the `/run` body.
 
 The user's own settings still apply with every value: Claude Code's `~/.claude/settings.json` (its hooks and allow rules included), `~/.claude/CLAUDE.md`, skills and MCP servers, and Codex's `~/.codex/config.toml` and `~/.codex/AGENTS.md`. Managed settings apply too. At `none` Claude Code, Cursor Agent and Antigravity already load nothing from the folder, so the value changes nothing for them there. Codex at `none` takes `ignore` like the other levels.
 

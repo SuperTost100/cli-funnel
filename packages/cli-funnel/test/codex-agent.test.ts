@@ -774,7 +774,7 @@ describe("codex agent features through the app-server", () => {
       const config = started();
       expect(config.project_doc_max_bytes).toBe(0);
       expect(config.projects[cwd]).toEqual({ trust_level: "untrusted" });
-      expect(config.projects["/"]).toEqual({ trust_level: "untrusted" });
+      expect(config.projects[parse(cwd).root]).toEqual({ trust_level: "untrusted" });
       expect(Object.values(config.projects).every((v) => (v as { trust_level: string }).trust_level === "untrusted")).toBe(true);
       // No folder skill, so no skill rules and no config read.
       expect(config.skills).toBeUndefined();

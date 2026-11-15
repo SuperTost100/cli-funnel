@@ -202,7 +202,7 @@ export function createFunnel(options: FunnelOptions = {}) {
     if (input.sandbox && p.capabilities.access.length > 0 && !p.capabilities.sandbox) {
       throw new FunnelError(`${p.displayName} cannot run the agent's commands in a sandbox.`, "unsupported");
     }
-    checkFolderConfig(input.folderConfig, p);
+    checkFolderConfig(input.folderConfig, p, install);
     if (input.apiKey !== undefined) {
       if (!p.capabilities.apiKey) throw new FunnelError(`${p.displayName} cannot run on an API key passed with the run.`, "unsupported");
       if (typeof input.apiKey !== "string" || !input.apiKey.trim()) throw new FunnelError("apiKey must be a non-empty string.", "invalid-selection");

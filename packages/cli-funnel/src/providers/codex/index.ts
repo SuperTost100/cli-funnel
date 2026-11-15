@@ -12,6 +12,14 @@ import { forkThread, listThreads, rateLimits, readAccount, sendFeedback } from "
 export const BINARY = "codex";
 const TESTED_RANGE = { min: "0.150.0" };
 
+/**
+ * The oldest Codex that keeps `folderConfig: "ignore"` as promised. The `untrusted` entries in the thread config drop
+ * the folder's `.codex/config.toml` layer and `skills/list` returns the folder's skills with their scope and path on
+ * 0.150.0, 0.158.0 and 0.166.0 (tried against each). 0.150.0 is also the release in which an untrusted project stops
+ * supplying its `AGENTS.md`. Earlier releases were not tried.
+ */
+const FOLDER_CONFIG_MIN = "0.150.0";
+
 async function authStatus(): Promise<AuthStatus> {
   const path = findBinary(BINARY);
   if (!path) return { loggedIn: false, detail: "codex is not installed." };
@@ -85,6 +93,7 @@ export const codexProvider: Provider = {
     questions: true,
     sandbox: true,
     folderConfig: ["ignore"],
+    folderConfigMinVersion: FOLDER_CONFIG_MIN,
   },
   detect: () => detectInstallation(BINARY, TESTED_RANGE),
   authStatus,

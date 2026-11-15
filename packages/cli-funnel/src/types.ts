@@ -94,6 +94,13 @@ export interface Capabilities {
    * working folder carries, and a run that asks for less fails with `unsupported`.
    */
   folderConfig?: Exclude<FolderConfig, "load">[];
+  /**
+   * The oldest CLI version that keeps `folderConfig` values from `capabilities.folderConfig` as promised. The flags and
+   * settings behind them were fixed or added over several releases, and an older CLI can load a folder's rules,
+   * skills or saved permissions anyway. A run with one of those values on an older or unreadable version fails with
+   * `unsupported`.
+   */
+  folderConfigMinVersion?: string;
 }
 
 /** Progress of `pullModel`. The stream ends after `done` or `error`. */
