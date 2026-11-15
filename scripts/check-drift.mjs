@@ -43,7 +43,10 @@ function checkCodexSchema() {
     for (const key of ["classification", "reason", "threadId", "includeLogs"]) if (!schema("FeedbackUploadParams").properties?.[key]) report(key, "FeedbackUploadParams");
     if (!schema("FeedbackUploadResponse").properties?.threadId) report("threadId", "FeedbackUploadResponse");
     const methods = readFileSync(join(dir, "ClientRequest.json"), "utf8");
-    for (const m of ["thread/list", "thread/fork", "account/rateLimits/read", "feedback/upload", "turn/interrupt", "turn/steer", "account/login/start", "account/read", "config/read"]) if (!methods.includes(`"${m}"`)) report(m, "ClientRequest");
+    for (const m of ["thread/list", "thread/fork", "account/rateLimits/read", "feedback/upload", "turn/interrupt", "turn/steer", "account/login/start", "account/read", "config/read", "skills/list"]) if (!methods.includes(`"${m}"`)) report(m, "ClientRequest");
+    // folderConfig "ignore" lists the folder's skills by scope and switches them off by path.
+    for (const key of ["path", "scope"]) if (!schema("SkillsListResponse").definitions?.SkillMetadata?.properties?.[key]) report(key, "SkillMetadata");
+    if (!schema("SkillsListResponse").definitions?.SkillScope?.enum?.includes("repo")) report("skill scope repo", "SkillScope");
     const bundle = JSON.parse(readFileSync(join(dir, "codex_app_server_protocol.v2.schemas.json"), "utf8"));
     if (!bundle.definitions?.Config?.properties?.web_search) report("web_search", "Config");
     const modes = bundle.definitions?.WebSearchMode?.enum ?? [];

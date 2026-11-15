@@ -1,4 +1,4 @@
-import { ACCESS_LEVELS, FunnelError, PROVIDER_OPTION_IDS, type AccessLevel, type ModelInfo, type Provider, type Selection } from "./types.js";
+import { ACCESS_LEVELS, FOLDER_CONFIGS, FunnelError, PROVIDER_OPTION_IDS, type AccessLevel, type ModelInfo, type Provider, type Selection } from "./types.js";
 import { existsSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 
@@ -56,4 +56,20 @@ export function validateProviderOptions(options: unknown): void {
   if (unknown.length) {
     throw new FunnelError(`${unknown.join(", ")} takes no providerOptions. Only ${PROVIDER_OPTION_IDS.join(", ")} do.`, "invalid-selection");
   }
+}
+
+/**
+ * Checks `RunInput.folderConfig` against what the provider can honour. A provider without machine access reads no
+ * folder, so every value is a no-op there. `load` needs nothing.
+ */
+export function checkFolderConfig(value: unknown, provider: Provider): void {
+  if (value === undefined) return;
+  if (!FOLDER_CONFIGS.includes(value as never)) {
+    throw new FunnelError(`folderConfig must be one of ${FOLDER_CONFIGS.join(", ")}.`, "invalid-selection");
+  }
+  if (value === "load" || provider.capabilities.access.length === 0) return;
+  const honoured = provider.capabilities.folderConfig ?? [];
+  if (honoured.includes(value as never)) return;
+  const offers = honoured.length ? `It takes ${["load", ...honoured].map((v) => `"${v}"`).join(", ")}.` : `It loads whatever the folder carries.`;
+  throw new FunnelError(`${provider.displayName} cannot run with folderConfig "${String(value)}". ${offers}`, "unsupported");
 }

@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { fakeNodeCli } from "./fake-cli.js";
 import { homedir, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, parse, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { denyNote, effectiveReply, isQuestion, toApprovalRequest, toQuestionReply, toQuestionRequest, toReply } from "../src/providers/codex/approvals.js";
 import { startedAccess } from "../src/providers/codex/access.js";
@@ -9,6 +9,7 @@ import { accountStatus, authKind } from "../src/providers/codex/auth.js";
 import { fileChangeEvents, isOwnFeatureWarning, planEvent, Translator, warningText } from "../src/providers/codex/events.js";
 import { codexProvider } from "../src/providers/codex/index.js";
 import { appServerArgs } from "../src/providers/codex/live.js";
+import { folderChain, repoSkillPaths, userSkillRules } from "../src/providers/codex/folder.js";
 import { readAccount } from "../src/providers/codex/threads.js";
 import { agentConfig, mcpConfig } from "../src/providers/codex/options.js";
 import { collect } from "./helpers.js";
@@ -46,6 +47,30 @@ const APPROVAL_WARNING =
 
 const input = (access: AccessLevel, extra: Partial<RunInput> = {}): RunInput => ({ selection: { provider: "codex", model: "m", cwd: "/tmp", access }, prompt: "x", ...extra });
 const http = (extra: Partial<McpServer> = {}): McpServer => ({ type: "http", url: "http://127.0.0.1:7777/mcp", ...extra }) as McpServer;
+
+describe("codex folderConfig helpers", () => {
+  it("lists cwd and every folder above it, through a symlink and its target", () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "cf-codex-chain-")));
+    mkdirSync(join(base, "real", "proj"), { recursive: true });
+    symlinkSync(join(base, "real"), join(base, "link"));
+    const chain = folderChain(join(base, "link", "proj"));
+    expect(chain).toContain(join(base, "link", "proj"));
+    expect(chain).toContain(join(base, "link"));
+    expect(chain).toContain(join(base, "real", "proj"));
+    expect(chain).toContain(join(base, "real"));
+    expect(chain).toContain(base);
+    expect(chain).toContain(parse(base).root);
+    expect(new Set(chain).size).toBe(chain.length);
+  });
+
+  it("keeps only the folder's own skills from skills/list and refuses an answer without data", () => {
+    const res = { data: [{ skills: [{ scope: "repo", path: "/w/a/SKILL.md" }, { scope: "user", path: "/h/b/SKILL.md" }, { scope: "repo" }] }] };
+    expect(repoSkillPaths(res)).toEqual(["/w/a/SKILL.md"]);
+    expect(() => repoSkillPaths({})).toThrow(/no data/);
+    expect(userSkillRules({ config: { skills: { config: [{ name: "x", enabled: false }] } } })).toEqual([{ name: "x", enabled: false }]);
+    expect(userSkillRules({ config: {} })).toEqual([]);
+  });
+});
 
 describe("codex started access", () => {
   const asked = { sandbox: "workspace-write", approvalPolicy: "untrusted" } as const;
@@ -403,7 +428,11 @@ process.stdin.on("data", (d) => {
         break;
       case "config/read":
         if (process.env.FAKE_MCP === "error") send({ id: m.id, error: { code: -32601, message: "unknown method" } });
-        else send({ id: m.id, result: { config: { model: null, mcp_servers: JSON.parse(process.env.FAKE_MCP || "{}"), sandbox_workspace_write: JSON.parse(process.env.FAKE_SANDBOX_CONFIG || "null") }, origins: {} } });
+        else send({ id: m.id, result: { config: { model: null, mcp_servers: JSON.parse(process.env.FAKE_MCP || "{}"), sandbox_workspace_write: JSON.parse(process.env.FAKE_SANDBOX_CONFIG || "null"), skills: { config: JSON.parse(process.env.FAKE_SKILL_RULES || "null") } }, origins: {} } });
+        break;
+      case "skills/list":
+        if (process.env.FAKE_SKILLS === "error") send({ id: m.id, error: { code: -32601, message: "unknown method" } });
+        else send({ id: m.id, result: { data: [{ cwd: p.cwds[0], errors: [], skills: JSON.parse(process.env.FAKE_SKILLS || "[]") }] } });
         break;
       case "thread/start":
         for (const summary of JSON.parse(process.env.FAKE_WARNINGS || "[]")) send({ method: "configWarning", params: { summary, details: null } });
@@ -488,6 +517,8 @@ describe("codex agent features through the app-server", () => {
     delete process.env.FAKE_SANDBOX_CONFIG;
     delete process.env.FAKE_ACCOUNT;
     delete process.env.FAKE_LOGIN_STATUS;
+    delete process.env.FAKE_SKILLS;
+    delete process.env.FAKE_SKILL_RULES;
   });
 
   it("reports a thread that started in a narrower sandbox, on the result and after session", async () => {
@@ -731,6 +762,56 @@ describe("codex agent features through the app-server", () => {
     );
     expect(failed?.message).toMatch(/MCP servers/);
     expect(entries().some((e) => e.method === "thread/start")).toBe(false);
+  });
+
+  describe("folderConfig ignore", () => {
+    const repoSkill = { name: "deploy", description: "d", enabled: true, scope: "repo", path: "/w/.agents/skills/deploy/SKILL.md" };
+    const userSkill = { name: "mine", description: "d", enabled: true, scope: "user", path: "/home/u/.agents/skills/mine/SKILL.md" };
+    const started = () => entries().find((e) => e.method === "thread/start").params.config;
+
+    it("marks cwd and every folder above it untrusted and leaves AGENTS.md out", async () => {
+      await run("plain", { folderConfig: "ignore" });
+      const config = started();
+      expect(config.project_doc_max_bytes).toBe(0);
+      expect(config.projects[cwd]).toEqual({ trust_level: "untrusted" });
+      expect(config.projects["/"]).toEqual({ trust_level: "untrusted" });
+      expect(Object.values(config.projects).every((v) => (v as { trust_level: string }).trust_level === "untrusted")).toBe(true);
+      // No folder skill, so no skill rules and no config read.
+      expect(config.skills).toBeUndefined();
+      expect(entries().some((e) => e.method === "config/read")).toBe(false);
+    });
+
+    it("switches off the folder's skills by path after the user's own skill rules", async () => {
+      process.env.FAKE_SKILLS = JSON.stringify([repoSkill, userSkill]);
+      process.env.FAKE_SKILL_RULES = JSON.stringify([{ name: "noisy", enabled: false }]);
+      await run("plain", { folderConfig: "ignore" });
+      expect(entries().find((e) => e.method === "skills/list").params).toEqual({ cwds: [cwd] });
+      // Read without cwd, so the folder's own project layers are not in it.
+      expect(entries().find((e) => e.method === "config/read").params).toEqual({});
+      expect(started().skills).toEqual({ config: [{ name: "noisy", enabled: false }, { path: repoSkill.path, enabled: false }] });
+    });
+
+    it("reads the MCP server names without the project layers, also at none", async () => {
+      process.env.FAKE_MCP = JSON.stringify({ mine: { command: "x" } });
+      await run("plain", { selection: { provider: "codex", model: "m", cwd, access: "none" }, folderConfig: "ignore" });
+      expect(entries().find((e) => e.method === "config/read").params).toEqual({});
+      const config = started();
+      expect(config.mcp_servers).toEqual({ mine: { enabled: false } });
+      expect(config.projects[cwd]).toEqual({ trust_level: "untrusted" });
+    });
+
+    it("refuses to start the thread when Codex cannot list the folder's skills", async () => {
+      process.env.FAKE_SKILLS = "error";
+      await expect(run("plain", { folderConfig: "ignore" })).rejects.toThrow(/folder's skills/);
+      expect(entries().some((e) => e.method === "thread/start")).toBe(false);
+    });
+
+    it("sends nothing of this without the option", async () => {
+      process.env.FAKE_SKILLS = JSON.stringify([repoSkill]);
+      await run("plain", { folderConfig: "load" });
+      expect(entries().some((e) => e.method === "skills/list")).toBe(false);
+      expect(started()?.projects).toBeUndefined();
+    });
   });
 
   it("does not read the config above none when the caller adds no MCP servers", async () => {

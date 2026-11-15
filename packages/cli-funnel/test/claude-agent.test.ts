@@ -246,7 +246,7 @@ if (mcpArg) {
   const v = mcpArg.slice("--mcp-config=".length);
   mcp = v.startsWith("{") ? { inline: JSON.parse(v) } : { mode: fs.statSync(v).mode & 0o777, content: JSON.parse(fs.readFileSync(v, "utf8")) };
 }
-log({ kind: "start", args, apiKey: process.env.ANTHROPIC_API_KEY ?? null, todo: process.env.CLAUDE_CODE_ENABLE_TODO_TOOLS ?? null, mcp });
+log({ kind: "start", args, apiKey: process.env.ANTHROPIC_API_KEY ?? null, todo: process.env.CLAUDE_CODE_ENABLE_TODO_TOOLS ?? null, addDirMd: process.env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD ?? null, mcp });
 const lines = fs.readFileSync(process.env.FAKE_FIXTURE, "utf8").split("\\n").filter(Boolean);
 let i = 0;
 const pump = () => {
@@ -588,6 +588,20 @@ describe("claude control requests (fake CLI)", () => {
     expect(await todo({})).toBeNull();
     expect(await todo({ planTool: true })).toBe("1");
     expect(await todo({ planTool: true }, "none")).toBeNull();
+  });
+
+  it("loads the folder's instruction files through --add-dir only with folderConfig instructions", async () => {
+    const ok = [{ type: "system", subtype: "init", session_id: "s", model: "m" }, { type: "result", subtype: "success", is_error: false, result: "ok" }];
+    const started = async (folderConfig: RunInput["folderConfig"], access: RunInput["selection"]["access"] = "supervised") => {
+      replay(ok);
+      await collect(claudeProvider.run({ selection: sel({ cwd: dir, access }), prompt: "x", onApproval: () => "deny", folderConfig }), input(access!));
+      const { args, addDirMd } = logged().at(-1);
+      return { addDirMd, addDir: (args as string[]).filter((a) => a.startsWith("--add-dir")) };
+    };
+    expect(await started("instructions")).toEqual({ addDirMd: "1", addDir: [`--add-dir=${dir}`] });
+    expect(await started("ignore")).toEqual({ addDirMd: null, addDir: [] });
+    expect(await started(undefined)).toEqual({ addDirMd: null, addDir: [] });
+    expect(await started("instructions", "none")).toEqual({ addDirMd: null, addDir: [] });
   });
 });
 

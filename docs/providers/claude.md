@@ -71,6 +71,33 @@ The sandbox covers Bash only. Write and Edit follow the access level: at `full` 
 
 On Linux the sandbox needs `bubblewrap` and `socat`. Ubuntu 24.04 blocks bubblewrap from creating user namespaces, and the run then fails with "sandbox required but unavailable" until an AppArmor profile for `/usr/bin/bwrap` allows `userns`.
 
+### Folder config
+
+`folderConfig: "ignore"` passes `--setting-sources user`, so Claude Code reads the user's settings and leaves out the project and local ones. `"instructions"` passes the same, plus `--add-dir=<cwd>` with `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` in the CLI's environment, which loads the instruction files of `cwd` the way it loads those of an added folder. Neither passes `--strict-mcp-config`: that flag also drops the user's own MCP servers and the claude.ai connectors. At `none` nothing changes, since `--setting-sources ""` already skips every source, the user's included.
+
+Checked on 2.1.323 with `claude-haiku-4-5-20251001` in a folder `proj` inside a git repository `repo`, inside a folder `above`. Each file below held a hook that touched a marker file, an MCP server that wrote a marker when it started, or a codeword the model was asked to repeat. The CLI ran in `proj`.
+
+| What the folder carries | `load` | `ignore` | `instructions` |
+| --- | --- | --- | --- |
+| `proj/.claude/settings.json`: `SessionStart`, `UserPromptSubmit` and `PreToolUse` hooks, `env` | loads | left out | left out |
+| `proj/.claude/settings.local.json`: `permissions.allow: ["Bash(*)"]`, hooks, `env` | loads: Bash ran without asking `onApproval` | left out: Bash went to `onApproval` | left out |
+| `repo/.claude/settings.local.json`: allow rule and hooks | loads | left out | left out |
+| `repo/.claude/settings.json`: hooks | did not load from `proj` | left out | left out |
+| `.mcp.json` in `proj`, `repo` and `above` | all three servers start | none starts | none starts |
+| `CLAUDE.md` in `proj`, `repo` and `above`, and `proj/.claude/rules/*.md` | all load | none loads | only `proj/CLAUDE.md` and its rules load |
+| `AGENTS.md` in `proj` and `repo`, checked in a second folder without any `CLAUDE.md`, where Claude Code reads it | both load | left out | left out |
+| `proj/.claude/skills`, `agents` and `commands` | listed in `init` | not listed | not listed |
+
+What still loads with either value:
+
+- The user's settings in the config folder (`~/.claude`, or `CLAUDE_CONFIG_DIR`): `settings.json` with its hooks, allow rules and `env`, `CLAUDE.md`, skills, agents and commands, and the MCP servers in `~/.claude.json`. Checked: the user's `CLAUDE.md`, skills, agents, MCP servers and claude.ai connectors still loaded.
+- Managed settings and the `--settings` that `sandbox` passes.
+- The caller's `mcpServers`, `system` and `providerOptions.claude`. Checked: a caller's HTTP server answered with `ignore` and with `instructions` on.
+- Auto memory, which lives in the config folder under the project's path. Not tested.
+- MCP servers the user added with `claude mcp add --scope local`, which `~/.claude.json` keeps under the project's path. Not tested.
+
+`instructions` keeps less than the folder's full set of instruction files: `CLAUDE.md` files in the folders above `cwd`, `CLAUDE.local.md` and `AGENTS.md` stay out, because Claude Code reads only `CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md` and `.claude/rules/*.md` from an added folder, and `CLAUDE.local.md` only when the `local` source is on. The variable also loads the instruction files of each `providerOptions.claude.addDirs` folder. Claude Code's memory docs add that rules with a `paths` field do not load from an added folder. That was not tested.
+
 ## Run options
 
 `system` goes to `--system-prompt` at `none`, which replaces Claude Code's own prompt, and to `--append-system-prompt` at the other levels. Over 4 KB the text goes to a private temp file instead (`--system-prompt-file` or `--append-system-prompt-file`), which is removed after the run, because Linux refuses one argument over 128 KiB and Windows limits the whole command line to 32,767 characters. `--json-schema` takes only inline JSON, so a very large schema can still hit that limit. Images go as `image` blocks in the stream-json user message. `responseSchema` goes to `--json-schema`, and the `result` message carries the parsed answer in `structured_output`. All three were verified live on 2.1.285. A `none` run with an image and a schema used about 1,200 input tokens.

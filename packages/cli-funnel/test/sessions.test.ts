@@ -742,6 +742,7 @@ describe("fingerprint", () => {
     const base = claude("a");
     expect(fingerprint(claude("b"))).toBe(fingerprint(base));
     expect(fingerprint(claude("b", { sessionId: "x" }))).toBe(fingerprint(base));
+    expect(fingerprint(claude("a", { folderConfig: "load" }))).toBe(fingerprint(base));
     expect(fingerprint(claude("a", { env: { B: "1", A: "2" } }))).toBe(fingerprint(claude("a", { env: { A: "2", B: "1" } })));
     for (const other of [
       claude("a", { system: "s" }),
@@ -752,6 +753,8 @@ describe("fingerprint", () => {
       { ...base, selection: { ...base.selection, access: "full" as const } },
       { ...base, selection: { ...base.selection, cwd: "/" } },
       claude("a", { providerOptions: { claude: { addDirs: ["/srv"] } } }),
+      claude("a", { folderConfig: "ignore" }),
+      claude("a", { folderConfig: "instructions" }),
     ]) {
       expect(fingerprint(other)).not.toBe(fingerprint(base));
     }

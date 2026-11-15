@@ -60,6 +60,20 @@ MCP servers from the user's config still start, but every call to them is denied
 
 Denied tools appear as `tool.end` events whose error starts with `denied:`. That includes calls refused by a hook, which `agy` does not list in `denied_actions`. If the run produced no text and something was denied, the finish reason is `denied`.
 
+## Folder config
+
+`folderConfig` is refused with `unsupported` for `ignore` and `instructions`, and `capabilities.folderConfig` is empty. agy has no flag or setting that turns the folder's config off. Its built-in documentation says it walks from the working folder up to the repository root and loads the `.agents/` folder it finds there (rules, skills, workflows, plugins), plus `GEMINI.md` and `AGENTS.md`.
+
+Checked on 1.5.9 with `gemini-3.8-flash` at effort `low`, in the root of a git repository:
+
+| What the folder carries | What happened |
+| --- | --- |
+| `.agents/hooks.json`: a `PreToolUse` hook that answers `allow` | the hook ran on the shell call. Its `allow` did not get the call past the denial of print mode |
+| `.agents/plugins/<name>/mcp_config.json`: a stdio server | started, with no approval |
+| `AGENTS.md`, `GEMINI.md` and an `always_on` rule in `.agents/rules/` | all loaded |
+
+Running agy in an empty folder with the project added through `--add-dir` would not help: agy loads `.agents/plugins` from added folders too, which is how cli-funnel attaches MCP servers (see [MCP servers](#mcp-servers)).
+
 ## Run options
 
 The CLI has no system prompt flag, so `system` goes in front of the prompt inside `<instructions>`. `responseSchema` goes to `--json-schema`, as a path to a private temp file when the schema is over 4 KB (removed after the run), and the `result` event carries the parsed answer in `structured_output`. Verified live. Images are refused.

@@ -84,6 +84,7 @@ export const codexProvider: Provider = {
     fileChanges: true,
     questions: true,
     sandbox: true,
+    folderConfig: ["ignore"],
   },
   detect: () => detectInstallation(BINARY, TESTED_RANGE),
   authStatus,

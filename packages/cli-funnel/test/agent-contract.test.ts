@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { createClient } from "../src/client/index.js";
 import { createFunnel } from "../src/funnel.js";
 import { approvalReply, askQuestion, createRunFolder } from "../src/providers/base.js";
+import { PROVIDERS } from "../src/providers/index.js";
 import { mcpServersFor } from "../src/providers/options.js";
 import { toReply } from "../src/providers/codex/approvals.js";
 import { createHandler } from "../src/server/handler.js";
@@ -144,6 +145,31 @@ describe("funnel checks", () => {
     await expect(f.run({ selection: { provider: "claude", model: "m" }, prompt: "go", sandbox: true })).resolves.toBeDefined();
   });
 
+  it("checks folderConfig: a value outside the list, and one the CLI cannot honour, fail before the CLI starts", async () => {
+    await expect(run({ folderConfig: "skip" as never })).rejects.toMatchObject({ code: "invalid-selection" });
+    await expect(run({ folderConfig: "ignore" })).rejects.toMatchObject({ code: "unsupported", message: expect.stringContaining("loads whatever the folder carries") });
+    await expect(run({ folderConfig: "load" })).resolves.toBeDefined();
+    const partial = createFunnel({ providers: { claude: { ...base, capabilities: { ...base.capabilities, folderConfig: ["ignore"] } } } });
+    const runPartial = (folderConfig: RunInput["folderConfig"]) =>
+      partial.run({ selection: { provider: "claude", model: "m", cwd: root, access: "full" }, prompt: "go", folderConfig });
+    await expect(runPartial("ignore")).resolves.toBeDefined();
+    await expect(runPartial("instructions")).rejects.toMatchObject({ code: "unsupported", message: expect.stringContaining('It takes "load", "ignore".') });
+  });
+
+  it("accepts any folderConfig value on a provider without machine access, which reads no folder", async () => {
+    const text: Provider = { ...base, capabilities: { ...base.capabilities, access: [] } };
+    const f = createFunnel({ providers: { claude: text } });
+    await expect(f.run({ selection: { provider: "claude", model: "m" }, prompt: "go", folderConfig: "instructions" })).resolves.toBeDefined();
+    await expect(f.run({ selection: { provider: "claude", model: "m" }, prompt: "go", folderConfig: "nope" as never })).rejects.toMatchObject({ code: "invalid-selection" });
+  });
+
+  it("reports the folderConfig values each CLI honours", () => {
+    expect(PROVIDERS.claude.capabilities.folderConfig).toEqual(["instructions", "ignore"]);
+    expect(PROVIDERS.codex.capabilities.folderConfig).toEqual(["ignore"]);
+    expect(PROVIDERS.agent.capabilities.folderConfig).toBeUndefined();
+    expect(PROVIDERS.antigravity.capabilities.folderConfig).toBeUndefined();
+  });
+
   it("passes them to a provider that takes them", async () => {
     let seen: RunInput | undefined;
     const able: Provider = {
@@ -158,6 +184,24 @@ describe("funnel checks", () => {
     await f.run({ selection: { provider: "claude", model: "m", cwd: root, access: "supervised" }, prompt: "go", onApproval: () => "deny", apiKey: "sk-test", mcpServers: { a: { type: "http", url: "http://x" } } });
     expect(seen?.apiKey).toBe("sk-test");
     expect(seen?.mcpServers).toEqual({ a: { type: "http", url: "http://x" } });
+  });
+});
+
+describe("folderConfig over HTTP", () => {
+  it("reaches the provider from the /run body", async () => {
+    let seen: RunInput | undefined;
+    const able: Provider = {
+      ...base,
+      capabilities: { ...base.capabilities, folderConfig: ["ignore"] },
+      async *run(i) {
+        seen = i;
+        yield { type: "done", text: "", finishReason: "stop" };
+      },
+    };
+    const handler = createHandler(createFunnel({ providers: { claude: able } }), { fsRoots: [root] });
+    const client = createClient({ baseUrl: "http://x", fetch: (url, init) => handler(new Request(url as string, init)) });
+    for await (const _ of client.run({ selection: { provider: "claude", model: "m", cwd: root, access: "full" }, prompt: "go", folderConfig: "ignore" })) void _;
+    expect(seen?.folderConfig).toBe("ignore");
   });
 });
 
