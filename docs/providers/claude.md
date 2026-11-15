@@ -1,6 +1,6 @@
 # Claude Code provider
 
-Runs the real `claude` binary in print mode and reads its stream-json output. Tested with Claude Code 2.1.283 (supported range starts at 2.1.0, and `folderConfig` needs 2.1.314). It never uses `--bare`, so your subscription login is used.
+Runs the real `claude` binary in print mode and reads its stream-json output. Tested with Claude Code 2.1.283 (supported range starts at 2.1.0, and `folderConfig` needs 2.1.325). It never uses `--bare`, so your subscription login is used.
 
 ## Flags
 
@@ -75,16 +75,17 @@ On Linux the sandbox needs `bubblewrap` and `socat`. Ubuntu 24.04 blocks bubblew
 
 `folderConfig: "ignore"` passes `--setting-sources user`, so Claude Code reads the user's settings and leaves out the project and local ones. `"instructions"` passes the same, plus `--add-dir=<cwd>` with `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` in the CLI's environment, which loads the instruction files of `cwd` the way it loads those of an added folder. Neither passes `--strict-mcp-config`: that flag also drops the user's own MCP servers and the claude.ai connectors. At `none` nothing changes, since `--setting-sources ""` already skips every source, the user's included.
 
-Both values need Claude Code 2.1.314 or newer (`capabilities.folderConfigMinVersion`). A run on an older version, or on one whose version cannot be read, fails with `unsupported` before the CLI starts. The message names the installed version and the minimum. The number comes from the [Claude Code changelog](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md), where each of these releases fixed a way for `--setting-sources` to let the folder's config through:
+Both values need Claude Code 2.1.325 or newer (`capabilities.folderConfigMinVersion`). A run on an older version, or on one whose version cannot be read, fails with `unsupported` before the CLI starts. The message names the installed version and the minimum. The number comes from the [Claude Code changelog](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md), where each of these releases fixed a way for `--setting-sources` to let the folder's config through:
 
 | Release | Fix |
 | --- | --- |
+| 2.1.325 | A committed `.claude/settings.local.json` could be treated as the user's own when Claude Code started in certain subfolders of a repository |
 | 2.1.314 | A settings file excluded with `--setting-sources` still supplied some settings, such as auto mode rules and saved permission consents |
 | 2.1.281 | `--setting-sources` was not passed on to spawned sessions (teammates, `/bg`, `claude agents`, `--worktree --tmux`) |
 | 2.1.211 | Nested `.claude/rules/*.md` files loaded although the setting sources excluded the project |
 | 2.1.69 | `--setting-sources user` did not block project skills found while the session ran |
 
-`instructions` also needs `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD`, which arrived in 2.1.20, and 2.1.281 stopped sending the `CLAUDE.md` of an `--add-dir` folder inside the working directory to the model twice. `--setting-sources` itself is older than the supported range. The changelog does not say whether a release after 2.1.314 changed any of this, and the table below was checked on 2.1.323 only, so 2.1.314 is the oldest release the changelog clears, not one that was run. Release 2.1.325 also fixes a committed `.claude/settings.local.json` being treated as the user's own when Claude Code starts in certain subfolders of a repository. A run from such a subfolder is safer on 2.1.325 or newer.
+`instructions` also needs `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD`, which arrived in 2.1.20, and 2.1.281 stopped sending the `CLAUDE.md` of an `--add-dir` folder inside the working directory to the model twice. `--setting-sources` itself is older than the supported range. The table below was checked on 2.1.323, two releases before the minimum, in a folder that is not one of the subfolders the 2.1.325 fix is about. So 2.1.325 is the oldest release the changelog clears, not one that was run.
 
 Checked on 2.1.323 with `claude-haiku-4-5-20251001` in a folder `proj` inside a git repository `repo`, inside a folder `above`. Each file below held a hook that touched a marker file, an MCP server that wrote a marker when it started, or a codeword the model was asked to repeat. The CLI ran in `proj`.
 

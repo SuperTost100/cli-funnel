@@ -212,7 +212,7 @@ describe("funnel checks", () => {
     });
   });
 
-  it("holds the real providers to their minimums: Claude Code 2.1.314, Codex 0.150.0", async () => {
+  it("holds the real providers to their minimums: Claude Code 2.1.325, Codex 0.150.0", async () => {
     const at = (id: "claude" | "codex", version: string | undefined) => {
       const provider: Provider = {
         ...PROVIDERS[id],
@@ -224,10 +224,10 @@ describe("funnel checks", () => {
       const f = createFunnel({ providers: { [id]: provider }, allowUnlistedModels: true });
       return f.run({ selection: { provider: id, model: "m", cwd: root, access: "full" }, prompt: "go", folderConfig: "ignore" });
     };
-    expect(PROVIDERS.claude.capabilities.folderConfigMinVersion).toBe("2.1.314");
+    expect(PROVIDERS.claude.capabilities.folderConfigMinVersion).toBe("2.1.325");
     expect(PROVIDERS.codex.capabilities.folderConfigMinVersion).toBe("0.150.0");
-    await expect(at("claude", "2.1.313")).rejects.toMatchObject({ code: "unsupported", message: expect.stringContaining("2.1.313") });
-    await expect(at("claude", "2.1.314")).resolves.toBeDefined();
+    await expect(at("claude", "2.1.324")).rejects.toMatchObject({ code: "unsupported", message: expect.stringContaining("2.1.324") });
+    await expect(at("claude", "2.1.325")).resolves.toBeDefined();
     await expect(at("claude", undefined)).rejects.toMatchObject({ code: "unsupported" });
     await expect(at("codex", "0.149.1")).rejects.toMatchObject({ code: "unsupported", message: expect.stringContaining("0.149.1") });
     await expect(at("codex", "0.150.0")).resolves.toBeDefined();
