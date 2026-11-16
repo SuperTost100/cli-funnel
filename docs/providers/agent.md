@@ -107,6 +107,24 @@ At `full`, `--force` runs commands outside the sandbox: with `--force --sandbox=
 
 The sandbox fails to start when the host blocks user namespaces, as Ubuntu 24.04 does. The CLI then exits with "Sandbox mode is enabled but not available on this system" instead of running unconfined. An AppArmor profile that allows `userns` for the helper at `~/.local/share/cursor-agent/versions/*/cursorsandbox` fixes it.
 
+### Folder config
+
+`folderConfig` is refused with `unsupported` for `ignore` and `instructions`, and `capabilities.folderConfig` is empty. Cursor Agent has no flag, setting or environment variable that turns the folder's config off, and `--trust`, which cli-funnel always passes, only skips the trust prompt.
+
+Checked on 2026.10.22 and again on 2026.11.13 with the `auto` model, run in the root of a git repository `repo` inside a folder `above`:
+
+| What the folder carries | What happened |
+| --- | --- |
+| `repo/.cursor/hooks.json`: `sessionStart`, `beforeShellExecution` | both hooks ran |
+| `repo/.claude/settings.json` and `repo/.claude/settings.local.json`: Claude Code `SessionStart` and `PreToolUse` hooks | all ran |
+| `repo/.cursor/rules/*.mdc` with `alwaysApply: true` | loaded |
+| `repo/AGENTS.md`, `repo/CLAUDE.md` and `above/CLAUDE.md` | loaded |
+| `repo/.cursor/mcp.json` | the server did not start, since cli-funnel does not pass `--approve-mcps` |
+
+Run from a subfolder of the repository, Cursor Agent did not load `.cursor/hooks.json` or `.cursor/mcp.json` from that subfolder, but it still ran the Claude Code hooks at the repository root. `.cursor/cli.json` permission rules come from the folder too: the `none` level relies on that (see [How `none` works](#how-none-works)).
+
+One way around it was tried and not adopted. Run with `--workspace` set to an empty folder and the project added with `--add-dir`, none of the hooks, rules or instruction files loaded. But the agent's shell then starts in the empty folder, so a command such as `npm test` runs in the wrong place.
+
 ## API key
 
 `apiKey` runs the CLI on a Cursor API key instead of the saved login. The key goes to the process as `CURSOR_API_KEY`, never as `--api-key`, because argv is visible to other users in `ps`. `result.auth` and the `session` event say `api-key`.

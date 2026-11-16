@@ -1,6 +1,6 @@
 # Claude Code provider
 
-Runs the real `claude` binary in print mode and reads its stream-json output. Tested with Claude Code 2.1.283 (supported range starts at 2.1.0). It never uses `--bare`, so your subscription login is used.
+Runs the real `claude` binary in print mode and reads its stream-json output. Tested with Claude Code 2.1.283 (supported range starts at 2.1.0, and `folderConfig` needs 2.1.325). It never uses `--bare`, so your subscription login is used.
 
 ## Flags
 
@@ -70,6 +70,47 @@ Checked on 2.1.310. A `supervised` run whose `onApproval` allowed every command 
 The sandbox covers Bash only. Write and Edit follow the access level: at `full` the Write tool created a file outside `cwd` with the sandbox on. The user's own settings still apply, so their `sandbox.excludedCommands` run outside the sandbox (after the level's approvals) and their `sandbox.filesystem.allowWrite` paths stay writable.
 
 On Linux the sandbox needs `bubblewrap` and `socat`. Ubuntu 24.04 blocks bubblewrap from creating user namespaces, and the run then fails with "sandbox required but unavailable" until an AppArmor profile for `/usr/bin/bwrap` allows `userns`.
+
+### Folder config
+
+`folderConfig: "ignore"` passes `--setting-sources user`, so Claude Code reads the user's settings and leaves out the project and local ones. `"instructions"` passes the same, plus `--add-dir=<cwd>` with `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` in the CLI's environment, which loads the instruction files of `cwd` the way it loads those of an added folder. Neither passes `--strict-mcp-config`: that flag also drops the user's own MCP servers and the claude.ai connectors. At `none` nothing changes, since `--setting-sources ""` already skips every source, the user's included.
+
+Both values need Claude Code 2.1.325 or newer (`capabilities.folderConfigMinVersion`). A run on an older version, or on one whose version cannot be read, fails with `unsupported` before the CLI starts. The message names the installed version and the minimum. The number comes from the [Claude Code changelog](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md), where each of these releases fixed a way for `--setting-sources` to let the folder's config through:
+
+| Release | Fix |
+| --- | --- |
+| 2.1.325 | A committed `.claude/settings.local.json` could be treated as the user's own when Claude Code started in certain subfolders of a repository |
+| 2.1.314 | A settings file excluded with `--setting-sources` still supplied some settings, such as auto mode rules and saved permission consents |
+| 2.1.281 | `--setting-sources` was not passed on to spawned sessions (teammates, `/bg`, `claude agents`, `--worktree --tmux`) |
+| 2.1.211 | Nested `.claude/rules/*.md` files loaded although the setting sources excluded the project |
+| 2.1.69 | `--setting-sources user` did not block project skills found while the session ran |
+
+`instructions` also needs `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD`, which arrived in 2.1.20, and 2.1.281 stopped sending the `CLAUDE.md` of an `--add-dir` folder inside the working directory to the model twice. `--setting-sources` itself is older than the supported range. The table below was checked on 2.1.323, two releases before the minimum, in a folder that is not one of the subfolders the 2.1.325 fix is about. So 2.1.325 is the oldest release the changelog clears, not one that was run.
+
+Checked on 2.1.323 with `claude-haiku-4-5-20251001` in a folder `proj` inside a git repository `repo`, inside a folder `above`. Each file below held a hook that touched a marker file, an MCP server that wrote a marker when it started, or a codeword the model was asked to repeat. The CLI ran in `proj`.
+
+| What the folder carries | `load` | `ignore` | `instructions` |
+| --- | --- | --- | --- |
+| `proj/.claude/settings.json`: `SessionStart`, `UserPromptSubmit` and `PreToolUse` hooks, `env` | loads | left out | left out |
+| `proj/.claude/settings.local.json`: `permissions.allow: ["Bash(*)"]`, hooks, `env` | loads: Bash ran without asking `onApproval` | left out: Bash went to `onApproval` | left out |
+| `repo/.claude/settings.local.json`: allow rule and hooks | loads | left out | left out |
+| `repo/.claude/settings.json`: hooks | did not load from `proj` | left out | left out |
+| `.mcp.json` in `proj`, `repo` and `above` | all three servers start | none starts | none starts |
+| `CLAUDE.md` in `proj`, `repo` and `above`, and `proj/.claude/rules/*.md` | all load | none loads | only `proj/CLAUDE.md` and its rules load, and those of each `addDirs` folder |
+| `AGENTS.md` in `proj` and `repo`, checked in a second folder without any `CLAUDE.md`, where Claude Code reads it | both load | left out | left out |
+| `proj/.claude/skills`, `agents` and `commands` | listed in `init` | not listed | not listed |
+
+With `instructions`, each folder in `providerOptions.claude.addDirs` is passed as `--add-dir` too, and the same variable loads its `CLAUDE.md`, `.claude/CLAUDE.md` and `.claude/rules/` files. Its settings, hooks, permission rules, skills, agents and commands stay out, since the run still passes `--setting-sources user`. Checked on 2.1.323 with `claude-haiku-5-5`, through cli-funnel with `access: "supervised"`: `proj` and an `addDirs` folder `extra` each held a `CLAUDE.md` with a codeword, a `SessionStart` hook in `.claude/settings.json` that touched a marker file, and a skill. `instructions` made the model repeat both codewords, ran neither hook and listed neither skill in `init`. `ignore` repeated no codeword, ran no hook and listed no skill. `load` repeated the `proj` codeword, ran the `proj` hook and listed both skills, so `extra` loaded its skill but not its settings or its `CLAUDE.md`. Permission rules from the `addDirs` folder were not run: they sit in the settings files the source switch leaves out.
+
+What still loads with either value:
+
+- The user's settings in the config folder (`~/.claude`, or `CLAUDE_CONFIG_DIR`): `settings.json` with its hooks, allow rules and `env`, `CLAUDE.md`, skills, agents and commands, and the MCP servers in `~/.claude.json`. Checked: the user's `CLAUDE.md`, skills, agents, MCP servers and claude.ai connectors still loaded.
+- Managed settings and the `--settings` that `sandbox` passes.
+- The caller's `mcpServers`, `system` and `providerOptions.claude`. Checked: a caller's HTTP server answered with `ignore` and with `instructions` on.
+- Auto memory, which lives in the config folder under the project's path. Not tested.
+- MCP servers the user added with `claude mcp add --scope local`, which `~/.claude.json` keeps under the project's path. Not tested.
+
+`instructions` keeps less than the folder's full set of instruction files: `CLAUDE.md` files in the folders above `cwd`, `CLAUDE.local.md` and `AGENTS.md` stay out, because Claude Code reads only `CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md` and `.claude/rules/*.md` from an added folder, and `CLAUDE.local.md` only when the `local` source is on. The variable also loads the instruction files of each `providerOptions.claude.addDirs` folder. Claude Code's memory docs add that rules with a `paths` field do not load from an added folder. That was not tested.
 
 ## Run options
 

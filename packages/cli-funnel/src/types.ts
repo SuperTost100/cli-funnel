@@ -14,6 +14,16 @@ export type AccessLevel = "none" | "supervised" | "accept-edits" | "auto" | "ful
 
 export const ACCESS_LEVELS: readonly AccessLevel[] = ["none", "supervised", "accept-edits", "auto", "full"];
 
+/**
+ * What the CLI may load from the working folder and the folders above it, besides the caller's own settings. `load`
+ * is the CLI's own behaviour. `ignore` drops the folder's settings, hooks, permission rules, MCP servers, instruction
+ * files and skills. `instructions` drops the same but keeps the folder's instruction files. See docs/run-options.md
+ * for what each provider still loads.
+ */
+export type FolderConfig = "load" | "instructions" | "ignore";
+
+export const FOLDER_CONFIGS: readonly FolderConfig[] = ["load", "instructions", "ignore"];
+
 export interface EffortOption {
   /** Value passed to the CLI, for example "high". */
   id: string;
@@ -79,6 +89,18 @@ export interface Capabilities {
   approvalInput?: boolean;
   /** True when the CLI can run the agent's commands in a sandbox for `RunInput.sandbox`. */
   sandbox?: boolean;
+  /**
+   * The `RunInput.folderConfig` values the CLI honours besides `load`. Absent or empty means the CLI loads whatever the
+   * working folder carries, and a run that asks for less fails with `unsupported`.
+   */
+  folderConfig?: Exclude<FolderConfig, "load">[];
+  /**
+   * The oldest CLI version that keeps `folderConfig` values from `capabilities.folderConfig` as promised. The flags and
+   * settings behind them were fixed or added over several releases, and an older CLI can load a folder's rules,
+   * skills or saved permissions anyway. A run with one of those values on an older or unreadable version fails with
+   * `unsupported`.
+   */
+  folderConfigMinVersion?: string;
 }
 
 /** Progress of `pullModel`. The stream ends after `done` or `error`. */
@@ -651,6 +673,14 @@ export interface RunInput {
    * effect at `none`, where no command runs. Providers without machine access accept it, since they run no commands.
    */
   sandbox?: boolean;
+  /**
+   * What the CLI may load from `cwd` and the folders above it: `load` (the default) leaves the CLI as it is, `ignore`
+   * keeps out the folder's settings, hooks, permission rules, MCP servers, instruction files and skills, and
+   * `instructions` keeps out the same but loads the folder's instruction files. The caller's own `system`,
+   * `mcpServers`, `access` and approvals still apply, and so do the user's own CLI settings. Needs the value in
+   * `capabilities.folderConfig`. Providers without machine access accept it, since they read no folder.
+   */
+  folderConfig?: FolderConfig;
   /**
    * A vendor API key the CLI runs on instead of the saved login: an Anthropic key for Claude Code, an OpenAI key for
    * Codex, a Cursor key for Cursor Agent, a Gemini key for Antigravity. The saved login stays as it was. Needs

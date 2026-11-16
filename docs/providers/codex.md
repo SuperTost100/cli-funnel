@@ -140,6 +140,36 @@ With `apiKey` the app-server starts with `-c cli_auth_credentials_store="ephemer
 
 `session.auth` is `api-key` for such runs. Otherwise it comes from `account/read`: `account` for a ChatGPT login and `api-key` for a saved API key login. Only the account type is read. `account/read` answers about 330 ms after `thread/start`, so the first `session` event waits for it for up to one second, while `turn/start` is already sent.
 
+### Folder config
+
+`folderConfig: "ignore"` adds this to the thread config:
+
+- `projects."<folder>".trust_level = "untrusted"` for `cwd` and each folder above it, as given and with symlinks resolved. Codex skips the `.codex/` layer of an untrusted folder: its `config.toml`, `hooks.json` and `rules/`. Marking only `cwd` is not enough: with the repository trusted in the user's config, the repository's own `.codex/config.toml` still started its MCP server.
+- `project_doc_max_bytes = 0`, which leaves out the folder's `AGENTS.md` and keeps the user's `~/.codex/AGENTS.md`. On 0.166 the untrusted folders already left it out, so this only matters if a later version reads it anyway.
+- `skills.config` entries that switch off, by path, each skill that `skills/list` reports with scope `repo`, after the user's own `skills.config` entries. The thread's list replaces the user's, so cli-funnel reads them first with `config/read` without a `cwd`, which leaves out the project layers. Folder skills load whatever the trust.
+
+`ignore` needs Codex 0.150.0 or newer (`capabilities.folderConfigMinVersion`, the same as the supported minimum). A run on an older version, or on one whose version cannot be read, fails with `unsupported` before the CLI starts, and the message names the installed version and the minimum. On 0.150.0, 0.158.0 and 0.166.0 the thread config dropped the `model` that a trusted folder's `.codex/config.toml` set, and `skills/list` returned the folder's skill with scope `repo` and its path. Earlier versions were not tried. The [Codex changelog](https://developers.openai.com/codex/changelog) lists 0.150.0 as the release in which an untrusted project stopped supplying its `AGENTS.md`, which `project_doc_max_bytes = 0` covers on any version.
+
+The `config/read` that lists the user's MCP servers at `none`, or checks the caller's server names, also goes without `cwd` with this option, since the thread does not load the project's servers. When `skills/list` or `config/read` fails, the thread does not start and the run fails with `cli-failed`. `"instructions"` is refused with `unsupported`: an untrusted folder's `AGENTS.md` did not load, and a trusted folder brings its hooks and `rules/` with it.
+
+Checked on 0.166.0 with `gpt-5.6-luna` in a folder `proj` inside a git repository `repo`. The user's config trusted nothing, and the comparison runs set `trust_level = "trusted"` for every folder from `proj` up in the thread config, so they behaved like a folder the user trusts without writing to it.
+
+| What the folder carries | Trusted folder (`load`) | `ignore` |
+| --- | --- | --- |
+| `proj/.codex/config.toml`: `model_reasoning_effort`, an MCP server, inline hooks | the effort and the server applied, `hooks/list` listed the hooks | none applied, no hook listed |
+| `proj/.codex/hooks.json` | listed by `hooks/list` | not listed |
+| `proj/.codex/rules/allow.rules`: `prefix_rule(pattern = ["touch"], decision = "allow")` | `touch` ran with approval policy `untrusted` and no approval request | `touch` went to `onApproval` |
+| `repo/.codex/config.toml`: an MCP server | started | not started |
+| `AGENTS.md` in `proj` and `repo` | both loaded | neither loaded |
+| `proj/.agents/skills/folder-skill` | offered to the model | not offered |
+
+The hook commands did not run in these tests although `hooks/list` reported them enabled. Whether Codex holds new project hooks for review was not checked.
+
+With every value the user's `~/.codex/config.toml` (MCP servers, hooks, rules, skills) and `~/.codex/AGENTS.md` still load, and so do the caller's `mcpServers`. Checked: the user's `AGENTS.md` and a caller's HTTP server worked with `ignore` on.
+
+> [!WARNING]
+> Without the option, `thread/start` in a folder the user's config has no `trust_level` for adds `trust_level = "trusted"` for the folder's project root to `~/.codex/config.toml`. From then on the folder's `.codex/` layers load in every Codex session there, the interactive `codex` included. Seen on 0.166.0 with approval policy `untrusted` and the `workspace-write` sandbox, with no turn started. With `ignore` nothing was written. Other levels were not tried.
+
 ## Provider options
 
 `providerOptions.codex` sets app-server params, not flags. `scripts/check-drift.mjs` reads them from `codex app-server generate-json-schema`.
@@ -190,7 +220,7 @@ The context window is not selectable. The catalog reports `context_window` and `
 ## Known limits
 
 - `item/permissions/requestApproval` and other server requests not listed above are answered with a JSON-RPC error. An `mcpServer/elicitation/request` that is not an MCP tool approval is routed as tool `mcp` and answered with accept or decline without form content.
-- The user's `~/.codex/config.toml` still applies (MCP servers, instructions). Startup of configured MCP servers can add seconds and log errors on stderr.
+- The user's `~/.codex/config.toml` still applies (MCP servers, instructions). So does the project's `.codex/` folder and `AGENTS.md` unless the run sets `folderConfig: "ignore"`. Startup of configured MCP servers can add seconds and log errors on stderr.
 - `accept-edits` allows all file changes, including ones outside the workspace that Codex asks to permit.
 - Interrupt waits up to five seconds for the turn to finish before killing the process.
 - The live tests run only with `CLI_FUNNEL_LIVE=1`.

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { createClient } from "../src/client/index.js";
 import { createFunnel } from "../src/funnel.js";
 import { approvalReply, askQuestion, createRunFolder } from "../src/providers/base.js";
+import { PROVIDERS } from "../src/providers/index.js";
 import { mcpServersFor } from "../src/providers/options.js";
 import { toReply } from "../src/providers/codex/approvals.js";
 import { createHandler } from "../src/server/handler.js";
@@ -144,6 +145,109 @@ describe("funnel checks", () => {
     await expect(f.run({ selection: { provider: "claude", model: "m" }, prompt: "go", sandbox: true })).resolves.toBeDefined();
   });
 
+  it("checks folderConfig: a value outside the list, and one the CLI cannot honour, fail before the CLI starts", async () => {
+    await expect(run({ folderConfig: "skip" as never })).rejects.toMatchObject({ code: "invalid-selection" });
+    await expect(run({ folderConfig: "ignore" })).rejects.toMatchObject({ code: "unsupported", message: expect.stringContaining("loads whatever the folder carries") });
+    await expect(run({ folderConfig: "load" })).resolves.toBeDefined();
+    const partial = createFunnel({ providers: { claude: { ...base, capabilities: { ...base.capabilities, folderConfig: ["ignore"] } } } });
+    const runPartial = (folderConfig: RunInput["folderConfig"]) =>
+      partial.run({ selection: { provider: "claude", model: "m", cwd: root, access: "full" }, prompt: "go", folderConfig });
+    await expect(runPartial("ignore")).resolves.toBeDefined();
+    await expect(runPartial("instructions")).rejects.toMatchObject({ code: "unsupported", message: expect.stringContaining('It takes "load", "ignore".') });
+  });
+
+  describe("folderConfig and the installed CLI version", () => {
+    const counted = (version: string | undefined, min: string | null = "2.1.314") => {
+      const started = { count: 0 };
+      const provider: Provider = {
+        ...base,
+        capabilities: { ...base.capabilities, folderConfig: ["instructions", "ignore"], folderConfigMinVersion: min ?? undefined },
+        detect: async () => ({ installed: true, testedRange: { min: "1.0.0" }, version }),
+        async *run(): AsyncGenerator<FunnelEvent> {
+          started.count++;
+          yield { type: "done", text: "", finishReason: "stop" };
+        },
+      };
+      const f = createFunnel({ providers: { claude: provider } });
+      const go = (folderConfig: RunInput["folderConfig"]) => f.run({ selection: { provider: "claude", model: "m", cwd: root, access: "full" }, prompt: "go", folderConfig });
+      return { started, go };
+    };
+
+    it("refuses a version below the minimum before the CLI starts, and names both versions", async () => {
+      const { started, go } = counted("2.1.313");
+      for (const value of ["ignore", "instructions"] as const) {
+        await expect(go(value)).rejects.toMatchObject({ code: "unsupported", message: `Fake 2.1.313 is too old for folderConfig "${value}". It needs 2.1.314 or newer.` });
+      }
+      expect(started.count).toBe(0);
+    });
+
+    it("compares numbers, so 2.1.99 is below 2.1.314 and 2.2.0 and 10.0.0 are above", async () => {
+      await expect(counted("2.1.99").go("ignore")).rejects.toMatchObject({ code: "unsupported" });
+      await expect(counted("2.2.0").go("ignore")).resolves.toBeDefined();
+      await expect(counted("10.0.0").go("ignore")).resolves.toBeDefined();
+    });
+
+    it("runs at the minimum and above it", async () => {
+      for (const version of ["2.1.314", "2.1.323"]) {
+        const { started, go } = counted(version);
+        await expect(go("ignore")).resolves.toBeDefined();
+        await expect(go("instructions")).resolves.toBeDefined();
+        expect(started.count).toBe(2);
+      }
+    });
+
+    it("refuses when the version could not be read", async () => {
+      const { started, go } = counted(undefined);
+      await expect(go("ignore")).rejects.toMatchObject({ code: "unsupported", message: expect.stringContaining("Fake has no readable version") });
+      await expect(go("instructions")).rejects.toMatchObject({ code: "unsupported" });
+      expect(started.count).toBe(0);
+    });
+
+    it("leaves load, an unset option and a provider without a minimum alone, whatever the version", async () => {
+      const old = counted("1.0.0");
+      await expect(old.go("load")).resolves.toBeDefined();
+      await expect(old.go(undefined)).resolves.toBeDefined();
+      await expect(counted(undefined).go("load")).resolves.toBeDefined();
+      await expect(counted("1.0.0", null).go("ignore")).resolves.toBeDefined();
+    });
+  });
+
+  it("holds the real providers to their minimums: Claude Code 2.1.325, Codex 0.150.0", async () => {
+    const at = (id: "claude" | "codex", version: string | undefined) => {
+      const provider: Provider = {
+        ...PROVIDERS[id],
+        detect: async () => ({ installed: true, testedRange: { min: "0" }, version }),
+        async *run(): AsyncGenerator<FunnelEvent> {
+          yield { type: "done", text: "", finishReason: "stop" };
+        },
+      };
+      const f = createFunnel({ providers: { [id]: provider }, allowUnlistedModels: true });
+      return f.run({ selection: { provider: id, model: "m", cwd: root, access: "full" }, prompt: "go", folderConfig: "ignore" });
+    };
+    expect(PROVIDERS.claude.capabilities.folderConfigMinVersion).toBe("2.1.325");
+    expect(PROVIDERS.codex.capabilities.folderConfigMinVersion).toBe("0.150.0");
+    await expect(at("claude", "2.1.324")).rejects.toMatchObject({ code: "unsupported", message: expect.stringContaining("2.1.324") });
+    await expect(at("claude", "2.1.325")).resolves.toBeDefined();
+    await expect(at("claude", undefined)).rejects.toMatchObject({ code: "unsupported" });
+    await expect(at("codex", "0.149.1")).rejects.toMatchObject({ code: "unsupported", message: expect.stringContaining("0.149.1") });
+    await expect(at("codex", "0.150.0")).resolves.toBeDefined();
+    await expect(at("codex", undefined)).rejects.toMatchObject({ code: "unsupported" });
+  });
+
+  it("accepts any folderConfig value on a provider without machine access, which reads no folder", async () => {
+    const text: Provider = { ...base, capabilities: { ...base.capabilities, access: [] } };
+    const f = createFunnel({ providers: { claude: text } });
+    await expect(f.run({ selection: { provider: "claude", model: "m" }, prompt: "go", folderConfig: "instructions" })).resolves.toBeDefined();
+    await expect(f.run({ selection: { provider: "claude", model: "m" }, prompt: "go", folderConfig: "nope" as never })).rejects.toMatchObject({ code: "invalid-selection" });
+  });
+
+  it("reports the folderConfig values each CLI honours", () => {
+    expect(PROVIDERS.claude.capabilities.folderConfig).toEqual(["instructions", "ignore"]);
+    expect(PROVIDERS.codex.capabilities.folderConfig).toEqual(["ignore"]);
+    expect(PROVIDERS.agent.capabilities.folderConfig).toBeUndefined();
+    expect(PROVIDERS.antigravity.capabilities.folderConfig).toBeUndefined();
+  });
+
   it("passes them to a provider that takes them", async () => {
     let seen: RunInput | undefined;
     const able: Provider = {
@@ -158,6 +262,24 @@ describe("funnel checks", () => {
     await f.run({ selection: { provider: "claude", model: "m", cwd: root, access: "supervised" }, prompt: "go", onApproval: () => "deny", apiKey: "sk-test", mcpServers: { a: { type: "http", url: "http://x" } } });
     expect(seen?.apiKey).toBe("sk-test");
     expect(seen?.mcpServers).toEqual({ a: { type: "http", url: "http://x" } });
+  });
+});
+
+describe("folderConfig over HTTP", () => {
+  it("reaches the provider from the /run body", async () => {
+    let seen: RunInput | undefined;
+    const able: Provider = {
+      ...base,
+      capabilities: { ...base.capabilities, folderConfig: ["ignore"] },
+      async *run(i) {
+        seen = i;
+        yield { type: "done", text: "", finishReason: "stop" };
+      },
+    };
+    const handler = createHandler(createFunnel({ providers: { claude: able } }), { fsRoots: [root] });
+    const client = createClient({ baseUrl: "http://x", fetch: (url, init) => handler(new Request(url as string, init)) });
+    for await (const _ of client.run({ selection: { provider: "claude", model: "m", cwd: root, access: "full" }, prompt: "go", folderConfig: "ignore" })) void _;
+    expect(seen?.folderConfig).toBe("ignore");
   });
 });
 

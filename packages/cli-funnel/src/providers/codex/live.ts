@@ -12,18 +12,26 @@ import { BINARY, INITIALIZE_PARAMS } from "./index.js";
 import { agentConfig, codexForward, threadOptions } from "./options.js";
 import { RpcClient } from "./rpc.js";
 import { configServers, noToolsConfig } from "./tools.js";
+import { ignoreFolderConfig, repoSkillPaths, userSkillRules } from "./folder.js";
 
 /**
  * Settings for `thread/start` and `thread/resume`, with `providerOptions.codex` and the agent features applied. At
  * `none` the no-tools config goes last, so nothing else can switch a tool back on. `servers` are the config's MCP
  * servers, which `none` switches off. `roots` are the sandbox's writable folders, which replace the config's list.
+ * `folder` keeps the working folder's own config out, for `folderConfig: "ignore"`.
  */
-function threadSettings(input: RunInput, agent: Record<string, unknown>, servers: string[], roots?: string[]) {
+function threadSettings(input: RunInput, agent: Record<string, unknown>, servers: string[], roots?: string[], folder?: Record<string, unknown>) {
   const sel = input.selection;
   const machine = requireMachine(sel);
   const plan = planAccess(machine.access);
   const extra = threadOptions(input);
-  const config = { ...extra.config, ...agent, ...(sel.access === "none" ? noToolsConfig(servers) : {}), ...(roots ? { "sandbox_workspace_write.writable_roots": roots } : {}) };
+  const config = {
+    ...extra.config,
+    ...agent,
+    ...folder,
+    ...(sel.access === "none" ? noToolsConfig(servers) : {}),
+    ...(roots ? { "sandbox_workspace_write.writable_roots": roots } : {}),
+  };
   return {
     model: sel.model,
     cwd: sel.cwd,
@@ -46,16 +54,26 @@ export function appServerArgs(input: RunInput): string[] {
 }
 
 /**
- * The effective Codex config as seen from `cwd`. `what` says what the run needs from it, for the error. When Codex
- * cannot read it the thread does not start. The answer is the user's whole config, MCP server env and headers
- * included, so it never goes out raw.
+ * The effective Codex config as seen from `cwd`, or without the project layers when `cwd` is undefined. `what` says
+ * what the run needs from it, for the error. When Codex cannot read it the thread does not start. The answer is the
+ * user's whole config, MCP server env and headers included, so it never goes out raw.
  */
-async function readConfig<T>(rpc: RpcClient, cwd: string, what: string, pick: (res: unknown) => T): Promise<T> {
+async function readConfig<T>(rpc: RpcClient, cwd: string | undefined, what: string, pick: (res: unknown) => T): Promise<T> {
   try {
-    return pick(await rpc.request("config/read", { cwd }, { hideAnswer: true }));
+    return pick(await rpc.request("config/read", cwd === undefined ? {} : { cwd }, { hideAnswer: true }));
   } catch (e) {
     const why = e instanceof Error ? e.message : String(e);
     throw new FunnelError(`Could not ${what} in the Codex config. ${why}`, "cli-failed");
+  }
+}
+
+/** The skill files in `cwd` and the folders above it. When Codex cannot list them the thread does not start. */
+async function listRepoSkills(rpc: RpcClient, cwd: string): Promise<string[]> {
+  try {
+    return repoSkillPaths(await rpc.request("skills/list", { cwds: [cwd] }));
+  } catch (e) {
+    const why = e instanceof Error ? e.message : String(e);
+    throw new FunnelError(`Could not list the folder's skills for folderConfig "ignore". ${why}`, "cli-failed");
   }
 }
 
@@ -323,19 +341,27 @@ export async function openCodexSession(first: RunInput): Promise<LiveSession> {
     // allows no writes outside `cwd` has no use for them.
     const needServers = none || callerServers.length > 0;
     const needRoots = addDirs !== undefined && sandboxFor(requireMachine(first.selection).access, first.sandbox) === "workspace-write";
+    // `folderConfig: "ignore"` reads the config without the project layers, since the thread will not load them, and
+    // switches off the folder's skills, which load whatever the folder's trust.
+    const ignoreFolder = first.folderConfig === "ignore";
+    const skillPaths = ignoreFolder ? await listRepoSkills(rpc, cwd) : [];
     let servers: string[] = [];
     let roots: string[] | undefined;
-    if (needServers || needRoots) {
-      ({ servers, roots } = await readConfig(rpc, cwd, needServers ? "list the MCP servers" : "read the writable folders", (res) => ({
+    let userSkills: unknown[] = [];
+    if (needServers || needRoots || skillPaths.length) {
+      const what = needServers ? "list the MCP servers" : needRoots ? "read the writable folders" : "read the skill settings";
+      ({ servers, roots, userSkills } = await readConfig(rpc, ignoreFolder ? undefined : cwd, what, (res) => ({
         servers: needServers ? configServers(res) : [],
         roots: needRoots ? [...new Set([...configWritableRoots(res), ...addDirs])] : undefined,
+        userSkills: skillPaths.length ? userSkillRules(res) : [],
       })));
     }
     const taken = callerServers.filter((name) => servers.includes(name));
     if (taken.length) {
       throw new FunnelError(`MCP server ${taken.join(", ")} is already in the user's Codex config. Give the server another name.`, "invalid-selection");
     }
-    const settings = threadSettings(first, agent, none ? servers : [], roots);
+    const folder = ignoreFolder ? ignoreFolderConfig(cwd, skillPaths, userSkills) : undefined;
+    const settings = threadSettings(first, agent, none ? servers : [], roots, folder);
     const started = first.sessionId
       ? await rpc.request("thread/resume", { threadId: first.sessionId, ...settings })
       : await rpc.request("thread/start", { ...settings, ...start });

@@ -30,6 +30,17 @@ import { editPath, newClaudeTrack, parseClaudeMessage, parseUsage, PERMISSION_MO
 const BIN = "claude";
 const TESTED_RANGE = { min: "2.1.0" };
 
+/**
+ * The oldest Claude Code that keeps `folderConfig` as promised. Both values rest on `--setting-sources user`, and
+ * releases up to 2.1.313 still let an excluded settings file supply auto mode rules and saved permission consents
+ * (2.1.314), nested `.claude/rules` files load (2.1.211) and spawned sessions such as teammates start without the
+ * restriction (2.1.281). Up to 2.1.324 a committed `.claude/settings.local.json` could also be treated as the user's
+ * own when the CLI started in some subfolders of a repository (2.1.325), which is the file this option exists for. Older releases also leave out pieces `instructions` needs: `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD`
+ * arrived in 2.1.20, and 2.1.281 stopped sending an `--add-dir` folder inside `cwd` to the model twice. The behaviour
+ * was checked on 2.1.323, before that last fix. See docs/providers/claude.md#folder-config.
+ */
+const FOLDER_CONFIG_MIN = "2.1.325";
+
 const capabilities: Capabilities = {
   access: ["none", "supervised", "accept-edits", "auto", "full"],
   effort: true,
@@ -47,6 +58,8 @@ const capabilities: Capabilities = {
   fileChanges: true,
   questions: true,
   sandbox: true,
+  folderConfig: ["instructions", "ignore"],
+  folderConfigMinVersion: FOLDER_CONFIG_MIN,
 };
 
 const MCP_KINDS: McpServer["type"][] = ["http", "stdio"];
@@ -66,6 +79,26 @@ const NO_TOOLS = ["--tools", "", "--strict-mcp-config", "--setting-sources", ""]
  * `autoAllowBashIfSandboxed: false` keeps every command going through the access level's approvals.
  */
 const SANDBOX_SETTINGS = { sandbox: { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, autoAllowBashIfSandboxed: false } };
+
+/**
+ * `--setting-sources user` for `RunInput.folderConfig`. Project and local settings carry hooks, permission rules, env and
+ * the `.mcp.json` servers of the folder and the folders above it, and the same source switch leaves out the project's
+ * CLAUDE.md, rules, skills, agents and commands. The user's own settings, CLAUDE.md and MCP servers stay. Checked on
+ * 2.1.323. `none` already passes `--setting-sources ""`, which drops the user's settings too.
+ */
+const USER_SETTINGS_ONLY = ["--setting-sources", "user"];
+
+/**
+ * With this variable Claude Code loads `CLAUDE.md`, `.claude/CLAUDE.md` and `.claude/rules/*.md` from each `--add-dir`
+ * folder. `folderConfig: "instructions"` adds `cwd` that way, so its instruction files come back without its settings.
+ */
+const ADD_DIR_INSTRUCTIONS = { CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: "1" };
+
+/** True when the run keeps the folder's settings out. `none` does that already, and more. */
+const skipsFolder = (input: RunInput): boolean => input.selection.access !== "none" && (input.folderConfig === "ignore" || input.folderConfig === "instructions");
+
+/** True when the folder's instruction files come back through `--add-dir` (see `ADD_DIR_INSTRUCTIONS`). */
+const keepsInstructions = (input: RunInput): boolean => skipsFolder(input) && input.folderConfig === "instructions";
 
 /** Claude Code picks the 1M context variant of a model through the `[1m]` suffix on the model id. */
 function cliModel(selection: RunInput["selection"]): string {
@@ -140,6 +173,8 @@ export function buildArgs(input: RunInput, systemFile?: string, schemaOnStdin = 
   ];
   if (selection.effort) args.push("--effort", selection.effort);
   if (selection.access === "none") args.push(...NO_TOOLS);
+  if (skipsFolder(input)) args.push(...USER_SETTINGS_ONLY);
+  if (keepsInstructions(input)) args.push(flag("--add-dir", requireMachine(selection).cwd));
   // `none` replaces Claude Code's coding-agent prompt. Other levels keep it and append.
   if (input.system) {
     const flag = selection.access === "none" ? "--system-prompt" : "--append-system-prompt";
@@ -277,7 +312,8 @@ export async function launchClaude(input: RunInput, signal?: AbortSignal): Promi
     // In print mode Claude Code uses ANTHROPIC_API_KEY from its environment over the saved login, with no approval step.
     // Sonnet 5 and Opus 5.5 get the task tools, and so `plan` events, only with this variable.
     const todo = input.planTool && input.selection.access !== "none" ? { CLAUDE_CODE_ENABLE_TODO_TOOLS: "1" } : {};
-    const env = { ...input.env, ...todo, ...(input.apiKey ? { ANTHROPIC_API_KEY: input.apiKey } : {}) };
+    const instructions = keepsInstructions(input) ? ADD_DIR_INSTRUCTIONS : {};
+    const env = { ...input.env, ...todo, ...instructions, ...(input.apiKey ? { ANTHROPIC_API_KEY: input.apiKey } : {}) };
     proc = spawnStream(bin, args, { cwd: input.selection.cwd, env, signal, closeStdin: false });
   } catch (err) {
     await removeFiles();

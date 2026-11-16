@@ -53,6 +53,10 @@ Codex also checks the approval policy. If it started with a policy that asks les
 
 When a CLI refuses an action because nobody could approve it, the run reports it in `result.deniedActions`. It does not fail. Check that list, then raise the level or choose a provider with `supervised`.
 
+## When the folder carries its own settings
+
+A level is enforced with the CLI's own permission settings, and the working folder can add to them. A `.claude/settings.local.json` with an allow rule lets Claude Code run commands at `supervised` without asking `onApproval`, and a Codex project's `.codex/rules/` can do the same. Set `folderConfig: "ignore"` on Claude Code 2.1.325 or newer and Codex 0.150.0 or newer so only the caller's settings and the user's own apply. Cursor Agent and Antigravity cannot turn folder config off. See [Folder config](run-options.md#folder-config).
+
 ## Choosing a level
 
 Use `supervised` when a person watches the run and the project holds anything you would miss. Use `full` inside a container or a throwaway checkout. The other two sit between them. `full` on your everyday machine lets a bad prompt delete files, so treat it that way.

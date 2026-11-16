@@ -153,6 +153,31 @@ describe("sandbox", () => {
   });
 });
 
+describe("folderConfig on Claude Code", () => {
+  const sources = (a: string[]) => a.flatMap((x, i) => (x === "--setting-sources" ? [a[i + 1]] : []));
+  const args = (access: AccessLevel, folderConfig?: RunInput["folderConfig"]) => claudeArgs(input("claude", access, undefined, { folderConfig }));
+
+  it("loads only the user's settings with ignore and instructions, and keeps the user's MCP servers", () => {
+    for (const access of ["supervised", "accept-edits", "auto", "full"] as const) {
+      expect(sources(args(access, "ignore"))).toEqual(["user"]);
+      expect(sources(args(access, "instructions"))).toEqual(["user"]);
+      expect(args(access, "ignore")).not.toContain("--strict-mcp-config");
+    }
+  });
+
+  it("adds cwd as a folder whose instruction files load only with instructions", () => {
+    expect(args("auto", "instructions")).toContain("--add-dir=/tmp");
+    expect(args("auto", "ignore").some((a) => a.startsWith("--add-dir"))).toBe(false);
+  });
+
+  it("changes nothing with load, and nothing at none, which already skips every settings source", () => {
+    expect(args("full", "load")).toEqual(args("full"));
+    expect(sources(args("full"))).toEqual([]);
+    for (const value of ["load", "ignore", "instructions"] as const) expect(args("none", value)).toEqual(args("none"));
+    expect(sources(args("none"))).toEqual([""]);
+  });
+});
+
 describe("codex providerOptions", () => {
   const opts = (access: AccessLevel, o: unknown, extra?: Partial<RunInput>) => threadOptions(input("codex", access, { codex: o }, extra));
 

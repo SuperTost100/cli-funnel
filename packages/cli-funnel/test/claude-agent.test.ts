@@ -2,9 +2,9 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { fakeNodeCli } from "./fake-cli.js";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildArgs, claudeProvider, claudeTurn, questionAnswers, questionRequest, watchStderr } from "../src/providers/claude/index.js";
-import { editPath, newClaudeTrack, parseClaudeMessage } from "../src/providers/claude/parser.js";
+import { editPath, newClaudeTrack, parseClaudeMessage, StderrWarnings } from "../src/providers/claude/parser.js";
 import { collect } from "./helpers.js";
 import type { AccessLevel, FunnelEvent, McpServer, RunInput, Selection } from "../src/types.js";
 
@@ -246,7 +246,7 @@ if (mcpArg) {
   const v = mcpArg.slice("--mcp-config=".length);
   mcp = v.startsWith("{") ? { inline: JSON.parse(v) } : { mode: fs.statSync(v).mode & 0o777, content: JSON.parse(fs.readFileSync(v, "utf8")) };
 }
-log({ kind: "start", args, apiKey: process.env.ANTHROPIC_API_KEY ?? null, todo: process.env.CLAUDE_CODE_ENABLE_TODO_TOOLS ?? null, mcp });
+log({ kind: "start", args, apiKey: process.env.ANTHROPIC_API_KEY ?? null, todo: process.env.CLAUDE_CODE_ENABLE_TODO_TOOLS ?? null, addDirMd: process.env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD ?? null, mcp });
 const lines = fs.readFileSync(process.env.FAKE_FIXTURE, "utf8").split("\\n").filter(Boolean);
 let i = 0;
 const pump = () => {
@@ -257,6 +257,16 @@ const pump = () => {
     if (err) {
       process.stderr.write(err);
       continue;
+    }
+    // A line {"__go": true} holds what follows until the test makes the FAKE_GO file. Stdout and stderr are two
+    // pipes, so a stdout line written after a stderr line can reach the session first.
+    if (JSON.parse(l).__go) {
+      const held = setInterval(() => {
+        if (!fs.existsSync(process.env.FAKE_GO)) return;
+        clearInterval(held);
+        pump();
+      }, 10);
+      return;
     }
     process.stdout.write(l + "\\n");
     if (JSON.parse(l).type === "control_request") return;
@@ -380,9 +390,19 @@ describe("claude control requests (fake CLI)", () => {
     const result = { type: "result", subtype: "success", is_error: false, result: "ok", session_id: "s" };
 
     it("emits the stderr warnings after session, before done, and collects them in the result", async () => {
-      replay([{ __stderr: effort }, { __stderr: sandbox }, init, { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "hi" } } }, result]);
+      // The fake holds its stdout until the session has read both warnings, so the order doesn't depend on which pipe
+      // the runner reads first.
+      const go = join(dir, "go");
+      process.env.FAKE_GO = go;
+      const push = vi.spyOn(StderrWarnings.prototype, "push");
+      replay([{ __stderr: effort }, { __stderr: sandbox }, { __go: true }, init, { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "hi" } } }, result]);
       const i: RunInput = { selection: sel({ cwd: dir, access: "full" }), prompt: "x" };
-      const events = await run(i);
+      const running = run(i);
+      await expect.poll(() => push.mock.calls.some(([line]) => String(line).includes("WITHOUT sandboxing")), { timeout: 10_000, interval: 20 }).toBe(true);
+      writeFileSync(go, "1");
+      const events = await running;
+      push.mockRestore();
+      delete process.env.FAKE_GO;
       expect(events.map((e) => e.type)).toEqual(["session", "warning", "warning", "text.delta", "done"]);
       const warnings = events.flatMap((e) => (e.type === "warning" ? [e.message] : []));
       expect(warnings).toEqual([
@@ -588,6 +608,20 @@ describe("claude control requests (fake CLI)", () => {
     expect(await todo({})).toBeNull();
     expect(await todo({ planTool: true })).toBe("1");
     expect(await todo({ planTool: true }, "none")).toBeNull();
+  });
+
+  it("loads the folder's instruction files through --add-dir only with folderConfig instructions", async () => {
+    const ok = [{ type: "system", subtype: "init", session_id: "s", model: "m" }, { type: "result", subtype: "success", is_error: false, result: "ok" }];
+    const started = async (folderConfig: RunInput["folderConfig"], access: RunInput["selection"]["access"] = "supervised") => {
+      replay(ok);
+      await collect(claudeProvider.run({ selection: sel({ cwd: dir, access }), prompt: "x", onApproval: () => "deny", folderConfig }), input(access!));
+      const { args, addDirMd } = logged().at(-1);
+      return { addDirMd, addDir: (args as string[]).filter((a) => a.startsWith("--add-dir")) };
+    };
+    expect(await started("instructions")).toEqual({ addDirMd: "1", addDir: [`--add-dir=${dir}`] });
+    expect(await started("ignore")).toEqual({ addDirMd: null, addDir: [] });
+    expect(await started(undefined)).toEqual({ addDirMd: null, addDir: [] });
+    expect(await started("instructions", "none")).toEqual({ addDirMd: null, addDir: [] });
   });
 });
 
