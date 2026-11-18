@@ -13,6 +13,7 @@
   <a href="https://github.com/SuperTost100/cli-funnel/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/SuperTost100/cli-funnel?label=release&color=f59e0b"></a>
   <a href="https://www.npmjs.com/package/cli-funnel"><img alt="npm version" src="https://img.shields.io/npm/v/cli-funnel?color=f59e0b"></a>
   <a href="https://github.com/SuperTost100/cli-funnel/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/SuperTost100/cli-funnel/ci.yml?branch=main&label=checks"></a>
+  <img alt="CodeRabbit Pull Request Reviews" src="https://img.shields.io/coderabbit/prs/github/SuperTost100/cli-funnel?link=https%3A%2F%2Fcoderabbit.link%2Ftost">
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-f59e0b"></a>
 </p>
 
