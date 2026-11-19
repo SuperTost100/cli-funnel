@@ -39,6 +39,8 @@ export interface AcpSetup {
   /** The arguments after `acp`: `--add-dir`, `--dangerously-skip-permissions`. */
   args: string[];
   env?: Record<string, string | undefined>;
+  /** Runs before every turn: puts the run's folder and its hook back as they should be. A failure ends the turn. */
+  refresh?: () => Promise<void>;
   /** Ends the turn after this many seconds, as `providerOptions.antigravity.printTimeoutSec`. */
   timeoutSec?: number;
   /** Where agy keeps conversation files, for the task list that becomes a `plan` event. */
@@ -273,6 +275,8 @@ export async function openAcpSession(first: RunInput, setup: AcpSetup): Promise<
         const id = await ready;
         if (t.finished) return;
         if (aborted) return finish(t, [{ type: "done", text: "", finishReason: "cancelled" }]);
+        await setup.refresh?.();
+        if (t.finished) return;
         const startedAt = Date.now();
         t.mapper = createAcpMapper(id, { access, mcp: setup.mcpCallers, cwd: setup.cwd, brainDir: setup.brainDir, readText: setup.readText, createdInRun: setup.createdInRun(startedAt) });
         t.out.push({ type: "session", sessionId: id, ...(model ? { model } : {}) });

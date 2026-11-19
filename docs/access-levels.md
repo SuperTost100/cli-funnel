@@ -22,6 +22,10 @@ Access says how much the agent may do on the machine. cli-funnel has four levels
 
 The picker shows only the levels a provider offers. `funnel.providers.claude.capabilities.access` gives the same list in code. Asking for a level the provider lacks throws `invalid-selection` and names the levels that exist.
 
+### Antigravity's `none` on Windows is unverified
+
+Antigravity's `none` is a hook that agy runs through the shell, and every check of it was made on Linux. Nobody has run that hook on Windows, so whether it denies every tool there is not shown. cli-funnel's own checks still apply (the hook is run once before the first run and a tool that finishes stops the run), but treat `none` on Windows as unverified. Because the caller's MCP servers are the only tools a `none` run may use, a run that passes `mcpServers` at `none` on Windows is refused with `unsupported` until a live Windows run shows the hook denying other tools.
+
 ## Why some are missing
 
 `supervised` needs a way to pass an approve button through. A headless CLI has no terminal, so it either supports a control channel or it auto-denies. Two of the four support one.

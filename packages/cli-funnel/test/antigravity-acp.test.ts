@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -490,6 +490,65 @@ describe.skipIf(process.platform === "win32")("antigravity over ACP, with a fake
     expect((await drain(input({ mcpServers }))).at(-1)).toMatchObject({ type: "done" });
     fakeAgy({ script: [call("tool_call", "mcp_notes_add_note", "in_progress"), call("tool_call_update", "mcp_notes_add_note", "completed"), done] });
     expect((await drain(input({ mcpServers }))).at(-1)).toMatchObject({ type: "error", message: expect.stringContaining('"mcp_notes_add_note" ran at access "none"') });
+  });
+
+  describe("the folder of a run with servers at none", () => {
+    const mcpServers = { notes: { type: "http" as const, url: "http://127.0.0.1:9/mcp" } };
+    const workspaces = () => join(process.env.XDG_CACHE_HOME!, "cli-funnel", "workspaces");
+    const runFolders = () => (existsSync(workspaces()) ? readdirSync(workspaces()).filter((n) => /\.run\.[0-9a-f]{8}$/.test(n)) : []);
+
+    it("is removed when the run fails before agy starts, here when the hook is not shown to deny", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "cf-fake-sh-"));
+      writeFileSync(join(dir, "sh"), "#!/bin/sh\nexit 0\n");
+      chmodSync(join(dir, "sh"), 0o755);
+      const old = process.env.PATH;
+      process.env.PATH = `${dir}:${old}`;
+      forgetVerifiedHooks();
+      const agy = fakeAgy();
+      try {
+        await expect(drain(input({ mcpServers }))).rejects.toMatchObject({ code: "unsupported" });
+      } finally {
+        process.env.PATH = old;
+        forgetVerifiedHooks();
+      }
+      expect(runFolders()).toEqual([]);
+      expect(() => agy.received()).toThrow();
+    });
+
+    it("is marked as in use and given its hook back at the start of every turn, so a sweep keeps it", async () => {
+      fakeAgy();
+      const funnel = createFunnel({ providers: { antigravity: antigravityProvider }, sessions: { keepAlive: true } });
+      const selection = { provider: "antigravity" as const, model: "gemini-3.8-flash", effort: "low", cwd: tmpdir(), access: "none" as const };
+      try {
+        const first = await funnel.run({ selection, prompt: "one", mcpServers });
+        const [name] = runFolders();
+        expect(name).toBeDefined();
+        const folder = join(workspaces(), name!);
+        // Three days without a turn, and the hook file gone, as after a sweep that took the folder's files.
+        const old = new Date(Date.now() - 3 * 24 * 3_600_000);
+        rmSync(join(folder, ".agents", "hooks.json"));
+        utimesSync(folder, old, old);
+        await funnel.run({ selection, prompt: "two", mcpServers, sessionId: first.sessionId });
+        expect(Date.now() - statSync(folder).mtimeMs).toBeLessThan(60_000);
+        expect(JSON.parse(readFileSync(join(folder, ".agents", "hooks.json"), "utf8"))["cli-funnel-none"].PreToolUse).toHaveLength(1);
+      } finally {
+        funnel.close();
+      }
+    });
+
+    it("is refused on Windows, where the hook has not been shown to deny, before anything is made", async () => {
+      const agy = fakeAgy();
+      const before = runFolders();
+      const real = process.platform;
+      Object.defineProperty(process, "platform", { value: "win32" });
+      try {
+        await expect(drain(input({ mcpServers }))).rejects.toMatchObject({ code: "unsupported", message: expect.stringContaining("only off Windows") });
+        expect(() => agy.received()).toThrow();
+      } finally {
+        Object.defineProperty(process, "platform", { value: real });
+      }
+      expect(runFolders()).toEqual(before);
+    });
   });
 
   it("refuses a caller server named like a reserved one, and a tool timeout, before any process starts", async () => {

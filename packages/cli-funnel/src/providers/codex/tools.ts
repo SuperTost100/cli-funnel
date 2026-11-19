@@ -1,3 +1,5 @@
+import { FunnelError } from "../../types.js";
+
 /**
  * Feature flags that add tools or side effects. `none` turns them off. Checked against
  * `codex features list` on 0.166. Unknown keys are ignored by Codex, so a renamed flag fails open:
@@ -44,6 +46,9 @@ export function configServers(res: unknown): string[] {
  * name with a dot: `mcp_servers.a.b.enabled` is server `a`. Codex merges the table into the config, checked on 0.166.
  */
 export function noToolsConfig(servers: string[], callers: Record<string, Record<string, unknown>> = {}): Record<string, unknown> {
+  // The run refuses such a name before it gets here. This keeps a caller's server from taking the place of one that is switched off.
+  const taken = Object.keys(callers).filter((name) => servers.includes(name));
+  if (taken.length) throw new FunnelError(`MCP server ${taken.join(", ")} is already in the user's Codex config. Give the server another name.`, "invalid-selection");
   const table = { ...Object.fromEntries(servers.map((name) => [name, { enabled: false }])), ...callers };
   return Object.fromEntries([
     ...TOOL_FEATURES.map((f) => [`features.${f}`, false]),

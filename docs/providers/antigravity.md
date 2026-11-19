@@ -63,7 +63,7 @@ Stderr is a separate pipe from the stream, so a warning can be read before or af
 | JSON schema | asked for in the prompt over ACP, `--json-schema` on `print` |
 | File changes | yes, from the file tools and a plain `rm` |
 | Plans | yes, when the agent keeps a `task.md` |
-| MCP servers | `http` and `stdio`, at `full` on both transports and at `none` over ACP, where they are the model's only tools |
+| MCP servers | `http` and `stdio`, at `full` on both transports and at `none` over ACP off Windows, where they are the model's only tools |
 | API key | yes, on `print` only |
 | Questions | no |
 | Sandbox | no |
@@ -207,6 +207,8 @@ Caveats seen on 1.5.12:
 - Over HTTP the `Authorization` header is on every `POST`, but not on the `GET` that opens the event stream.
 - The model discovers servers by looking, for example `ls ~/.gemini/antigravity-cli/mcp`, which `none` refuses, so name the server in the prompt.
 - `toolTimeoutSec` is refused with `unsupported`: the ACP server has no such field. The `print` transport has one.
+- **A server at `none` should not read or write files in the run's folder.** A stdio server starts in that folder, because the ACP server entry has no `cwd` field (and no timeout), and the folder holds the hook file `.agents/hooks.json`. A server that rewrote it could take the hook away for the rest of the turn. cli-funnel puts the folder and the hook back before every turn, and marks the folder as in use so another process's sweep leaves it, but it cannot stop a server inside a turn. If your server needs a working folder of its own, have its command change into it first.
+- **Not on Windows.** MCP servers at `none` are refused there with `unsupported`, until a live run on Windows shows the hook denying other tools. The hook's command is a `cmd.exe` line that has not been run on Windows. `capabilities.mcpServersAtNone` still lists both types, since it does not vary by platform: check the platform too.
 - The `print` transport refuses `none` with servers. It reports a server as `funnel_<name>` in `call_mcp_tool`, and the events map that back too.
 
 ### Over `print`

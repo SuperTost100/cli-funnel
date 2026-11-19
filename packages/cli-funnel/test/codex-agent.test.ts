@@ -744,6 +744,15 @@ describe("codex agent features through the app-server", () => {
     expect(entries().filter((e) => e.method === "thread/start")).toHaveLength(1);
   });
 
+  it("refuses a caller's server named like one in the user's config at every level and on resume, before a thread starts", async () => {
+    process.env.FAKE_MCP = JSON.stringify({ app: { url: "http://x" } });
+    for (const access of ["none", "auto", "full"] as const) {
+      await expect(run("plain", { selection: { provider: "codex", model: "m", cwd, access }, mcpServers: { app: http() } }), access).rejects.toMatchObject({ code: "invalid-selection" });
+    }
+    await expect(run("plain", { selection: { provider: "codex", model: "m", cwd, access: "none" }, sessionId: "thread-1", mcpServers: { app: http() } })).rejects.toMatchObject({ code: "invalid-selection" });
+    expect(entries().some((e) => e.method === "thread/start" || e.method === "thread/resume")).toBe(false);
+  });
+
   it("at none switches off every MCP server the app-server's config/read reports, dotted names too", async () => {
     process.env.FAKE_MCP = JSON.stringify({ "a.b": { command: "x", enabled: true }, under: { command: "y" }, off: { command: "z", enabled: false } });
     await run("plain", { selection: { provider: "codex", model: "m", cwd, access: "none" } });

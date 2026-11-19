@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
-import { lstat, mkdir, mkdtemp, readdir, realpath, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, realpath, rename, rm, stat, symlink, unlink, utimes, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { manifestModels, mergeModels } from "../../catalog/manifest.js";
@@ -243,6 +243,17 @@ export function noneWorkspace(caller?: string, run?: string): Promise<string> {
 
 /** Removes the folder of a run with MCP servers once the run is over. */
 export const removeRunWorkspace = (dir: string): Promise<void> => rm(dir, { recursive: true, force: true });
+
+/**
+ * Refuses the caller's MCP servers at `none` on Windows. They are the only tools the model may use there, and the hook
+ * that refuses every other one is a shell command run through `cmd.exe`, which has not been shown to deny on Windows. A
+ * tool that gets past it would be a tool the caller did not list. Lift this once a live run on Windows shows the deny.
+ */
+export function requireMcpAtNoneHere(servers: readonly unknown[], platform: NodeJS.Platform = process.platform): void {
+  if (platform === "win32" && servers.length) {
+    throw new FunnelError('Antigravity takes MCP servers at access "none" only off Windows. The hook that keeps every other tool off has not been shown to deny there. Use another access level, or leave the servers out.', "unsupported");
+  }
+}
 
 /**
  * Removes the folders of runs that ended without cleaning up, such as a host that exited before agy did. Only folders
@@ -650,6 +661,7 @@ async function acpSetup(input: RunInput): Promise<AcpSetup> {
   const servers = mcpServersFor(input, ["http", "stdio"], "Antigravity", ["http", "stdio"]);
   // At accept-edits agy asks about every MCP call, and nobody can answer there.
   if (servers.length) requireAccess(access, ["none", "full"], "Antigravity MCP servers");
+  if (access === "none") requireMcpAtNoneHere(servers);
   checkAcpServers(servers);
   // The names the servers have inside agy carry a random part of this run, so nothing that exists beforehand can share them.
   const run = randomBytes(4).toString("hex");
@@ -657,14 +669,23 @@ async function acpSetup(input: RunInput): Promise<AcpSetup> {
   // A run at `none` with servers has a folder of its own, removed when the process ends. The hook that runs there is
   // shown to deny before anything starts.
   if (access === "none" && servers.length) await sweepRunWorkspaces();
-  const cwd = access === "none" ? await noneWorkspace(input.workspaceName, servers.length ? run : undefined) : input.selection.cwd!;
-  if (access === "none") await requireWorkingHook(servers.length ? run : undefined);
-  const args = [
-    ...(dirs ?? []).map((d) => flag("--add-dir", d)),
-    ...(access === "full" ? ["--dangerously-skip-permissions"] : []),
-    // At `none` the user's own agy setup stays out: see `noneGeminiDir`.
-    ...(access === "none" ? [flag("--gemini-dir", await noneGeminiDir())] : []),
-  ];
+  const ownsFolder = access === "none" && servers.length > 0;
+  const folderRun = ownsFolder ? run : undefined;
+  const cwd = access === "none" ? await noneWorkspace(input.workspaceName, folderRun) : input.selection.cwd!;
+  // Up to the moment agy starts, a failure takes the run's own folder with it.
+  let args: string[];
+  try {
+    if (access === "none") await requireWorkingHook(folderRun);
+    args = [
+      ...(dirs ?? []).map((d) => flag("--add-dir", d)),
+      ...(access === "full" ? ["--dangerously-skip-permissions"] : []),
+      // At `none` the user's own agy setup stays out: see `noneGeminiDir`.
+      ...(access === "none" ? [flag("--gemini-dir", await noneGeminiDir())] : []),
+    ];
+  } catch (err) {
+    if (ownsFolder) await removeRunWorkspace(cwd).catch(() => undefined);
+    throw err;
+  }
   return {
     path,
     cwd,
@@ -680,23 +701,44 @@ async function acpSetup(input: RunInput): Promise<AcpSetup> {
     mcpServers: mcp.acp,
     mcpCallers: mcp.callers,
     ...(access === "none" && servers.length ? { allowMcp: new Set(mcp.reserved) } : {}),
+    // Before every turn at `none`: the folder and the hook in it are put back as they should be, and a folder of a run is
+    // marked as in use, so the sweep of another process, which goes by the time of its last change, leaves it alone.
+    ...(access === "none"
+      ? {
+          refresh: async () => {
+            await noneWorkspace(input.workspaceName, folderRun);
+            if (ownsFolder) await utimes(cwd, new Date(), new Date());
+          },
+        }
+      : {}),
     cleanup: async () => {
-      if (access === "none" && servers.length) await removeRunWorkspace(cwd);
+      if (ownsFolder) await removeRunWorkspace(cwd);
     },
   };
 }
 
 const transportOf = (input: RunInput) => checkOptions(input).transport;
 
+/** Opens the session. When that fails, the run's own folder goes with it, since nothing else would remove it. */
+async function openAcp(input: RunInput): Promise<LiveSession> {
+  const setup = await acpSetup(input);
+  try {
+    return await openAcpSession(input, setup);
+  } catch (err) {
+    await setup.cleanup().catch(() => undefined);
+    throw err;
+  }
+}
+
 async function openSession(input: RunInput): Promise<LiveSession | undefined> {
   // The print transport starts a process per turn and keeps nothing alive, so it has no live session. The funnel runs it directly.
   if (transportOf(input) === "print") return undefined;
-  return openAcpSession(input, await acpSetup(input));
+  return openAcp(input);
 }
 
 async function* runRaw(input: RunInput): AsyncGenerator<FunnelEvent> {
   if (transportOf(input) === "print") return yield* runPrint(input);
-  const session = await openAcpSession(input, await acpSetup(input));
+  const session = await openAcp(input);
   try {
     yield* session.turn(input);
   } finally {
@@ -765,6 +807,7 @@ export const antigravityProvider: Provider = {
     // ACP has no schema field. The `print` transport passes `--json-schema`, but the default does not.
     schema: "prompt",
     mcpServers: ["http", "stdio"],
+    // Not on Windows: the run refuses servers at `none` there with `unsupported`, see `requireMcpAtNoneHere`.
     mcpServersAtNone: ["http", "stdio"],
     apiKey: true,
     plan: true,

@@ -88,7 +88,9 @@ export interface Capabilities {
    *   features are off, and the servers of the user's config are switched off by name. No guard.
    * - Antigravity over ACP: a hook that denies every tool but `finish` and the tools of a name made for this run, the
    *   client's answers to permission requests, a guard that stops the run if another tool finishes, and a private
-   *   `--gemini-dir` so the user's own servers do not start. The print transport refuses servers at `none`.
+   *   `--gemini-dir` so the user's own servers do not start. The print transport refuses servers at `none`, and so does
+   *   every transport on Windows (`unsupported`), until a live Windows run shows the hook denying other tools. The list
+   *   does not vary by platform.
    * Cursor Agent lists nothing: it cannot keep the user's servers out while it allows the caller's.
    */
   mcpServersAtNone?: McpServer["type"][];

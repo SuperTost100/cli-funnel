@@ -286,5 +286,7 @@ describe("codex none: configured MCP servers", () => {
     expect(config.mcp_servers).toEqual({ "a.b": { enabled: false }, plain: { enabled: false } });
     expect(Object.keys(config).some((k) => k.startsWith("mcp_servers."))).toBe(false);
     expect(noToolsConfig([])).not.toHaveProperty("mcp_servers");
+    // A caller's server with the name of one that is switched off would take its place, so the table refuses it.
+    expect(() => noToolsConfig(["a.b", "plain"], { plain: { url: "http://x" } })).toThrow(/plain/);
   });
 });

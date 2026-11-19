@@ -34,7 +34,9 @@ describe.skipIf(!LIVE)("a user's own agy setup in a none run, live", () => {
     // A home folder of its own whose agy config holds a stdio server that writes a line to a file when it starts. Its
     // data folder is a link to the real one, so the sign-in is the real one. Nothing of the real config is touched.
     const home = mkdtempSync(join(tmpdir(), "cf-user-home-"));
-    mkdirSync(join(home, ".gemini", "config"), { recursive: true });
+    mkdirSync(join(home, ".gemini", "config", "skills"), { recursive: true });
+    // Without this marker agy migrates a Gemini folder on its first start, and through the link below that moved the real skills.
+    writeFileSync(join(home, ".gemini", "config", ".migrated"), "");
     symlinkSync(join(homedir(), ".gemini", "antigravity-cli"), join(home, ".gemini", "antigravity-cli"));
     const log = join(home, "marker.log");
     writeFileSync(join(home, ".gemini", "config", "mcp_config.json"), JSON.stringify({ mcpServers: { usermarker: { command: process.execPath, args: [marker, "user-config"], env: { MARKER_FILE: log }, disabled: false } } }));
