@@ -582,7 +582,7 @@ describe("codex agent features through the app-server", () => {
     const first = "Configured value is disallowed by requirements.";
     process.env.FAKE_WARNINGS = JSON.stringify([first]);
     process.env.FAKE_AFTER_DONE = JSON.stringify(["Guardian paused.", first]);
-    const session = await codexProvider.openSession!({ selection: { provider: "codex", model: "m", cwd, access: "supervised" }, prompt: "first" });
+    const session = (await codexProvider.openSession!({ selection: { provider: "codex", model: "m", cwd, access: "supervised" }, prompt: "first" }))!;
     try {
       const turn = async (prompt: string) => {
         const out: FunnelEvent[] = [];

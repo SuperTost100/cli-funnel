@@ -95,7 +95,8 @@ export function createOpenAICompatibleProvider(endpoint: OpenAICompatibleEndpoin
   return {
     id,
     displayName: endpoint.name,
-    capabilities: httpCapabilities({ effort: efforts.length > 0 }),
+    // A server in `responses` mode keeps the response, and one that ignores `store: false` would keep it anyway. Nothing here can tell, so it takes no `persist: false`.
+    capabilities: httpCapabilities({ effort: efforts.length > 0, ephemeral: endpoint.mode !== "responses" }),
     detect,
     authStatus,
     ...httpAccount({

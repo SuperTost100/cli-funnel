@@ -339,7 +339,10 @@ export interface Failure {
 const RESET_TIMESTAMP = /quotaResetTimeStamp"?\s*[:=]\s*"?([^\s",\]}]+)/;
 const RESET_DELAY = /quotaResetDelay"?\s*[:=]\s*"?([0-9a-zµμ.]+)/;
 const RETRY_DELAY = /retryDelay"?\s*[:=]\s*"?([0-9a-zµμ.]+)/;
+// Found inside a longer failure text, where the wording is the harness's own.
 const API_ERROR = /Error (\d{3}), Message: (.+?), Status: ([A-Z_]+)/s;
+// A whole reply that is nothing but the diagnostic. Prose that quotes it does not match.
+const API_ERROR_REPLY = /^\s*Error (\d{3}), Message: ([^\n]+?), Status: ([A-Z_]+)\s*$/;
 
 /** Go durations may carry µs and ns, which `parseDuration` does not read. They are far below what a limit asks for, so they count as 0. */
 function goDuration(text: string | undefined): number | undefined {
@@ -354,7 +357,8 @@ function goDuration(text: string | undefined): number | undefined {
  * `quotaResetTimeStamp`, else the delay Google's error carries (`quotaResetDelay`, `retryDelay`).
  */
 export function limitFrom(text: string, now = Date.now()): Limit | undefined {
-  const quota = /QUOTA_EXHAUSTED|quota/i.test(text);
+  // `quota` alone is not enough: an auth error can talk about a "quota project". It has to say a quota ran out.
+  const quota = /QUOTA_EXHAUSTED|quotaReset|\bquota\b[^.]{0,60}\b(?:exceed|exhaust|reach|limit)|\b(?:exceed|exhaust|reach)\w*\b[^.]{0,60}\bquota\b/i.test(text);
   if (!quota && !/RESOURCE_EXHAUSTED|\b429\b|rate.?limit/i.test(text)) return undefined;
   const stamp = RESET_TIMESTAMP.exec(text)?.[1];
   const parsed = stamp ? Date.parse(stamp) : NaN;
@@ -375,17 +379,20 @@ const AUTH = /not (?:logged|signed) in|sign in|log ?in required|authentication (
 /** What a JSON-RPC error from `agy acp` means for the run. */
 export function failureFromError(error: { code?: number; message?: string; data?: unknown }): Failure {
   const text = `${error.message ?? ""} ${error.data === undefined ? "" : typeof error.data === "string" ? error.data : JSON.stringify(error.data)}`;
-  const limit = limitFrom(text);
-  if (limit) return { message: limit.detail, code: "cli-failed", limit };
+  // Subscription and sign-in first: their texts can mention a quota project, and they must not read as a limit.
   if (/SUBSCRIPTION_REQUIRED/.test(text)) return { message: "This Google account has no Antigravity subscription (SUBSCRIPTION_REQUIRED).", code: "cli-failed" };
   if (AUTH.test(text)) return { message: "Run agy in a terminal and sign in.", code: "not-logged-in" };
+  const limit = limitFrom(text);
+  if (limit) return { message: limit.detail, code: "cli-failed", limit };
   return { message: (error.message ?? "agy acp failed.").trim() || "agy acp failed.", code: "cli-failed" };
 }
 
 /**
  * The failure behind a turn that ended with `end_turn` or `refusal`. agy maps only the quota stop reason to
  * `refusal`. An upstream API failure arrives as a chat message and `end_turn`, in the Go harness's wording
- * `Error 429, Message: ..., Status: RESOURCE_EXHAUSTED`, so a reply that holds that wording is read as the failure.
+ * `Error 429, Message: ..., Status: RESOURCE_EXHAUSTED`. Only a reply that is that line and nothing else is read as the
+ * failure: an answer that quotes the wording in prose, in a code span or after other text is the model's own, and a
+ * successful turn stays successful.
  */
 export function failureFromTurn(stopReason: string, text: string): Failure | undefined {
   if (stopReason === "refusal") {
@@ -393,7 +400,7 @@ export function failureFromTurn(stopReason: string, text: string): Failure | und
     const found = limitFrom(text);
     return { message: quota, code: "cli-failed", limit: { ...found, kind: "quota", detail: found?.detail ?? quota } };
   }
-  const api = API_ERROR.exec(text);
+  const api = API_ERROR_REPLY.exec(text);
   if (!api) return undefined;
   const failure = failureFromError({ message: text });
   return failure.limit ? failure : { message: api[2]!.trim(), code: "cli-failed" };

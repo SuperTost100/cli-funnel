@@ -45,7 +45,7 @@ describe.skipIf(!LIVE)("persist: false, live", () => {
     };
     const before = chats("agent-none").length;
     const r = await funnel.run({ selection, prompt: "Reply with the single word OK.", workspaceName: "cf-live-test" });
-    expect(chats("agent-none-cf-live-test")).toContain(r.sessionId);
+    expect(chats("agent-none.cf-live-test")).toContain(r.sessionId);
     expect(chats("agent-none")).toHaveLength(before);
   }, 180_000);
 });

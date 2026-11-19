@@ -4,12 +4,15 @@ import { basename, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFunnel } from "../src/funnel.js";
 import { memoryHistory } from "../src/providers/history.js";
+import { responsesBody } from "../src/providers/responses.js";
+import { createOpenAICompatibleProvider } from "../src/providers/openai-compatible.js";
 import { buildArgs as claudeArgs, claudeProvider } from "../src/providers/claude/index.js";
 import { codexProvider } from "../src/providers/codex/index.js";
 import { threadOptions } from "../src/providers/codex/options.js";
 import { agentProvider, noneWorkspace as agentNone } from "../src/providers/agent/index.js";
 import { antigravityProvider, noneWorkspace as agyNone } from "../src/providers/antigravity/index.js";
 import { FunnelError, type FunnelEvent, type Provider, type RunInput } from "../src/types.js";
+import { workspaceFor } from "../src/util/workspace.js";
 
 const base = (over: Partial<RunInput> = {}, access: "none" | "auto" = "auto"): RunInput => ({
   selection: { provider: "claude", model: "m", cwd: "/tmp", access },
@@ -128,11 +131,53 @@ describe.skipIf(process.platform === "win32")("workspaceName", () => {
     vi.stubEnv("XDG_CACHE_HOME", home);
     try {
       expect(basename(await agentNone())).toBe("agent-none");
-      expect(basename(await agentNone("pyxis"))).toBe("agent-none-pyxis");
-      expect(basename(await agyNone("pyxis"))).toBe("antigravity-none-pyxis");
+      expect(basename(await agentNone("pyxis"))).toBe("agent-none.pyxis");
+      expect(basename(await agyNone("pyxis"))).toBe("antigravity-none.pyxis");
       expect(await agentNone("pyxis")).not.toBe(await agentNone("other"));
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+describe("persist: false on the Responses API", () => {
+  const sel = { provider: "openai-api" as const, model: "gpt-5-pro", cwd: "/tmp", access: "full" as const };
+
+  it("sends store: false, since OpenAI stores a response unless told not to", () => {
+    expect(responsesBody({ selection: sel, prompt: "hi", persist: false })).toMatchObject({ store: false });
+    expect(responsesBody({ selection: sel, prompt: "hi" })).not.toHaveProperty("store");
+    expect(responsesBody({ selection: sel, prompt: "hi", persist: true })).not.toHaveProperty("store");
+  });
+
+  it("is refused on an OpenAI-compatible endpoint in responses mode, which may ignore store, and kept in chat mode", () => {
+    const make = (mode?: "chat" | "responses") => createOpenAICompatibleProvider({ id: "local", name: "Local", baseUrl: "http://box:1/v1", ...(mode ? { mode } : {}) });
+    expect(make("responses").capabilities.ephemeral).toBe(false);
+    expect(make("chat").capabilities.ephemeral).toBe(true);
+    expect(make().capabilities.ephemeral).toBe(true);
+  });
+
+  it("is refused by the funnel for such an endpoint, before any request", async () => {
+    const calls: unknown[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (...a: unknown[]) => { calls.push(a); return new Response("{}"); }));
+    try {
+      const funnel = createFunnel({ openaiCompatible: [{ id: "local", name: "Local", baseUrl: "http://box:1/v1", mode: "responses" }], allowUnlistedModels: true });
+      await expect(funnel.run({ selection: { provider: "openai-compatible:local", model: "m", cwd: "/tmp", access: "full" }, prompt: "hi", persist: false })).rejects.toMatchObject({ code: "unsupported" });
+      expect(calls.filter((c) => String((c as string[])[0]).includes("/responses"))).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("workspaceFor", () => {
+  it("joins the parts with a character a caller's name cannot hold, so no two callers or kinds share a folder", () => {
+    expect(workspaceFor("agent-none", undefined)).toBe("agent-none");
+    expect(workspaceFor("agent-none", "pyxis")).toBe("agent-none.pyxis");
+    const all = ["x", "mcp", "x-mcp", "a-b", "a_b"].map((n) => workspaceFor("agent-none", n));
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  it("refuses a name that is not 1 to 40 letters, digits, _ or -, whoever calls it", () => {
+    for (const bad of ["", "a.b", "../x", "a/b", "a b", "x".repeat(41), "é"]) expect(() => workspaceFor("agent-none", bad), bad).toThrow(FunnelError);
   });
 });

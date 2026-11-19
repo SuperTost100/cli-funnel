@@ -44,7 +44,7 @@ When the CLI says it started narrower, the run gets an `access.reduced` event ri
 |---|---|
 | Codex | The sandbox in the `thread/start` or `thread/resume` answer against the one that was sent. `reason` is the `configWarning` text about the sandbox. |
 | Claude Code | `permissionMode` in `init` against the mode the level maps to, at `accept-edits`, `auto` and `full`. |
-| Antigravity | `permission_mode` in `init` at `full`: anything but `always-proceed` is reported. The other levels start in the same mode whatever their flags, so they are not checked. |
+| Antigravity | On the `print` transport only: `permission_mode` in `init` at `full`, where anything but `always-proceed` is reported. The other levels start in the same mode whatever their flags, so they are not checked. The default ACP transport reports nothing, because a session started with `--dangerously-skip-permissions` still says mode `default`: do not wait for `access.reduced` there. |
 | Cursor Agent | Nothing. Its `init` says `default` whatever the flags, so the funnel cannot tell. |
 
 Codex also checks the approval policy. If it started with a policy that asks less often than the level needs, the run fails with code `cli-failed` and a message that names both policies, because at `supervised` a forced `never` would run commands without asking `onApproval`. A policy that asks more often is not reported.

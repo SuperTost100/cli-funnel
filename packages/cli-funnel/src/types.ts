@@ -142,7 +142,7 @@ export interface Selection {
  * Token counts of a run. Every provider follows one convention: `inputTokens` is everything the model read, the cached
  * part included, so `totalTokens` is `inputTokens + outputTokens`. `cachedInputTokens`, `cacheCreationInputTokens` and
  * `reasoningTokens` are shares of those two numbers, not additions to them. Fresh input is
- * `inputTokens - cachedInputTokens - cacheCreationInputTokens`.
+ * `inputTokens - (cachedInputTokens ?? 0) - (cacheCreationInputTokens ?? 0)`.
  */
 export interface Usage {
   /** All input tokens, cached ones included. */
@@ -381,7 +381,7 @@ export type FunnelEvent =
   /**
    * The CLI started with less access than `selection.access` asked for, for example when a managed policy allows only a
    * read-only sandbox or switches a permission mode off. It follows `session`, and the run goes on with what the CLI
-   * allowed. Codex, Claude Code and Antigravity (at `full`) report it. Cursor Agent does not state its mode, so it never does.
+   * allowed. Codex, Claude Code and Antigravity on the `print` transport (at `full`) report it. Cursor Agent does not state its mode, so it never does.
    */
   | ({ type: "access.reduced" } & AccessReduced)
   /**
@@ -677,7 +677,7 @@ export interface RunInput {
   /**
    * A name for the private folder that Cursor Agent and Antigravity run in at access `none`, so the conversations of
    * one app pile up apart from those of every other app that uses cli-funnel. Letters, digits, `_` and `-`, up to 40.
-   * The folder is `agent-none-<name>` or `antigravity-none-<name>` under `~/.cache/cli-funnel/workspaces/`. Default: one
+   * The folder is `agent-none.<name>` or `antigravity-none.<name>` under `~/.cache/cli-funnel/workspaces/`. Default: one
    * folder shared by every caller. Other providers ignore it.
    */
   workspaceName?: string;
@@ -950,9 +950,10 @@ export interface Provider {
   /**
    * Starts a CLI process that stays alive across turns, for `createFunnel({ sessions: { keepAlive: true } })`. The
    * process is set up from `input`: its selection, system prompt, schema, env, approval handler and `sessionId` to
-   * resume. Run the turns with `turn()`, the first one included.
+   * resume. Run the turns with `turn()`, the first one included. Resolves with `undefined` when this run has no live
+   * session, and the funnel then runs it with `run()` and keeps no process for it.
    */
-  openSession?(input: RunInput): Promise<LiveSession>;
+  openSession?(input: RunInput): Promise<LiveSession | undefined>;
   /** Lists the conversations the CLI saved. Codex only. */
   listThreads?(options?: ListThreadsOptions): Promise<ThreadPage>;
   /** Copies a saved conversation into a new one and returns its session id. The original stays as it was. Codex only. */
