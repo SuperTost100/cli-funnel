@@ -8,24 +8,33 @@ type ToolStart = Extract<FunnelEvent, { type: "tool.start" }>;
  * should have been refused is seen to finish without an error, the rules did not apply, and the run must stop.
  *
  * `forbidden` says which calls must never finish at `none`. A call that ends with an error was refused, which is what
- * is meant to happen.
+ * is meant to happen. A subagent's calls count like any other, so those with a `parentId` are checked too. Make one
+ * guard per turn: it holds each call from its start to its end and no longer.
  */
 export function createNoneGuard(forbidden: (start: ToolStart) => boolean) {
   const started = new Map<string, ToolStart>();
   return {
     /** The reason to stop the run, or undefined. Give it every event of the run in order. */
     check(e: FunnelEvent): string | undefined {
-      if (e.type === "tool.start" && !e.parentId) started.set(e.id, e);
-      if (e.type !== "tool.end" || e.parentId || e.error !== undefined) return undefined;
+      if (e.type === "tool.start") started.set(e.id, e);
+      if (e.type !== "tool.end") return undefined;
       const call = started.get(e.id);
-      if (!call || !forbidden(call)) return undefined;
+      started.delete(e.id);
+      if (!call || e.error !== undefined || !forbidden(call)) return undefined;
       return `The tool "${call.name}" ran at access "none", where every tool is refused. The rules that keep tools off did not apply, so the run was stopped.`;
     },
+    /** How many calls have started and not ended. */
+    pending: () => started.size,
   };
 }
 
-/** Cursor Agent's tools that touch the machine or the network, as `tool.start` names them. Glob and grep only see the empty folder `none` runs in. */
-const CURSOR_FORBIDDEN = new Set(["shell", "read", "edit", "write", "delete", "mcp", "task", "webFetch", "webSearch", "fetch"]);
+/**
+ * Cursor Agent's tools that can complete at `none` without touching the machine or the network: glob and grep see only
+ * the empty folder `none` runs in, and the rest ask or plan. A normal answer at `none` calls `read`, which the deny
+ * rules refuse with an error, and nothing else. Any other tool that completes, a name this list does not know included,
+ * means the rules did not apply.
+ */
+const CURSOR_HARMLESS = new Set(["glob", "grep", "getMcpTools", "updateTodos", "createPlan", "askQuestion"]);
 
-/** For Cursor Agent: a call to one of its tools that reach the machine must never finish at `none`. */
-export const cursorNoneGuard = () => createNoneGuard((start) => CURSOR_FORBIDDEN.has(start.name));
+/** For Cursor Agent: only a tool of the harmless list may complete without an error at `none`. */
+export const cursorNoneGuard = () => createNoneGuard((start) => !CURSOR_HARMLESS.has(start.name));

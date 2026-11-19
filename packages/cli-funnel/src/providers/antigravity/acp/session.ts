@@ -61,6 +61,9 @@ export interface AcpSetup {
 /** How long agy gets to end a cancelled turn. After that the turn ends as cancelled and the process stops. */
 const CANCEL_GRACE_MS = 5000;
 
+/** `CLI_FUNNEL_ACP_CANCEL_GRACE_MS` shortens the grace in tests. */
+const cancelGrace = (): number => Number(process.env.CLI_FUNNEL_ACP_CANCEL_GRACE_MS) || CANCEL_GRACE_MS;
+
 /** How long a setup request may take. `session/new` answers in a few hundred milliseconds. */
 const SETUP_TIMEOUT_MS = 60_000;
 
@@ -71,6 +74,8 @@ interface Turn {
   input: RunInput;
   out: Channel<FunnelEvent>;
   mapper?: ReturnType<typeof createAcpMapper>;
+  /** The check that keeps a tool from finishing at `none`. Made for this turn only. */
+  guard?: ReturnType<typeof createNoneGuard>;
   finished: boolean;
   /** True until the output channel is closed. A verbose turn waits a moment after `finished`, and what arrives in it is kept. */
   open: boolean;
@@ -113,9 +118,12 @@ export async function openAcpSession(first: RunInput, setup: AcpSetup): Promise<
     closed = true;
     proc.kill();
   };
-  // Only `finish` may complete at `none`, which ends a turn and carries nothing out, and the calls the mapper tagged as
-  // the run's own MCP servers. A call to a user's server is neither.
-  const guard = access === "none" ? createNoneGuard((start) => start.name !== "finish" && !start.mcp) : undefined;
+  // Only `finish` may complete at `none`, which ends a turn and carries nothing out, and the calls the mapper knows are
+  // the run's own MCP servers. A call to a user's server is neither. The mapper decides at the end of the call, with the
+  // arguments of its last update, because a call can name its server in a later update than the first. One guard per
+  // turn, so a live session does not keep the arguments of every call it ever made.
+  const newGuard = (mapper: () => ReturnType<typeof createAcpMapper> | undefined) =>
+    access === "none" ? createNoneGuard((start) => start.name !== "finish" && !mapper()?.isMcp(start.id)) : undefined;
 
   const finish = (t: Turn, events: FunnelEvent[]) => {
     if (t.finished) return;
@@ -144,7 +152,7 @@ export async function openAcpSession(first: RunInput, setup: AcpSetup): Promise<
       if (method !== "session/update" || !t || t.finished || !t.mapper || params?.sessionId !== sessionId) return;
       for (const e of t.mapper.update(params.update ?? {})) {
         // The hook that refuses tools is agy's own. A tool that finishes at `none` means it did not apply.
-        const reason = guard?.check(e);
+        const reason = t.guard?.check(e);
         if (reason) {
           stop();
           return finish(t, [{ type: "error", message: reason, code: "cli-failed" }]);
@@ -228,7 +236,7 @@ export async function openAcpSession(first: RunInput, setup: AcpSetup): Promise<
     if (current && !current.finished) throw new FunnelError("A turn is already running in this session.", "invalid-selection");
     let end!: () => void;
     const ended = new Promise<void>((resolve) => (end = resolve));
-    const t: Turn = { input, out: new Channel<FunnelEvent>(), finished: false, open: true, end, ended };
+    const t: Turn = { input, out: new Channel<FunnelEvent>(), guard: newGuard(() => t.mapper), finished: false, open: true, end, ended };
     current = t;
     proc.hold(true);
     const offStderr = input.verbose ? proc.onStderr((line) => t.open && t.out.push(rawEvent("antigravity", "stderr", line, input)), runSecrets(input)) : undefined;
@@ -246,8 +254,10 @@ export async function openAcpSession(first: RunInput, setup: AcpSetup): Promise<
       // agy ends a cancelled prompt with its own answer. If it does not, the funnel ends the turn and stops the process.
       grace = setTimeout(() => {
         forced = true;
+        // Stop it here: a consumer that has stopped reading would leave the process running until it drained the stream.
+        stop();
         finish(t, [{ type: "done", text: "", finishReason: "cancelled" }]);
-      }, CANCEL_GRACE_MS);
+      }, cancelGrace());
       grace.unref();
     };
     if (signal?.aborted) cancel();

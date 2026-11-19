@@ -79,11 +79,11 @@ const r = await funnel.run({ selection, prompt: "Grade this answer.", persist: f
 | Cursor Agent | refused with `unsupported`. `agent` has no flag, setting or command that skips saving, and it saves each chat under `~/.cursor/chats` |
 | Antigravity | refused with `unsupported`. `agy` and `agy acp` have no such option, and ACP has no `session/delete` (it answers "Method not found" on 1.5.12) |
 
-A run that is not saved cannot be resumed, so `persist: false` with a `sessionId` fails with `invalid-selection`. `capabilities.ephemeral` says which providers can do it, and a provider without it refuses the run, because saving it anyway would break the promise. On Claude Code and Codex it is the same as `providerOptions.claude.ephemeral` and `providerOptions.codex.ephemeral`, and a conflict between the two fails with `invalid-selection`. Verified live: a run with the default left its session file, a run with `persist: false` on the same tool left none (`claude-haiku-5-5`, `gpt-6-luna`).
+A run that is not saved cannot be resumed, so `persist: false` with a `sessionId` fails with `invalid-selection`, and with `sessions.keepAlive` it runs outside the live-session pool: no later turn could reach a process kept for it. `capabilities.ephemeral` says which providers can do it, and a provider without it refuses the run, because saving it anyway would break the promise. On Claude Code and Codex it is the same as `providerOptions.claude.ephemeral` and `providerOptions.codex.ephemeral`, and a conflict between the two fails with `invalid-selection`. Verified live: a run with the default left its session file, a run with `persist: false` on the same tool left none (`claude-haiku-5-5`, `gpt-6-luna`).
 
 ### Keeping apps apart on Cursor Agent and Antigravity
 
-At access `none` these two run in a folder cli-funnel owns, and each saves its chats by folder. Every app that uses cli-funnel on the machine therefore shares one chat folder: 63 chats were in Cursor's `agent-none` folder on the test machine, and every call adds one. `workspaceName` gives an app its own folder, `agent-none.<name>` or `antigravity-none.<name>` under `~/.cache/cli-funnel/workspaces/`, so its chats stay apart from every other app's and the app can see which are its own. The name is 1 to 40 letters, digits, `_` or `-`. Other providers ignore it.
+At access `none` these two run in a folder cli-funnel owns, and each saves its chats by folder. Every app that uses cli-funnel on the machine therefore shares one chat folder: 63 chats were in Cursor's `agent-none` folder on the test machine, and every call adds one. `workspaceName` gives an app its own folder, `agent-none.<name>` or `antigravity-none.<name>` under `~/.cache/cli-funnel/workspaces/`, so its chats stay apart from every other app's and the app can see which are its own. The name is 1 to 40 lowercase letters, digits, `_` or `-`: lowercase only, because macOS and Windows treat `Notes` and `notes` as one folder. Other providers ignore it.
 
 ```ts
 await funnel.run({ selection, prompt, workspaceName: "pyxis" });
@@ -255,7 +255,7 @@ await funnel.run({
 });
 ```
 
-Claude Code, Codex and Antigravity over ACP list `http` and `stdio` in `capabilities.mcpServersAtNone`. **Cursor Agent does not, and a run with `mcpServers` at `none` on it fails with `invalid-selection`.** See [Cursor Agent](providers/agent.md#mcp-servers) for why. On the three, a run with servers at `none` was checked live with a local server that has one tool, `add_note(text)`, and a prompt that asks the model to call it, to read a file and to run `touch`. The server recorded the note, the file was not read and the marker file was not created. `claude-haiku-5-5`, `gpt-6-luna` and `gemini-3.8-flash` were used, over HTTP with a bearer header and over stdio. On Antigravity a second server, set up the way a user's agy config would, was also asked for and was refused (see below).
+Claude Code, Codex and Antigravity over ACP list `http` and `stdio` in `capabilities.mcpServersAtNone`. **Cursor Agent does not, and a run with `mcpServers` at `none` on it fails with `invalid-selection`.** See [Cursor Agent](providers/agent.md#mcp-servers) for why. On the three, a run with servers at `none` was checked live with a local server that has one tool, `add_note(text)`, and a prompt that asks the model to call it, to read a file and to run `touch`. The server recorded the note, the file was not read and the marker file was not created. `claude-haiku-5-5`, `gpt-6-luna` and `gemini-3.8-flash` were used, over HTTP with a bearer header and over stdio. On Antigravity a second server, set up the way a user's agy config would, was also asked for, by both routes agy has, and was refused. Do not tell the model to use `call_mcp_tool` on Antigravity: its hook refuses that tool for every server, and one of two models tried then did not fall back to the server's own tool.
 
 A run at `none` with servers is also checked as it goes. If a tool that should have been refused finishes without an error (a built-in tool, or a server that is not yours), the rules that keep tools off did not apply, and the run is stopped with an error (`cli-failed`). The same check runs on every `none` run of Antigravity and Cursor Agent.
 
@@ -263,7 +263,7 @@ A run at `none` with servers is also checked as it goes. If a tool that should h
 | --- | --- | --- |
 | Claude Code | `--tools ""`, `--strict-mcp-config` with only your `--mcp-config`, `--setting-sources ""`, and `--allowed-tools=mcp__<server>` for each of your servers | `mcp__<server>__<tool>` |
 | Codex | your servers go in the thread's `mcp_servers` table with `default_tools_approval_mode = "approve"` and `required = true`, next to the user's servers switched off by name | `mcp:<server>/<tool>` |
-| Antigravity (ACP) | each server goes to `agy acp` under a reserved name, `clifunnel0`, `clifunnel1`, and a hook script in the run's folder lets through only `finish` and calls to exactly those names | `mcp_<server>_<tool>`, with the name you gave |
+| Antigravity (ACP) | each server goes to `agy acp` under a name with a random part for the run (`clifunnel<run>_<n>`), and a fixed deny hook in the run's own folder, shown to work before the run starts, lets through only `finish` and the tools of those names. `agy acp` starts with a private `--gemini-dir`, so the user's own servers do not start | `mcp_<server>_<tool>`, with the name you gave |
 
 The name differs per CLI, so a `tool.start` for your server carries `mcp: { server, tool }` with the names you used, on every provider. `tool.end` follows with the result as `output` where the CLI reports it, or the failure as `error`. `RunResult.toolCalls` carries the same `mcp` field.
 
@@ -275,7 +275,7 @@ for await (const e of funnel.stream(run)) {
 
 What to know:
 
-- Codex refuses a server name its config already has. Antigravity refuses a name like `clifunnel0`, which stands for one of the run's own servers inside agy, and a `toolTimeoutSec`, which its MCP server has no field for.
+- Codex refuses a server name its config already has. Antigravity refuses a name that starts with `clifunnel`, which stands for the run's own servers inside agy, and a `toolTimeoutSec`, which its MCP server has no field for.
 - Antigravity on `print` cannot do this and refuses it with `unsupported`. The default ACP transport does.
 - Codex waits for each of your servers to start before the first turn (`required = true`) and fails the thread with `cli-failed` when one cannot start. Without that, the first run with a stdio server answered without the tool once.
 - agy 1.5.12 asks for `server/discover` first. A server that does not answer an unknown method with a JSON-RPC error fails to load there, which the MCP SDKs' servers do. Over HTTP agy leaves the `Authorization` header off the stream request (`GET`), and sends it on every `POST`.

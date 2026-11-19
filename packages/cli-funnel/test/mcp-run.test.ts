@@ -1,12 +1,11 @@
-import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { accessFlags, agentProvider, NONE_PERMISSIONS, noneWorkspace as agentNone } from "../src/providers/agent/index.js";
 import { createFunnel } from "../src/funnel.js";
 import { checkAcpServers, createAcpMapper, decidePermission, reserveServers } from "../src/providers/antigravity/acp/protocol.js";
-import { mcpHookScript, NONE_MATCHER, noneHooks, noneWorkspace as agyNone } from "../src/providers/antigravity/index.js";
+import { denyCommand, exceptNames, hookDenies, NONE_MATCHER, noneHooks, noneWorkspace as agyNone, removeRunWorkspace, requireWorkingHook } from "../src/providers/antigravity/index.js";
 import { buildArgs as claudeArgs } from "../src/providers/claude/index.js";
 import { agentConfig, noneServers } from "../src/providers/codex/options.js";
 import { noToolsConfig } from "../src/providers/codex/tools.js";
@@ -81,132 +80,179 @@ describe("Codex at none with servers", () => {
 });
 
 describe("Antigravity at none with servers", () => {
-  const hookCommand = (reserved: string[]) => {
-    const hooks = noneHooks("linux", { reserved, script: "/cache/ws/.agents/mcp-hook.mjs" }) as any;
-    return hooks["cli-funnel-none"].PreToolUse[0];
-  };
+  const RUN = "ab12cd34";
+  const matches = (re: string, s: string) => new RegExp(re).test(s);
+  const hook = (run?: string) => (noneHooks("linux", run) as any)["cli-funnel-none"].PreToolUse[0];
 
-  it("sends each server to agy under a reserved name and maps it back", () => {
-    const r = reserveServers(Object.entries(servers!));
-    expect(r.reserved).toEqual(["clifunnel0", "clifunnel1"]);
-    expect(r.callers.get("clifunnel1")).toBe("local");
+  it("sends each server to agy under a reserved name with a part of this run only, and maps it back", () => {
+    const r = reserveServers(Object.entries(servers!), RUN);
+    expect(r.reserved).toEqual([`clifunnel${RUN}_0`, `clifunnel${RUN}_1`]);
+    expect(r.callers.get(`clifunnel${RUN}_1`)).toBe("local");
     expect(r.acp).toEqual([
-      { type: "http", name: "clifunnel0", url: "http://127.0.0.1:9/mcp", headers: [{ name: "Authorization", value: "Bearer secret-token" }] },
-      { name: "clifunnel1", command: "node", args: ["s.js"], env: [{ name: "A", value: "b" }] },
+      { type: "http", name: `clifunnel${RUN}_0`, url: "http://127.0.0.1:9/mcp", headers: [{ name: "Authorization", value: "Bearer secret-token" }] },
+      { name: `clifunnel${RUN}_1`, command: "node", args: ["s.js"], env: [{ name: "A", value: "b" }] },
     ]);
+    // Another run gets other names, so nothing that exists beforehand can have one of them.
+    expect(reserveServers(Object.entries(servers!), "00000000").reserved[0]).not.toBe(r.reserved[0]);
   });
 
-  it("refuses a caller name that has the reserved form, and a tool timeout ACP has no field for", () => {
+  it("refuses a caller name that starts like a reserved one, and a tool timeout ACP has no field for", () => {
     const at = (s: object) => code(() => checkAcpServers(Object.entries(s) as [string, McpServer][]));
-    expect(at({ clifunnel0: servers!.notes })).toBe("invalid-selection");
-    expect(at({ clifunnel12: servers!.notes })).toBe("invalid-selection");
-    expect(at({ clifunnel: servers!.notes, Clifunnel0x: servers!.notes, notes: servers!.notes })).toBe("ok");
+    for (const name of ["clifunnel0", "clifunnelab12cd34_0", "clifunnel", "CliFunnel1"]) expect(at({ [name]: servers!.notes }), name).toBe("invalid-selection");
+    expect(at({ notes: servers!.notes, local: servers!.local })).toBe("ok");
     expect(at({ notes: { ...servers!.notes, toolTimeoutSec: 30 } })).toBe("unsupported");
   });
 
-  describe("the hook script", () => {
-    const run = (stdin: string, reserved = ["clifunnel0", "clifunnel1"]) => {
-      const res = spawnSync(process.execPath, ["-e", mcpHookScript(reserved)], { input: stdin, encoding: "utf8" });
-      return { code: res.status, decision: res.stdout.trim() ? JSON.parse(res.stdout.trim()).decision : "none" };
+  describe("the hook of a run with servers", () => {
+    const re = () => hook(RUN).matcher as string;
+
+    it("is a fixed deny with no script: the same shell command as the hook of a run with no servers, and a matcher that leaves out only finish and this run's prefix", () => {
+      const h = hook(RUN);
+      expect(h.hooks[0].command).toContain("printf");
+      expect(h.hooks[0].command).not.toContain("node");
+      expect(h.hooks[0].command).not.toContain(process.execPath);
+      expect(hook().hooks[0].command.replace(/'[^']*'$/, "")).toBe(h.hooks[0].command.replace(/'[^']*'$/, ""));
+      expect(JSON.parse(h.hooks[0].command.match(/'(\{.*\})'$/)![1])).toMatchObject({ decision: "deny", reason: expect.stringContaining("mcp_<server>_<tool>") });
+    });
+
+    it("matches every tool name but finish and the run's own, so the hook denies them", () => {
+      for (const left of ["finish", `mcp_clifunnel${RUN}_0_add_note`, `mcp_clifunnel${RUN}_12_t`, `mcp_clifunnel${RUN}_`]) expect(matches(re(), left), left).toBe(false);
+      for (const hit of ["", "f", "finis", "finishx", "Finish", "call_mcp_tool", "run_command", "read_file", "write_file", "invoke_subagent",
+        "mcp_notes_add_note", "mcp_clifunnel0_add_note", "mcp_clifunnel00000000_0_add_note", "mcp_clifunnel", `mcp_clifunnel${RUN}`, `mcp_clifunnel${RUN.slice(0, -1)}_0_x`, `xmcp_clifunnel${RUN}_0_x`, "mcp", "usersim_other"]) {
+        expect(matches(re(), hit), hit).toBe(true);
+      }
+    });
+
+    it("agrees with the matcher of a run with no servers on everything but the run's own tools", () => {
+      const plain = hook().matcher as string;
+      expect(plain).toBe(NONE_MATCHER);
+      for (const s of ["finish", "", "f", "fini", "finishes", "write_file", "call_mcp_tool", "mcp_x_y"]) expect(matches(re(), s), s).toBe(matches(plain, s));
+    });
+
+    it("builds the complement as a trie, for names and prefixes", () => {
+      const e = exceptNames(["finish", "stop"], ["mcp_a_"]);
+      for (const left of ["finish", "stop", "mcp_a_x", "mcp_a_"]) expect(matches(e, left), left).toBe(false);
+      for (const hit of ["", "fin", "finishes", "sto", "stops", "mcp_a", "mcp_b_x", "x"]) expect(matches(e, hit), hit).toBe(true);
+    });
+  });
+
+  describe("the self-test of a hook", () => {
+    const withFakeSh = (body: string, fn: () => Promise<void>) => async () => {
+      const dir = mkdtempSync(join(tmpdir(), "cf-fake-sh-"));
+      writeFileSync(join(dir, "sh"), `#!/bin/sh.real\n`);
+      // A `sh` that is first on the PATH and runs `body` instead of the command it is given.
+      const real = "/bin/sh";
+      writeFileSync(join(dir, "sh"), `#!${real}\n${body}\n`);
+      chmodSync(join(dir, "sh"), 0o755);
+      const old = process.env.PATH;
+      process.env.PATH = `${dir}:${old}`;
+      try {
+        await fn();
+      } finally {
+        process.env.PATH = old;
+      }
     };
-    const call = (name: string, args: object = {}) => JSON.stringify({ hookEventName: "PreToolUse", toolCall: { id: "c", name, args } });
 
-    it("lets finish and this run's servers through, with no decision of its own", () => {
-      expect(run(call("finish"))).toEqual({ code: 0, decision: "none" });
-      expect(run(call("call_mcp_tool", { ServerName: "clifunnel1", ToolName: "t", Arguments: {} }))).toEqual({ code: 0, decision: "none" });
-      expect(run(call("mcp_clifunnel0_add_note", { text: "x" }))).toEqual({ code: 0, decision: "none" });
+    it("accepts the deny command as agy runs it, with a refused call on stdin", async () => {
+      expect(await hookDenies(denyCommand("linux"), "linux")).toBe(true);
+      expect(await hookDenies(denyCommand("linux", { decision: "deny", reason: "x" }), "linux")).toBe(true);
     });
 
-    it("denies every other tool, other servers by either route, and look-alike names", () => {
-      for (const [name, args] of [
-        ["run_command", { CommandLine: "ls" }],
-        ["read_file", { Path: "/etc/hostname" }],
-        ["call_mcp_tool", { ServerName: "theirs", ToolName: "t" }],
-        ["call_mcp_tool", { ServerName: "clifunnel2", ToolName: "t" }],
-        ["call_mcp_tool", { ServerName: "clifunnel", ToolName: "t" }],
-        ["call_mcp_tool", { ServerName: "clifunnel0_x", ToolName: "t" }],
-        ["call_mcp_tool", {}],
-        ["mcp_theirs_add_note", {}],
-        ["mcp_clifunnel2_add_note", {}],
-        ["mcp_clifunnel0", {}],
-        ["mcp_clifunnel0_", {}],
-        ["Finish", {}],
-        ["finish2", {}],
-        ["", {}],
-      ] as [string, object][]) {
-        expect(run(call(name, args)).decision, `${name} ${JSON.stringify(args)}`).toBe("deny");
-      }
+    it("refuses a command that exits 0 and prints nothing, which agy reads as allow", async () => {
+      for (const command of ["exit 0", "true", "cat >/dev/null", ":"]) expect(await hookDenies(command, "linux"), command).toBe(false);
     });
 
-    it("denies what it cannot read, since a hook that errors must block", () => {
-      for (const bad of ["", "not json", "{}", "[]", "null", JSON.stringify({ toolCall: null }), JSON.stringify({ toolCall: { name: 5 } })]) {
-        expect(run(bad).decision, bad).toBe("deny");
-      }
+    it("refuses a command that prints something else, fails, or answers allow", async () => {
+      for (const command of ["echo hello", "echo '{\"decision\":\"allow\"}'", "exit 3", "echo '{\"decision\":\"deny\"}'; exit 1", "sleep 0.1; echo not-json"]) expect(await hookDenies(command, "linux"), command).toBe(false);
     });
 
-    it("is a hook command that runs the Node binary of this process on a script file, with a matcher that matches every tool", () => {
-      const h = hookCommand(["clifunnel0"]);
-      expect(new RegExp(h.matcher).test("run_command")).toBe(true);
-      expect(new RegExp(h.matcher).test("mcp_clifunnel0_x")).toBe(true);
-      expect(h.hooks[0].command).toContain(process.execPath);
-      expect(h.hooks[0].command).toContain("'/cache/ws/.agents/mcp-hook.mjs'");
+    it("stops the run with `unsupported` before anything starts when the shell runs nothing, the case of a host that cannot run what the hook needs", withFakeSh("exit 0", async () => {
+      await expect(requireWorkingHook()).rejects.toMatchObject({ code: "unsupported", message: expect.stringContaining("would read it as allow") });
+      await expect(requireWorkingHook(RUN)).rejects.toMatchObject({ code: "unsupported" });
+    }));
+
+    it("passes when the shell does its job, and remembers it", async () => {
+      await expect(requireWorkingHook()).resolves.toBeUndefined();
+      await expect(requireWorkingHook(RUN)).resolves.toBeUndefined();
     });
   });
 
-  it("keeps the static hook when a run has no servers", async () => {
-    const hooks = noneHooks("linux") as any;
-    expect(hooks["cli-funnel-none"].PreToolUse[0].matcher).toBe(NONE_MATCHER);
-    expect(hooks["cli-funnel-none"].PreToolUse[0].hooks[0].command).toContain("printf");
-  });
-
-  it("writes the script and the hook into a folder of its own, one per number of servers", async () => {
+  it("gives a run with servers a folder of its own that holds the hook and the git marker, and a run with none the shared one", async () => {
     process.env.XDG_CACHE_HOME = join(tmpdir(), "cf-mcp-none-cache");
     try {
       const plain = await agyNone();
-      const a = await agyNone(undefined, 2);
-      expect(await agyNone(undefined, 2)).toBe(a);
-      expect(await agyNone(undefined, 1)).not.toBe(a);
-      expect(readdirSync(join(a, ".agents")).sort()).toEqual(["hooks.json", "mcp-hook.mjs"]);
-      expect(readFileSync(join(a, ".agents", "mcp-hook.mjs"), "utf8")).toContain('"clifunnel1"');
+      const a = await agyNone(undefined, RUN);
+      expect(a).not.toBe(plain);
+      expect(await agyNone(undefined, "00000000")).not.toBe(a);
+      expect(readdirSync(a).sort()).toEqual([".agents", ".git"]);
+      expect(readdirSync(join(a, ".agents"))).toEqual(["hooks.json"]);
+      expect(JSON.parse(readFileSync(join(a, ".agents", "hooks.json"), "utf8"))["cli-funnel-none"].PreToolUse[0].matcher).toBe(hook(RUN).matcher);
       expect(JSON.parse(readFileSync(join(plain, ".agents", "hooks.json"), "utf8"))["cli-funnel-none"].PreToolUse[0].matcher).toBe(NONE_MATCHER);
       // No name a caller can choose gives one run the folder of another.
-      const folders = [await agyNone(), await agyNone("mcp"), await agyNone("x"), await agyNone("x", 1), await agyNone("x-mcp-1"), await agyNone("mcp", 1), await agyNone(undefined, 1)];
+      const folders = [plain, await agyNone("mcp"), await agyNone("x"), await agyNone("x", RUN), await agyNone("x-run-ab12cd34"), await agyNone("run-ab12cd34"), await agyNone("run"), await agyNone("run", "00000000"), a];
       expect(new Set(folders).size).toBe(folders.length);
+      await removeRunWorkspace(a);
+      expect(existsSync(a)).toBe(false);
     } finally {
       delete process.env.XDG_CACHE_HOME;
     }
   });
 
-  it("allows a permission request for this run's reserved servers only, by exact name", () => {
+  it("allows a permission request for this run's reserved servers only, by the exact tool name, and never call_mcp_tool", () => {
     const options = [{ optionId: "allow", name: "Allow", kind: "allow_once" }, { optionId: "deny", name: "Deny", kind: "reject_once" }];
-    const reserved = new Set(["clifunnel0"]);
+    const reserved = new Set([`clifunnel${RUN}_0`]);
     const ask = (toolCall: unknown) => decidePermission({ toolCall, options }, reserved);
     const allow = { outcome: { outcome: "selected", optionId: "allow" } };
     const deny = { outcome: { outcome: "selected", optionId: "deny" } };
-    expect(ask({ name: "mcp_clifunnel0_add_note", rawInput: { text: "x" } })).toEqual(allow);
-    expect(ask({ name: "call_mcp_tool", rawInput: { ServerName: "clifunnel0", ToolName: "add_note" } })).toEqual(allow);
+    expect(ask({ name: `mcp_clifunnel${RUN}_0_add_note`, rawInput: { text: "x" } })).toEqual(allow);
+    expect(ask({ name: "call_mcp_tool", rawInput: { ServerName: `clifunnel${RUN}_0`, ToolName: "add_note" } })).toEqual(deny);
     expect(ask({ name: "call_mcp_tool", rawInput: { ServerName: "notes", ToolName: "x" } })).toEqual(deny);
-    expect(ask({ name: "mcp_notes_x" })).toEqual(deny);
-    expect(ask({ name: "mcp_clifunnel0" })).toEqual(deny);
-    expect(ask({ name: "mcp_clifunnel1_x" })).toEqual(deny);
-    expect(ask({ name: "run_command", rawInput: { CommandLine: "touch x" } })).toEqual(deny);
+    for (const name of ["mcp_notes_x", `mcp_clifunnel${RUN}_0`, `mcp_clifunnel${RUN}_1_x`, "mcp_clifunnel0_0_x", "run_command"]) expect(ask({ name }), name).toEqual(deny);
   });
 
-  it("shows the caller's own name and tags the call, and lets only those calls finish at none", () => {
-    const callers = new Map([["clifunnel0", "notes"]]);
-    const mapper = createAcpMapper("S", { access: "none", mcp: callers });
-    const guard = createNoneGuard((s) => s.name !== "finish" && !s.mcp);
-    const feed = (u: object): (FunnelEvent | "stopped")[] => mapper.update(u).flatMap((e): (FunnelEvent | "stopped")[] => (guard.check(e) ? ["stopped"] : [e]));
-    const direct = { sessionUpdate: "tool_call", toolCallId: "a", name: "mcp_clifunnel0_add_note", status: "in_progress", rawInput: { text: "x" } };
-    const [start] = feed(direct);
-    expect(start).toMatchObject({ type: "tool.start", name: "mcp_notes_add_note", mcp: { server: "notes", tool: "add_note" } });
-    expect(feed({ ...direct, sessionUpdate: "tool_call_update", status: "completed", rawOutput: { output: "saved" } })).toEqual([{ type: "tool.end", id: "S:a", output: "saved" }]);
-    const generic = { sessionUpdate: "tool_call", toolCallId: "b", name: "call_mcp_tool", status: "in_progress", rawInput: { ServerName: "clifunnel0", ToolName: "add_note", Arguments: { text: "x" } } };
-    expect(feed(generic)[0]).toMatchObject({ name: "call_mcp_tool", input: { ServerName: "notes", ToolName: "add_note" }, mcp: { server: "notes", tool: "add_note" } });
-    // A user's server of the same display name is not this run's: its tool is neither renamed nor tagged, and finishing stops the run.
-    const theirs = { sessionUpdate: "tool_call", toolCallId: "c", name: "mcp_notes_add_note", status: "in_progress", rawInput: {} };
-    expect(feed(theirs)[0]).not.toHaveProperty("mcp");
-    expect(feed({ ...theirs, sessionUpdate: "tool_call_update", status: "completed" })).toEqual(["stopped"]);
+  describe("the mapper and the guard", () => {
+    const callers = new Map([[`clifunnel${RUN}_0`, "notes"]]);
+    const make = () => {
+      const mapper = createAcpMapper("S", { access: "none", mcp: callers });
+      const guard = createNoneGuard((start) => start.name !== "finish" && !mapper.isMcp(start.id));
+      const feed = (u: object): (FunnelEvent | "stopped")[] => mapper.update(u).flatMap((e): (FunnelEvent | "stopped")[] => (guard.check(e) ? ["stopped"] : [e]));
+      return { mapper, feed };
+    };
+    const direct = { sessionUpdate: "tool_call", toolCallId: "a", name: `mcp_clifunnel${RUN}_0_add_note`, status: "in_progress", rawInput: { text: "x" } };
+
+    it("shows the caller's own name, tags the call, and lets only those calls finish at none", () => {
+      const { feed } = make();
+      const [start] = feed(direct);
+      expect(start).toMatchObject({ type: "tool.start", name: "mcp_notes_add_note", mcp: { server: "notes", tool: "add_note" } });
+      expect(feed({ ...direct, sessionUpdate: "tool_call_update", status: "completed", rawOutput: { output: "saved" } })).toEqual([{ type: "tool.end", id: "S:a", output: "saved" }]);
+      // A user's server of the same display name is not this run's: its tool is neither renamed nor tagged, and finishing stops the run.
+      const theirs = { sessionUpdate: "tool_call", toolCallId: "c", name: "mcp_notes_add_note", status: "in_progress", rawInput: {} };
+      expect(feed(theirs)[0]).not.toHaveProperty("mcp");
+      expect(feed({ ...theirs, sessionUpdate: "tool_call_update", status: "completed" })).toEqual(["stopped"]);
+    });
+
+    it("does not stop a call of this run's server whose arguments arrive in a later update", () => {
+      const { feed } = make();
+      // The first update has no arguments yet, so nothing says whose call it is. The second names this run's server.
+      const generic = { sessionUpdate: "tool_call", toolCallId: "g", name: "call_mcp_tool", status: "in_progress", rawInput: {} };
+      expect(feed(generic)[0]).toMatchObject({ type: "tool.start", name: "call_mcp_tool" });
+      feed({ ...generic, sessionUpdate: "tool_call_update", status: "in_progress", rawInput: { ServerName: `clifunnel${RUN}_0`, ToolName: "add_note", Arguments: {} } });
+      expect(feed({ ...generic, sessionUpdate: "tool_call_update", status: "completed", rawInput: { ServerName: `clifunnel${RUN}_0`, ToolName: "add_note", Arguments: {} } })).toEqual([{ type: "tool.end", id: "S:g" }]);
+      // And one that never names this run's server is stopped.
+      const other = { sessionUpdate: "tool_call", toolCallId: "o", name: "call_mcp_tool", status: "in_progress", rawInput: {} };
+      feed(other);
+      expect(feed({ ...other, sessionUpdate: "tool_call_update", status: "completed", rawInput: { ServerName: "theirs", ToolName: "t" } })).toEqual(["stopped"]);
+    });
+
+    it("reports an allowed call that failed with no text as a failure, and a refused call that failed with no text as the hook's refusal", () => {
+      const { feed } = make();
+      feed(direct);
+      const failed = feed({ ...direct, sessionUpdate: "tool_call_update", status: "failed" });
+      expect(failed[0]).toMatchObject({ type: "tool.end", error: "tool failed" });
+      const refused = { sessionUpdate: "tool_call", toolCallId: "r", name: "run_command", status: "in_progress", rawInput: {} };
+      feed(refused);
+      expect(feed({ ...refused, sessionUpdate: "tool_call_update", status: "failed" })[0]).toMatchObject({ type: "tool.end", error: expect.stringContaining("denied: denied by pre-tool hook") });
+    });
   });
 });
 

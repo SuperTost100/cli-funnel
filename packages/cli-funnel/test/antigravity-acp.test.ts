@@ -1,10 +1,10 @@
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { collect } from "./helpers.js";
 import { createFunnel } from "../src/funnel.js";
-import { antigravityProvider } from "../src/providers/antigravity/index.js";
+import { antigravityProvider, forgetVerifiedHooks } from "../src/providers/antigravity/index.js";
 import {
   agentFacts,
   checkThought,
@@ -265,6 +265,11 @@ describe("antigravity ACP failures", () => {
     expect(failureFromTurn("end_turn", "  Error 500, Message: backend failed, Status: INTERNAL\n")).toMatchObject({ code: "cli-failed" });
   });
 
+  it("keeps a sign-in or subscription failure that arrives as the reply classified", () => {
+    expect(failureFromTurn("end_turn", "Error 401, Message: Request had invalid authentication credentials, Status: UNAUTHENTICATED")).toEqual({ message: "Run agy in a terminal and sign in.", code: "not-logged-in" });
+    expect(failureFromTurn("end_turn", "Error 403, Message: SUBSCRIPTION_REQUIRED for this account, Status: PERMISSION_DENIED")).toMatchObject({ code: "cli-failed", message: expect.stringContaining("no Antigravity subscription") });
+  });
+
   it("never reads the model's prose as a failure, even when it quotes the wording", () => {
     const quoted = "Error 500, Message: backend failed, Status: INTERNAL";
     expect(failureFromTurn("end_turn", `Here is how Google words it: ${quoted}. Handle it with a retry.`)).toBeUndefined();
@@ -288,11 +293,12 @@ const [cmd] = process.argv.slice(2);
 if (cmd === "--version") { console.log(cfg.version || "1.5.12"); process.exit(0); }
 if (cmd === "models") { process.stdout.write(fs.readFileSync(cfg.models, "utf8")); process.exit(0); }
 if (cmd !== "acp") { log({ print: process.argv.slice(2) }); console.log(JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "printed" } })); process.exit(0); }
-log({ argv: process.argv.slice(2), cwd: process.cwd() });
+log({ argv: process.argv.slice(2), cwd: process.cwd(), pid: process.pid });
 const out = (m) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...m }) + "\\n");
 const options = JSON.parse(JSON.stringify(cfg.newResult.configOptions));
 let buf = "";
 let promptId;
+let reserved = "";
 process.stdin.on("data", (d) => {
   buf += d;
   let i;
@@ -303,8 +309,9 @@ function handle(m) {
   log(m);
   switch (m.method) {
     case "initialize": return result(m, cfg.initialize);
-    case "session/new": return result(m, { ...cfg.newResult, sessionId: cfg.sessionId });
+    case "session/new": reserved = (m.params.mcpServers && m.params.mcpServers[0] && m.params.mcpServers[0].name) || ""; return result(m, { ...cfg.newResult, sessionId: cfg.sessionId });
     case "session/resume":
+      reserved = (m.params.mcpServers && m.params.mcpServers[0] && m.params.mcpServers[0].name) || "";
       if (cfg.resumeError) return out({ id: m.id, error: { code: -32603, message: cfg.resumeError } });
       return result(m, { configOptions: options });
     case "session/set_config_option": {
@@ -315,13 +322,15 @@ function handle(m) {
       return result(m, { configOptions: options });
     }
     case "session/set_mode": return result(m, {});
-    case "session/cancel": if (promptId !== undefined) out({ id: promptId, result: { stopReason: "cancelled" } }); return;
+    case "session/cancel": if (promptId !== undefined && !cfg.ignoreCancel) out({ id: promptId, result: { stopReason: "cancelled" } }); return;
     case "session/prompt": {
       promptId = m.id;
       if (cfg.hang) return;
       if (cfg.promptError) return out({ id: m.id, error: cfg.promptError });
       let delay = 0;
-      for (const line of cfg.script) {
+      for (const raw of cfg.script) {
+        // @@R@@ stands for the name the client gave its first MCP server, which is random per run.
+        const line = JSON.parse(JSON.stringify(raw).split("@@R@@").join(reserved));
         setTimeout(() => out(line.result && line.id !== undefined ? { ...line, id: m.id } : line), (delay += 5));
       }
       // A notification just after the last reply, as another process's output can be.
@@ -378,7 +387,7 @@ describe.skipIf(process.platform === "win32")("antigravity over ACP, with a fake
     expect(events[0]).toEqual({ type: "session", sessionId: SESSION, model: "gemini-3.8-flash" });
     expect(events.at(-1)).toMatchObject({ type: "done", text: "2 + 2 is 4.\n\nBANANA", finishReason: "stop" });
     const got = agy.received();
-    expect(got[0]).toMatchObject({ argv: ["acp"] });
+    expect(got[0]!.argv).toEqual(["acp", expect.stringMatching(/^--gemini-dir=.*antigravity-gemini-none$/)]);
     // `none` runs in the folder that holds the deny hook, never in the caller's folder.
     expect(got[0]!.cwd).toMatch(/workspaces[/\\]antigravity-none$/);
     const methods = got.slice(1).filter((m) => m.method).map((m) => m.method);
@@ -440,25 +449,28 @@ describe.skipIf(process.platform === "win32")("antigravity over ACP, with a fake
   it("hands MCP servers to the session under reserved names and allows only their calls at none", async () => {
     const options = [{ optionId: "allow", name: "Allow", kind: "allow_once" }, { optionId: "deny", name: "Deny", kind: "reject_once" }];
     const ask = (id: string, toolCallId: string, name: string, rawInput: object) => ({ jsonrpc: "2.0", id, method: "session/request_permission", params: { sessionId: SESSION, toolCall: { toolCallId, name, rawInput }, options } });
-    const asks = [ask("p1", "a", "mcp_clifunnel0_add_note", { text: "x" }), ask("p2", "b", "mcp_notes_add_note", {}), { jsonrpc: "2.0", id: 1, result: { stopReason: "end_turn" } }];
+    const asks = [ask("p1", "a", "mcp_@@R@@_add_note", { text: "x" }), ask("p2", "b", "mcp_notes_add_note", {}), { jsonrpc: "2.0", id: 1, result: { stopReason: "end_turn" } }];
     const agy = fakeAgy({ script: asks });
     await drain(input({ mcpServers: { notes: { type: "http", url: "http://127.0.0.1:9/mcp", headers: { Authorization: "Bearer t" } } } }));
     await until(() => agy.received().some((m) => m.id === "p2" && m.result));
     const got = agy.received();
-    expect(got.find((m) => m.method === "session/new")!.params.mcpServers).toEqual([{ type: "http", name: "clifunnel0", url: "http://127.0.0.1:9/mcp", headers: [{ name: "Authorization", value: "Bearer t" }] }]);
+    const sent = got.find((m) => m.method === "session/new")!.params.mcpServers;
+    expect(sent).toEqual([{ type: "http", name: expect.stringMatching(/^clifunnel[0-9a-f]{8}_0$/), url: "http://127.0.0.1:9/mcp", headers: [{ name: "Authorization", value: "Bearer t" }] }]);
     expect(got.find((m) => m.id === "p1" && m.result)!.result).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
     // A user's server called `notes` is not this run's server, whatever the caller named theirs.
     expect(got.find((m) => m.id === "p2" && m.result)!.result).toEqual({ outcome: { outcome: "selected", optionId: "deny" } });
-    // The run's folder holds the hook script and the hook that runs it.
-    expect(got[0]!.cwd).toMatch(/antigravity-none\.mcp\.1$/);
+    // The run's folder is its own, and is gone when the run is over.
+    expect(got[0]!.cwd).toMatch(/antigravity-none\.run\.[0-9a-f]{8}$/);
+    await until(() => !existsSync(got[0]!.cwd));
+    expect(existsSync(got[0]!.cwd)).toBe(false);
   });
 
   it("reports a tool the client allowed and that then failed as a failure, not as a denial", async () => {
     const options = [{ optionId: "allow", name: "Allow", kind: "allow_once" }, { optionId: "deny", name: "Deny", kind: "reject_once" }];
-    const call = (sessionUpdate: string, status: string, extra: object = {}) => ({ jsonrpc: "2.0", method: "session/update", params: { sessionId: SESSION, update: { sessionUpdate, toolCallId: "a", name: "mcp_clifunnel0_add_note", status, rawInput: { text: "x" }, ...extra } } });
+    const call = (sessionUpdate: string, status: string, extra: object = {}) => ({ jsonrpc: "2.0", method: "session/update", params: { sessionId: SESSION, update: { sessionUpdate, toolCallId: "a", name: "mcp_@@R@@_add_note", status, rawInput: { text: "x" }, ...extra } } });
     const script = [
       call("tool_call", "in_progress"),
-      { jsonrpc: "2.0", id: "p1", method: "session/request_permission", params: { sessionId: SESSION, toolCall: { toolCallId: "a", name: "mcp_clifunnel0_add_note", rawInput: { text: "x" } }, options } },
+      { jsonrpc: "2.0", id: "p1", method: "session/request_permission", params: { sessionId: SESSION, toolCall: { toolCallId: "a", name: "mcp_@@R@@_add_note", rawInput: { text: "x" } }, options } },
       call("tool_call_update", "failed", { rawOutput: { output: "server error: disk full" } }),
       { jsonrpc: "2.0", id: 1, result: { stopReason: "end_turn" } },
     ];
@@ -474,7 +486,7 @@ describe.skipIf(process.platform === "win32")("antigravity over ACP, with a fake
     const call = (sessionUpdate: string, name: string, status: string, rawInput: object = {}) => ({ jsonrpc: "2.0", method: "session/update", params: { sessionId: SESSION, update: { sessionUpdate, toolCallId: name, name, status, rawInput } } });
     const done = { jsonrpc: "2.0", id: 1, result: { stopReason: "end_turn" } };
     const mcpServers = { notes: { type: "http" as const, url: "http://127.0.0.1:9/mcp" } };
-    fakeAgy({ script: [call("tool_call", "mcp_clifunnel0_add_note", "in_progress"), call("tool_call_update", "mcp_clifunnel0_add_note", "completed"), done] });
+    fakeAgy({ script: [call("tool_call", "mcp_@@R@@_add_note", "in_progress"), call("tool_call_update", "mcp_@@R@@_add_note", "completed"), done] });
     expect((await drain(input({ mcpServers }))).at(-1)).toMatchObject({ type: "done" });
     fakeAgy({ script: [call("tool_call", "mcp_notes_add_note", "in_progress"), call("tool_call_update", "mcp_notes_add_note", "completed"), done] });
     expect((await drain(input({ mcpServers }))).at(-1)).toMatchObject({ type: "error", message: expect.stringContaining('"mcp_notes_add_note" ran at access "none"') });
@@ -482,7 +494,7 @@ describe.skipIf(process.platform === "win32")("antigravity over ACP, with a fake
 
   it("refuses a caller server named like a reserved one, and a tool timeout, before any process starts", async () => {
     const agy = fakeAgy();
-    await expect(drain(input({ mcpServers: { clifunnel0: { type: "http", url: "http://127.0.0.1:9/mcp" } } }))).rejects.toMatchObject({ code: "invalid-selection" });
+    await expect(drain(input({ mcpServers: { clifunnelx: { type: "http", url: "http://127.0.0.1:9/mcp" } } }))).rejects.toMatchObject({ code: "invalid-selection" });
     await expect(drain(input({ mcpServers: { notes: { type: "http", url: "http://127.0.0.1:9/mcp", toolTimeoutSec: 30 } } }))).rejects.toMatchObject({ code: "unsupported" });
     expect(() => agy.received()).toThrow();
   });
@@ -494,6 +506,43 @@ describe.skipIf(process.platform === "win32")("antigravity over ACP, with a fake
     expect(agy.received().find((m) => m.method === "session/resume")!.params.mcpServers).toHaveLength(1);
     await expect(drain(input({ mcpServers: { local: { type: "stdio", command: "node" } } }, { access: "accept-edits" }))).rejects.toMatchObject({ code: "invalid-selection" });
     await expect(drain(input({ mcpServers, providerOptions: { antigravity: { transport: "print" } } }))).rejects.toMatchObject({ code: "unsupported" });
+  });
+
+  describe("at none, keeping the user's own agy setup out", () => {
+    const real = () => join(process.env.HOME!, ".gemini", "antigravity-cli");
+    const dirOf = (argv: string[]) => argv.find((a) => a.startsWith("--gemini-dir="))?.slice("--gemini-dir=".length);
+
+    it("starts agy with a private --gemini-dir that holds only a link to the data folder, so the user's MCP servers, skills and GEMINI.md are not read", async () => {
+      mkdirSync(real(), { recursive: true });
+      const agy = fakeAgy();
+      await drain(input());
+      const dir = dirOf(agy.received()[0]!.argv)!;
+      expect(dir).toMatch(/antigravity-gemini-none$/);
+      expect(readdirSync(dir)).toEqual(["antigravity-cli"]);
+      expect(lstatSync(join(dir, "antigravity-cli")).isSymbolicLink()).toBe(true);
+      expect(realpathSync(join(dir, "antigravity-cli"))).toBe(realpathSync(real()));
+    });
+
+    it("points a stale link at the data folder again, and makes none when there is no data folder yet", async () => {
+      mkdirSync(real(), { recursive: true });
+      const agy = fakeAgy();
+      await drain(input());
+      const dir = dirOf(agy.received()[0]!.argv)!;
+      rmSync(join(dir, "antigravity-cli"));
+      symlinkSync(tmpdir(), join(dir, "antigravity-cli"));
+      await drain(input());
+      expect(realpathSync(join(dir, "antigravity-cli"))).toBe(realpathSync(real()));
+      rmSync(real(), { recursive: true });
+      rmSync(join(dir, "antigravity-cli"));
+      await drain(input());
+      expect(existsSync(join(dir, "antigravity-cli"))).toBe(false);
+    });
+
+    it("leaves every other level on the user's own setup", async () => {
+      const agy = fakeAgy();
+      await drain(input({}, { access: "full" }));
+      expect(dirOf(agy.received()[0]!.argv)).toBeUndefined();
+    });
   });
 
   it("starts `agy acp` with --dangerously-skip-permissions only at full, in the caller's folder", async () => {
@@ -576,6 +625,24 @@ describe.skipIf(process.platform === "win32")("antigravity over ACP, with a fake
     expect(agy.received().some((m) => m.method === "session/cancel" && m.params.sessionId === SESSION)).toBe(true);
   });
 
+  it("stops the process when agy ignores the cancel, without waiting for the consumer to read on", async () => {
+    const agy = fakeAgy({ hang: true, ignoreCancel: true });
+    process.env.CLI_FUNNEL_ACP_CANCEL_GRACE_MS = "300";
+    const ac = new AbortController();
+    const it = antigravityProvider.run(input({ signal: ac.signal }))[Symbol.asyncIterator]();
+    try {
+      expect((await it.next()).value).toMatchObject({ type: "session" });
+      const pid = agy.received()[0]!.pid as number;
+      ac.abort();
+      // The consumer reads nothing more. The grace passes and the process must be gone anyway.
+      await until(() => { try { process.kill(pid, 0); return false; } catch { return true; } });
+      expect(() => process.kill(pid, 0)).toThrow();
+    } finally {
+      delete process.env.CLI_FUNNEL_ACP_CANCEL_GRACE_MS;
+      await it.return?.(undefined);
+    }
+  });
+
   it("ends the turn after printTimeoutSec", async () => {
     const agy = fakeAgy({ hang: true });
     const events = await drain(input({ providerOptions: { antigravity: { printTimeoutSec: 0.3 } } }));
@@ -619,6 +686,29 @@ describe.skipIf(process.platform === "win32")("antigravity over ACP, with a fake
     const late = events.flatMap((e, i) => (e.type === "raw" && e.source === "stdout" && (e.data as { method?: string }).method === "x/late" ? [i] : []));
     expect(late).toHaveLength(1);
     expect(late[0]).toBeLessThan(events.findIndex((e) => e.type === "done"));
+  });
+
+  it("refuses a none run, and starts no process, when the hook command does not print its answer through the shell", async () => {
+    const agy = fakeAgy();
+    // A shell that does nothing and exits 0, as a hook that starts a second copy of the host app does: agy reads it as allow.
+    const bin = mkdtempSync(join(tmpdir(), "cf-fake-sh-"));
+    writeFileSync(join(bin, "sh"), "#!/bin/sh\nexit 0\n");
+    chmodSync(join(bin, "sh"), 0o755);
+    const oldPath = process.env.PATH;
+    forgetVerifiedHooks();
+    process.env.PATH = `${bin}:${oldPath}`;
+    try {
+      const events = await drain(input());
+      expect(events).toEqual([]);
+    } catch (e) {
+      expect(e).toMatchObject({ code: "unsupported", message: expect.stringContaining("would read it as allow") });
+      expect(() => agy.received()).toThrow();
+    } finally {
+      process.env.PATH = oldPath;
+      forgetVerifiedHooks();
+    }
+    // Other levels need no hook, so they run as before.
+    expect((await drain(input({}, { access: "full" }))).at(-1)).toMatchObject({ type: "done" });
   });
 
   it("forwards stderr written just after the final reply, before the terminal event", async () => {

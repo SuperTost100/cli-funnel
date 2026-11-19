@@ -123,6 +123,10 @@ async function* withDeadline(run: (input: RunInput) => AsyncIterable<FunnelEvent
   }
 }
 
+/** True when the provider's own mapper tags the run's MCP calls, so no reading by name is added: Antigravity over ACP. */
+const tagsItself = (input: RunInput): boolean =>
+  input.selection.provider === "antigravity" && (input.providerOptions?.antigravity?.transport ?? (input.apiKey ? "print" : "acp")) === "acp";
+
 export function createFunnel(options: FunnelOptions = {}) {
   const registry: Record<ProviderId, Provider> = {
     ...PROVIDERS,
@@ -213,7 +217,7 @@ export function createFunnel(options: FunnelOptions = {}) {
       }
     }
     if (input.workspaceName !== undefined && (typeof input.workspaceName !== "string" || !WORKSPACE_NAME.test(input.workspaceName))) {
-      throw new FunnelError("workspaceName must be 1 to 40 letters, digits, _ or -.", "invalid-selection");
+      throw new FunnelError("workspaceName must be 1 to 40 lowercase letters, digits, _ or -.", "invalid-selection");
     }
     if (input.apiKey !== undefined) {
       if (!p.capabilities.apiKey) throw new FunnelError(`${p.displayName} cannot run on an API key passed with the run.`, "unsupported");
@@ -246,7 +250,7 @@ export function createFunnel(options: FunnelOptions = {}) {
       }
     })();
     const servers = Object.keys(input.mcpServers ?? {});
-    const masked = redactSecrets(servers.length ? tagMcpCalls(source, servers, input.selection.provider) : source, runSecrets(input));
+    const masked = redactSecrets(servers.length ? tagMcpCalls(source, servers, input.selection.provider, !tagsItself(input)) : source, runSecrets(input));
     const events = options.onEvent ? observeRun(options.onEvent, input, masked) : masked;
     // Fold events as they pass, so `.result` works next to `for await` without keeping them.
     const folder = createRunFolder(input);

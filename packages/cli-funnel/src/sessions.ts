@@ -75,6 +75,13 @@ function withoutFork(options: unknown): unknown {
   return Object.keys(rest).length ? rest : null;
 }
 
+/**
+ * True for `persist: false`. Such a run cannot be given a `sessionId` (the funnel refuses that), so no later turn reaches a
+ * process kept for it. The provider's own `ephemeral` option is different: a live session may carry it on every turn, and
+ * the process keeps the conversation in memory (see docs/providers/claude.md).
+ */
+const unsaved = (input: RunInput): boolean => input.persist === false;
+
 /** True when the turn asks to continue its session in a new one. The live process of the old session has to stay as it is. */
 const forks = (input: RunInput): boolean => (input.providerOptions as Record<string, { forkSession?: unknown } | undefined> | undefined)?.[input.selection.provider]?.forkSession === true;
 
@@ -97,7 +104,8 @@ export class SessionPool {
 
   /** Runs one turn. Providers without `openSession` run as usual. */
   async *run(p: Provider, input: RunInput): AsyncGenerator<FunnelEvent> {
-    if (!p.openSession) {
+    // A run that is not saved has no session a later turn could resume, so a process kept for it would only take a slot.
+    if (!p.openSession || unsaved(input)) {
       yield* p.run(input);
       return;
     }

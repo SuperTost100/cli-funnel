@@ -34,7 +34,7 @@ export const CHECKS = {
     help: [
       [["--help"], ["--output-format", "--model", "--effort", "--mode", "--conversation", "--dangerously-skip-permissions", "--print", "--input-format", "--json-schema", "path to a schema file", "--add-dir", "--print-timeout", "models", "plugin", "acp"]],
       // The default transport runs `agy acp`, the Agent Client Protocol server. The protocol itself is checked by the live tests.
-      [["acp", "--help"], ["--add-dir", "--dangerously-skip-permissions", "--stdio"]],
+      [["acp", "--help"], ["--add-dir", "--dangerously-skip-permissions", "--stdio", "--gemini-dir"]],
       // MCP servers reach agy as a plugin in a folder added with --add-dir. `plugin validate` is the loader's own check of that layout.
       [["plugin", "--help"], ["validate"]],
     ],

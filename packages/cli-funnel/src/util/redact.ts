@@ -48,10 +48,13 @@ export async function* redactErrors(events: AsyncIterable<FunnelEvent>, secrets:
 const SECRET_NAME = /auth|token|key|secret|password|cookie|session|credential/i;
 
 /**
- * The run's own secrets, longest first so a secret that contains another is masked whole: `apiKey` at any length, and
- * the values of `RunInput.env`, `mcpServers` headers and `mcpServers` env entries whose names look like credentials.
- * Those values are kept only from 8 characters, so masking them cannot mangle ordinary text. A multiline secret adds
- * each of its lines of 8 characters or more.
+ * The run's own secrets, longest first so a secret that contains another is masked whole: `apiKey` at any length, the
+ * values of `RunInput.env` whose names look like credentials (from 8 characters, so masking them cannot mangle ordinary
+ * text), and everything a caller's `mcpServers` carry: every header value and every env value whatever its name, and the
+ * password of a server URL (from 4 characters, the same floor `redact` uses) and its query values from 8 characters, where a
+ * token often sits. shortcut: a value under 4 characters stays unmasked, since masking it would mangle ordinary text,
+ * and an env value such as `production` is masked wherever it appears. A multiline secret adds each of its lines of 8
+ * characters or more.
  */
 export function runSecrets(input: Pick<RunInput, "apiKey" | "mcpServers" | "env">): string[] {
   const values: string[] = typeof input.apiKey === "string" && input.apiKey ? [input.apiKey] : [];
@@ -62,9 +65,20 @@ export function runSecrets(input: Pick<RunInput, "apiKey" | "mcpServers" | "env"
   };
   named(input.env);
   const servers = typeof input.mcpServers === "object" && input.mcpServers !== null ? Object.values(input.mcpServers) : [];
+  const all = (entries: unknown) => {
+    if (typeof entries !== "object" || entries === null) return;
+    for (const value of Object.values(entries)) if (typeof value === "string" && value.length >= 4) values.push(value);
+  };
   for (const server of servers) {
     if (typeof server !== "object" || server === null) continue;
-    named(server.type === "http" ? server.headers : server.env);
+    all(server.type === "http" ? server.headers : server.env);
+    if (server.type === "http" && typeof server.url === "string" && URL.canParse(server.url)) {
+      const url = new URL(server.url);
+      // A query value such as `mode=fast` is ordinary text, so only a value of 8 characters or more, where a token sits, counts.
+      const password = decodeURIComponent(url.password);
+      if (password.length >= 4) values.push(password);
+      for (const value of url.searchParams.values()) if (value.length >= 8) values.push(value);
+    }
   }
   // Output is masked line by line in places, such as stderr, so each line of a multiline secret (a PEM key) counts
   // on its own too, with the same floor so a short fragment cannot mangle ordinary text.

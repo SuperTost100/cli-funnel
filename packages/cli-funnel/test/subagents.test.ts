@@ -132,7 +132,7 @@ describe.skipIf(process.platform === "win32")("Antigravity subagent transcripts 
   });
 
   /** A fake agy that starts a subagent, writes its transcript in two parts while the run goes on, then ends. */
-  const runWith = async (providerOptions: RunInput["providerOptions"], write = true) => {
+  const runWith = async (providerOptions: RunInput["providerOptions"], write = true, access: RunInput["selection"]["access"] = "full") => {
     const dir = mkdtempSync(join(tmpdir(), "cf-agy-sub-"));
     home = process.env.HOME;
     process.env.HOME = dir;
@@ -154,7 +154,7 @@ describe.skipIf(process.platform === "win32")("Antigravity subagent transcripts 
     chmodSync(bin, 0o755);
     process.env.CLI_FUNNEL_AGY_BIN = bin;
     const events: FunnelEvent[] = [];
-    for await (const e of antigravityProvider.run(printTransport({ selection: { provider: "antigravity", model: "m", cwd: dir, access: "full" }, prompt: "hi", providerOptions }))) events.push(e);
+    for await (const e of antigravityProvider.run(printTransport({ selection: { provider: "antigravity", model: "m", cwd: dir, access }, prompt: "hi", providerOptions }))) events.push(e);
     return events;
   };
 
@@ -168,6 +168,17 @@ describe.skipIf(process.platform === "win32")("Antigravity subagent transcripts 
     // The last part, without its line break, came in the final read before the run ended.
     expect(events.indexOf(sub.at(-1)!)).toBeLessThan(events.findIndex((e) => e.type === "done"));
     expect(events.at(-1)).toMatchObject({ type: "done" });
+  });
+
+  it("keeps the guard's error the last event when the subagent's transcript is still to be read", async () => {
+    // At none a subagent call that finishes means the deny hook did not apply, so the run ends there with an error.
+    const events = await runWith({ antigravity: { forwardSubagentText: true, forwardSubagentTools: true } }, true, "none");
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "cli-failed", message: expect.stringContaining("ran at access") });
+    expect(events.filter((e) => e.type === "error")).toHaveLength(1);
+    expect(events.some((e) => e.type === "done")).toBe(false);
+    // Nothing the subagent's transcript holds is emitted after the error.
+    const errorAt = events.findIndex((e) => e.type === "error");
+    expect(events.slice(errorAt + 1)).toEqual([]);
   });
 
   it("emits nothing from the transcript without the options", async () => {

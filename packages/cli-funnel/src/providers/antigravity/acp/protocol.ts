@@ -121,18 +121,20 @@ export function modelsFromSession(models: Json | undefined): ModelInfo[] {
 }
 
 /**
- * The name a caller's server has inside agy. The caller's own name could equal a server in the user's agy config, and
- * agy names tools by server (`mcp_<server>_<tool>`), so the run could not tell its server's calls from the user's.
- * `clifunnel<n>` is a name no caller may choose (`checkAcpServers`), so a call to it is a call to this run's server.
+ * The name a caller's server has inside agy: `clifunnel<run>_<n>`, where `<run>` is random bytes made for this one run.
+ * The caller's own name could equal a server in the user's agy config, agy names tools by server (`mcp_<server>_<tool>`),
+ * and a plugin's server is `<plugin>_<server>`, so any fixed name could be taken beforehand by a user's server or plugin.
+ * A name with a part nobody could know yet cannot, and every comparison is exact.
  */
-export const reservedName = (index: number): string => `clifunnel${index}`;
+export const reservedName = (run: string, index: number): string => `clifunnel${run}_${index}`;
 
-const RESERVED_FORM = /^clifunnel\d+$/;
+/** A caller's server may not be called anything that starts like a reserved name. */
+const RESERVED_FORM = /^clifunnel/i;
 
-/** Fails when a caller's server has a name in the reserved form, or a tool timeout, which ACP has no field for. */
+/** Fails when a caller's server has a name that starts with `clifunnel`, or a tool timeout, which ACP has no field for. */
 export function checkAcpServers(servers: [string, McpServer][]): void {
   for (const [name, s] of servers) {
-    if (RESERVED_FORM.test(name)) throw new FunnelError(`MCP server name "${name}" is reserved on Antigravity over ACP: names like clifunnel0 stand for the run's own servers. Use another name.`, "invalid-selection");
+    if (RESERVED_FORM.test(name)) throw new FunnelError(`MCP server name "${name}" is reserved on Antigravity over ACP: names that start with clifunnel stand for the run's own servers. Use another name.`, "invalid-selection");
     if (s.toolTimeoutSec !== undefined) {
       throw new FunnelError(`Antigravity over ACP cannot set a tool timeout for MCP server "${name}": its MCP server has no such field. Use providerOptions.antigravity.transport "print", or leave toolTimeoutSec out.`, "unsupported");
     }
@@ -142,13 +144,14 @@ export function checkAcpServers(servers: [string, McpServer][]): void {
 /**
  * The caller's servers as `session/new` and `session/resume` take them, each under its reserved name. A stdio server is
  * `command`, `args` and `env` as name and value pairs. An HTTP server is `type: "http"`, `url` and `headers` as pairs.
- * They go over the pipe to agy, so a header token is on no disk. `callers` maps each reserved name back to the caller's.
+ * They go over the pipe to agy, so a header token is on no disk. `callers` maps each reserved name back to the caller's,
+ * by position.
  */
-export function reserveServers(servers: [string, McpServer][]): { reserved: string[]; callers: Map<string, string>; acp: Json[] } {
+export function reserveServers(servers: [string, McpServer][], run: string): { reserved: string[]; callers: Map<string, string>; acp: Json[] } {
   const pairs = (o: Record<string, string> | undefined) => Object.entries(o ?? {}).map(([name, value]) => ({ name, value }));
   const callers = new Map<string, string>();
   const acp = servers.map(([name, s], i): Json => {
-    const reserved = reservedName(i);
+    const reserved = reservedName(run, i);
     callers.set(reserved, name);
     return s.type === "http" ? { type: "http", name: reserved, url: s.url, headers: pairs(s.headers) } : { name: reserved, command: s.command, args: s.args ?? [], env: pairs(s.env) };
   });
@@ -180,12 +183,13 @@ export function reservedCall(name: string, input: unknown, reserved: Iterable<st
 
 /**
  * The answer to a `session/request_permission` at access `none` with the caller's MCP servers: allow the call to a tool of
- * one of this run's `reserved` servers, deny everything else, the user's own servers included. The hook in the run's folder
- * already refuses every other tool, and this is the check behind it.
+ * one of this run's `reserved` servers by the tool's own name, `mcp_<reserved>_<tool>`, and deny everything else, the
+ * user's own servers and `call_mcp_tool` included. The hook in the run's folder already refuses every other tool, and
+ * this is the check behind it.
  */
 export function decidePermission(params: Json | undefined, reserved: ReadonlySet<string>): Json {
   const call = params?.toolCall;
-  if (typeof call?.name === "string" && reservedCall(call.name, call.rawInput ?? call.args, reserved)) {
+  if (typeof call?.name === "string" && reservedCall(call.name, call.rawInput ?? call.args, reserved)?.generic === false) {
     const options: Json[] = Array.isArray(params?.options) ? params.options : [];
     const allow = options.find((o) => o?.kind === "allow_once");
     if (allow && typeof allow.optionId === "string") return { outcome: { outcome: "selected", optionId: allow.optionId } };
@@ -287,6 +291,8 @@ export function createAcpMapper(sessionId: string, options: AcpMapperOptions) {
   if (options.cwd) tools.map({ event: "init", conversation_id: sessionId, init: { cwd: options.cwd } });
   const refused = new Set<string>();
   const ended = new Set<string>();
+  // The calls that are the run's own MCP servers', by event id, as the arguments of their latest update show them.
+  const mcpCalls = new Set<string>();
   // The final message is the text after the last tool call, as in the print transport.
   let message = "";
   let denied = 0;
@@ -300,22 +306,26 @@ export function createAcpMapper(sessionId: string, options: AcpMapperOptions) {
     if (state !== "RUNNING" && ended.has(id)) return [];
     const name = typeof update.name === "string" && update.name ? update.name : typeof update.kind === "string" ? update.kind : "tool";
     const output = toolOutput(update);
-    let error: { message: string } | undefined;
-    if (state === "ERROR") {
-      const given = output?.split("\n")[0];
-      const text = refused.has(id) ? PERMISSION_DENIED : given || (options.access === "none" ? HOOK_MESSAGE : "tool failed");
-      error = { message: text };
-    }
     // A call to one of the run's servers shows under the caller's own name for it, and carries `mcp`.
     let shownName = name;
     let shownInput = update.rawInput ?? update.args;
     let mcp: { server: string; tool: string } | undefined;
     const found = options.mcp ? reservedCall(name, shownInput, options.mcp.keys()) : undefined;
     if (found) {
+      mcpCalls.add(`${sessionId}:${id}`);
       const caller = options.mcp!.get(found.server)!;
       mcp = { server: caller, tool: found.tool };
       if (found.generic) shownInput = { ...(shownInput as Json), ServerName: caller };
       else shownName = `${mcpToolPrefix(caller)}${found.tool}`;
+    }
+    let error: { message: string } | undefined;
+    if (state === "ERROR") {
+      const given = output?.split("\n")[0];
+      // A call that failed with no text at `none` was refused by the hook, unless it is one of the run's own servers' calls:
+      // those were allowed, so a failure with no text is a failure of the tool, unless the client refused it.
+      const refusedByHook = options.access === "none" && !mcpCalls.has(`${sessionId}:${id}`);
+      const text = refused.has(id) ? PERMISSION_DENIED : given || (refusedByHook ? HOOK_MESSAGE : "tool failed");
+      error = { message: text };
     }
     const events = tools.map({
       event: "step_update",
@@ -338,6 +348,10 @@ export function createAcpMapper(sessionId: string, options: AcpMapperOptions) {
   }
 
   return {
+    /** True when the call with this event id was, in any of its updates, a call to one of the run's own MCP servers. */
+    isMcp(eventId: string): boolean {
+      return mcpCalls.has(eventId);
+    },
     /** Marks a tool call whose permission request was refused, so its failure reads as a denial. */
     refuse(toolCallId: string): void {
       refused.add(toolCallId);
@@ -461,5 +475,6 @@ export function failureFromTurn(stopReason: string, text: string): Failure | und
   const api = API_ERROR_REPLY.exec(text);
   if (!api) return undefined;
   const failure = failureFromError({ message: text });
-  return failure.limit ? failure : { message: api[2]!.trim(), code: "cli-failed" };
+  // A limit, a sign-in or a subscription failure keeps its own classification. Any other failure says what the line says.
+  return failure.limit || failure.code === "not-logged-in" || failure.message !== text.trim() ? failure : { message: api[2]!.trim(), code: "cli-failed" };
 }

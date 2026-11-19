@@ -1,5 +1,6 @@
-import { readFileSync, statSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { mkdir, mkdtemp, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { manifestModels, mergeModels } from "../../catalog/manifest.js";
@@ -27,7 +28,7 @@ import { detectInstallation, exitedEarly, findBinary, isTerminal, LOGIN_TIMEOUT_
 import { runSecrets } from "../../util/redact.js";
 import { createMapper, parseModels, parseRateLimits, parseWarning } from "./parser.js";
 import { openAcpSession, type AcpSetup } from "./acp/session.js";
-import { ACP_MIN_VERSION, checkAcpServers, reservedName, reserveServers } from "./acp/protocol.js";
+import { ACP_MIN_VERSION, checkAcpServers, reserveServers } from "./acp/protocol.js";
 import { SubagentTranscripts, type ForwardSubagents } from "./transcript.js";
 import { composePrompt } from "../prompt.js";
 import { createNoneGuard } from "../none-guard.js";
@@ -122,76 +123,144 @@ const DENY = { decision: "deny", reason: "Tools are disabled. Answer in text onl
 export const NONE_MATCHER = "^(?:[^f].*|f[^i].*|fi[^n].*|fin[^i].*|fini[^s].*|finis[^h].*|finish.+|.{0,5})$";
 
 /**
- * The hook script for a `none` run with MCP servers. agy hands a `PreToolUse` hook the tool call as JSON on stdin
- * (`toolCall.name` and `toolCall.args`). The script says nothing, which lets the call go on, for `finish`, for
- * `call_mcp_tool` with a `ServerName` that is exactly one of this run's reserved names, and for a tool named
- * `mcp_<reserved>_<tool>`. For anything else, and for input it cannot read, it prints a deny. A script that crashes
- * exits non-zero, and agy blocks the call then too.
+ * A regular expression that matches every string except `names`, and every string that starts with one of `prefixes`
+ * left out as well. Go regexp has no lookahead, so the complement is spelled out as a trie: at each step a character that
+ * continues no name matches the rest, a character that continues a name goes on with that name, and a string that ends
+ * early or runs past a whole name matches. `NONE_MATCHER` is this for `finish`. This is what a hook matcher can say: it
+ * tests the tool's name and nothing in its arguments.
  */
-export function mcpHookScript(reserved: readonly string[]): string {
-  return `const allowed = ${JSON.stringify(reserved)};
-const deny = () => process.stdout.write(JSON.stringify(${JSON.stringify(DENY)}) + "\\n");
-let input = "";
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => (input += chunk));
-process.stdin.on("error", deny);
-process.stdin.on("end", () => {
-  let call;
+export function exceptNames(names: readonly string[], prefixes: readonly string[] = []): string {
+  type Node = { children: Map<string, Node>; end: boolean; prefix: boolean };
+  const root: Node = { children: new Map(), end: false, prefix: false };
+  const add = (word: string, flag: "end" | "prefix") => {
+    let node = root;
+    for (const ch of word) {
+      if (!node.children.has(ch)) node.children.set(ch, { children: new Map(), end: false, prefix: false });
+      node = node.children.get(ch)!;
+    }
+    node[flag] = true;
+  };
+  for (const name of names) add(name, "end");
+  for (const prefix of prefixes) add(prefix, "prefix");
+  const esc = (c: string) => c.replace(/[\\^$.|?*+()[\]{}-]/g, "\\$&");
+  const alternatives = (node: Node): string[] => {
+    // Everything from here on starts with an excluded prefix.
+    if (node.prefix) return [];
+    const chars = [...node.children.keys()].map(esc).join("");
+    const out = [chars ? `[^${chars}].*` : ".+"];
+    for (const [ch, child] of node.children) out.push(...alternatives(child).map((a) => esc(ch) + a));
+    // A string that ends here is a proper prefix of a name, or is empty, and is not a name. One that runs on is longer.
+    if (node.end) out.push(".+");
+    else out.push("");
+    return out;
+  };
+  return `^(?:${alternatives(root).join("|")})$`;
+}
+
+/** What the deny hook of a run with MCP servers tells the model: where its tools are, so it does not stop at the first refusal. */
+const DENY_WITH_MCP = { decision: "deny", reason: "Tools are disabled except your MCP tools. Call those by their own names (mcp_<server>_<tool>), not through call_mcp_tool." };
+
+/** The tool names that start with a run's prefix are the run's own servers' tools. */
+export const mcpPrefix = (run: string): string => `mcp_clifunnel${run}_`;
+
+/**
+ * The command of a deny hook: it drains stdin so agy never writes to a closed pipe, then prints the deny answer. It runs
+ * through `sh -c`, or `cmd /c` on Windows, and needs nothing but those, no Node and no copy of the host app.
+ */
+export function denyCommand(platform: NodeJS.Platform, answer: object = DENY): string {
+  const json = JSON.stringify(answer);
+  return platform === "win32" ? `echo ${json}` : `cat >/dev/null; printf '%s\\n' '${json}'`;
+}
+
+/**
+ * Hook file for `none`. agy loads `.agents/hooks.json` from the cwd, and a `deny` from a PreToolUse hook blocks the call
+ * before any permission check. Allow decisions from other hooks do not override it, and a failing hook also blocks. The
+ * matcher decides which calls reach the hook: every tool name but `finish`, which ends the turn and carries the
+ * `--json-schema` answer, and, for a run with MCP servers, the names that start with this run's prefix, so the hook is a
+ * fixed deny and needs no script. `call_mcp_tool` is not left out: it names its server in its arguments, which a matcher
+ * cannot see, so the model reaches the run's servers by the tool names agy gives them.
+ */
+export function noneHooks(platform: NodeJS.Platform = process.platform, run?: string): Record<string, unknown> {
+  const matcher = run === undefined ? NONE_MATCHER : exceptNames(["finish"], [mcpPrefix(run)]);
+  const command = denyCommand(platform, run === undefined ? DENY : DENY_WITH_MCP);
+  return { "cli-funnel-none": { PreToolUse: [{ matcher, hooks: [{ type: "command", command, timeout: 10 }] }] } };
+}
+
+/**
+ * Runs a hook command once, the way agy will, with a call that must be refused on stdin, and answers whether it printed the
+ * deny answer. agy reads a hook that exits 0 and prints nothing as "allow", so a command that starts something else, or
+ * does nothing, would leave every tool open. Nothing is trusted that this has not seen work.
+ */
+export async function hookDenies(command: string, platform: NodeJS.Platform = process.platform): Promise<boolean> {
+  const call = JSON.stringify({ hookEventName: "PreToolUse", toolCall: { id: "self-test", name: "run_command", args: { CommandLine: "true" } } });
+  const [file, args] = platform === "win32" ? [process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", `"${command}"`]] : ["sh", ["-c", command]];
+  const res = await exec(file, args, { input: call, timeoutMs: 10_000 }).catch(() => undefined);
+  if (!res || res.code !== 0) return false;
   try {
-    call = JSON.parse(input).toolCall;
+    return JSON.parse(res.stdout.trim().split("\n").at(-1) ?? "").decision === "deny";
   } catch {
-    return deny();
+    return false;
   }
-  const name = call && typeof call.name === "string" ? call.name : "";
-  const server = call && call.args && typeof call.args.ServerName === "string" ? call.args.ServerName : "";
-  const own = name === "call_mcp_tool" ? allowed.includes(server) : allowed.some((r) => name.startsWith("mcp_" + r + "_") && name.length > r.length + 5);
-  if (name !== "finish" && !own) deny();
-});
-`;
 }
 
-/** One argument of a hook command, quoted for `sh -c` or for `cmd /c`. */
-const quoteArg = (platform: NodeJS.Platform, arg: string): string => (platform === "win32" ? `"${arg.replace(/"/g, '\\"')}"` : `'${arg.replace(/'/g, "'\\''")}'`);
+/** The commands already shown to deny, so a process checks each once. */
+const verified = new Map<string, Promise<boolean>>();
 
-/**
- * The command of the hook for a `none` run with MCP servers: the Node binary that runs cli-funnel, on the script file.
- * It needs neither `sh` tools nor a Node on the PATH. Under Electron the binary is the app, which runs the script as Node
- * only with `ELECTRON_RUN_AS_NODE`.
- */
-function mcpHookCommand(platform: NodeJS.Platform, script: string): string {
-  const run = `${quoteArg(platform, process.execPath)} ${quoteArg(platform, script)}`;
-  if (!process.versions.electron) return run;
-  return platform === "win32" ? `set ELECTRON_RUN_AS_NODE=1&& ${run}` : `ELECTRON_RUN_AS_NODE=1 ${run}`;
-}
+/** Forgets which hook commands were shown to deny, so the next run checks again. For tests. */
+export const forgetVerifiedHooks = (): void => verified.clear();
 
-/**
- * Hook file for `none`. agy loads `.agents/hooks.json` from the cwd, and a `deny` from a PreToolUse hook blocks the
- * call before any permission check. Allow decisions from other hooks do not override it, and a failing hook also blocks.
- * Without `mcp` the hook is a fixed deny for every tool but `finish`. With it, a script decides by the tool call, so that
- * this run's reserved servers get through and no other server does (`mcpHookScript`).
- */
-export function noneHooks(platform: NodeJS.Platform = process.platform, mcp?: { reserved: readonly string[]; script: string }): Record<string, unknown> {
-  if (mcp) return { "cli-funnel-none": { PreToolUse: [{ matcher: ".*", hooks: [{ type: "command", command: mcpHookCommand(platform, mcp.script), timeout: 10 }] }] } };
-  const json = JSON.stringify(DENY);
-  // The hook runs through `sh -c`, or `cmd /c` on Windows. It drains stdin so agy never writes to a closed pipe.
-  const command = platform === "win32" ? `echo ${json}` : `cat >/dev/null; printf '%s\\n' '${json}'`;
-  return { "cli-funnel-none": { PreToolUse: [{ matcher: NONE_MATCHER, hooks: [{ type: "command", command, timeout: 10 }] }] } };
+/** Fails the run with `unsupported` unless the hook of a `none` run, as agy will run it, prints the deny answer. */
+export async function requireWorkingHook(run?: string): Promise<void> {
+  const hooks = noneHooks(process.platform, run) as { "cli-funnel-none": { PreToolUse: { hooks: { command: string }[] }[] } };
+  const command = hooks["cli-funnel-none"].PreToolUse[0]!.hooks[0]!.command;
+  let ok = verified.get(command);
+  if (!ok) verified.set(command, (ok = hookDenies(command)));
+  if (!(await ok)) {
+    verified.delete(command);
+    throw new FunnelError("The deny hook that keeps tools off at access none does not print its answer when run through the shell, so agy would read it as allow. The run was not started.", "unsupported");
+  }
 }
 
 /**
- * The empty folder `none` runs in. It holds only the deny hook, and for a run with `mcpCount` servers the script that
- * lets those servers through. Each count has a folder of its own, and `.mcp.<n>` comes after the caller's name, which
- * cannot hold a dot, so no name a caller picks gives a run the folder of another.
+ * What makes a folder a git repository for `git rev-parse`: a `HEAD`, an `objects` folder and a `refs` folder. agy looks for
+ * the repository root and loads `AGENTS.md`, `GEMINI.md` and `.agents/` from every folder between the working folder and
+ * that root, so a `none` folder inside a user's repository, or under a home folder that is one, would read the user's
+ * instructions. With its own root it reads nothing above itself. An empty `.git` folder is not enough: agy walked past it.
  */
-export function noneWorkspace(caller?: string, mcpCount = 0): Promise<string> {
-  const name = workspaceFor("antigravity-none", caller) + (mcpCount > 0 ? `.mcp.${mcpCount}` : "");
-  if (mcpCount === 0) return ownedWorkspace(name, { ".agents/hooks.json": `${JSON.stringify(noneHooks(), null, 2)}\n` });
-  const reserved = Array.from({ length: mcpCount }, (_, i) => reservedName(i));
-  const script = join(workspacePath(name), ".agents", "mcp-hook.mjs");
-  return ownedWorkspace(name, {
-    ".agents/mcp-hook.mjs": mcpHookScript(reserved),
-    ".agents/hooks.json": `${JSON.stringify(noneHooks(process.platform, { reserved, script }), null, 2)}\n`,
-  });
+export const GIT_MARKER: Record<string, string> = { ".git/HEAD": "ref: refs/heads/main\n", ".git/objects/": "", ".git/refs/": "" };
+
+/**
+ * The empty folder `none` runs in. It holds only the deny hook and the marker that makes it the root of its own
+ * repository. A run with MCP servers has a folder of its own, `.run.<id>`, since its hook names the run's random prefix.
+ * Every suffix starts with a dot, which a caller's name cannot hold, so no name gives one run the folder of another.
+ */
+export function noneWorkspace(caller?: string, run?: string): Promise<string> {
+  const name = workspaceFor("antigravity-none", caller) + (run === undefined ? "" : `.run.${run}`);
+  return ownedWorkspace(name, { ...GIT_MARKER, ".agents/hooks.json": `${JSON.stringify(noneHooks(process.platform, run), null, 2)}\n` });
+}
+
+/** Removes the folder of a run with MCP servers once the run is over. */
+export const removeRunWorkspace = (dir: string): Promise<void> => rm(dir, { recursive: true, force: true });
+
+/**
+ * The `--gemini-dir` of a `none` run over ACP. agy reads the user's MCP servers (`config/mcp_config.json`), skills and
+ * global `GEMINI.md` from the folder it calls its Gemini folder, `~/.gemini` by default, and starts those servers before
+ * the first prompt. A folder of our own that holds only a link to the user's `antigravity-cli` data folder has none of
+ * them, and agy still finds the sign-in and the conversations through the link. Checked on 1.5.12: a stdio server in the
+ * user's config started with the default and did not start with this folder, and the session and its models still came
+ * back. No link is made while the user has no data folder, and agy then keeps its own in this one.
+ */
+export async function noneGeminiDir(home: string = homedir()): Promise<string> {
+  const dir = await ownedWorkspace("antigravity-gemini-none", {});
+  const target = dataDir(home);
+  const link = join(dir, "antigravity-cli");
+  if (!existsSync(target)) return dir;
+  const current = await readlink(link).catch(() => undefined);
+  if (current === target) return dir;
+  await rm(link, { recursive: true, force: true });
+  // A junction needs no privilege on Windows, where a symbolic link to a folder does.
+  await symlink(target, link, process.platform === "win32" ? "junction" : "dir");
+  return dir;
 }
 
 /**
@@ -383,6 +452,7 @@ async function* runPrint(input: RunInput): AsyncGenerator<FunnelEvent> {
   if (servers.length && input.selection.access === "none") throw new FunnelError('MCP servers at access "none" need the ACP transport.', "unsupported");
   if (servers.length) requireAccess(requireMachine(input.selection).access, ["full"], "Antigravity MCP servers");
   const cwd = input.selection.access === "none" ? await noneWorkspace(input.workspaceName) : input.selection.cwd;
+  if (input.selection.access === "none") await requireWorkingHook();
   const home = input.apiKey ? await apiKeyHome() : undefined;
   const mcp = servers.length ? await mcpWorkspace(servers) : undefined;
   // A long schema would count against the command-line limit, so it goes through a private temp file removed after the run.
@@ -494,8 +564,9 @@ async function* runPrint(input: RunInput): AsyncGenerator<FunnelEvent> {
       // The terminal event ends the stream, also when the CLI keeps running (a resume that started another conversation).
       if (terminal) break;
     }
-    if (tap && !mapper.finished) yield* tap.events();
-    if (transcripts && !mapper.finished) yield* await transcripts.finish();
+    // After the guard's error nothing else goes out: the error is the last event of the run.
+    if (tap && !mapper.finished && !guarded) yield* tap.events();
+    if (transcripts && !mapper.finished && !guarded) yield* await transcripts.finish();
   } finally {
     transcripts?.stop();
     tap?.close();
@@ -528,9 +599,19 @@ async function acpSetup(input: RunInput): Promise<AcpSetup> {
   // At accept-edits agy asks about every MCP call, and nobody can answer there.
   if (servers.length) requireAccess(access, ["none", "full"], "Antigravity MCP servers");
   checkAcpServers(servers);
-  const mcp = reserveServers(servers);
-  const cwd = access === "none" ? await noneWorkspace(input.workspaceName, servers.length) : input.selection.cwd!;
-  const args = [...(dirs ?? []).map((d) => flag("--add-dir", d)), ...(access === "full" ? ["--dangerously-skip-permissions"] : [])];
+  // The names the servers have inside agy carry a random part of this run, so nothing that exists beforehand can share them.
+  const run = randomBytes(4).toString("hex");
+  const mcp = reserveServers(servers, run);
+  // A run at `none` with servers has a folder of its own, removed when the process ends. The hook that runs there is
+  // shown to deny before anything starts.
+  const cwd = access === "none" ? await noneWorkspace(input.workspaceName, servers.length ? run : undefined) : input.selection.cwd!;
+  if (access === "none") await requireWorkingHook(servers.length ? run : undefined);
+  const args = [
+    ...(dirs ?? []).map((d) => flag("--add-dir", d)),
+    ...(access === "full" ? ["--dangerously-skip-permissions"] : []),
+    // At `none` the user's own agy setup stays out: see `noneGeminiDir`.
+    ...(access === "none" ? [flag("--gemini-dir", await noneGeminiDir())] : []),
+  ];
   return {
     path,
     cwd,
@@ -546,7 +627,9 @@ async function acpSetup(input: RunInput): Promise<AcpSetup> {
     mcpServers: mcp.acp,
     mcpCallers: mcp.callers,
     ...(access === "none" && servers.length ? { allowMcp: new Set(mcp.reserved) } : {}),
-    cleanup: async () => undefined,
+    cleanup: async () => {
+      if (access === "none" && servers.length) await removeRunWorkspace(cwd);
+    },
   };
 }
 

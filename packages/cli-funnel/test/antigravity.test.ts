@@ -134,12 +134,13 @@ describe("antigravity none", () => {
     expect(hook.command).toBe('echo {"decision":"deny","reason":"Tools are disabled. Answer in text only."}');
   });
 
-  it("writes only the hook file to its workspace", async () => {
+  it("writes only the hook file and the git marker to its workspace", async () => {
     const old = process.env.XDG_CACHE_HOME;
     process.env.XDG_CACHE_HOME = mkdtempSync(join(tmpdir(), "cf-cache-"));
     try {
       const dir = await noneWorkspace();
-      expect(readdirSync(dir)).toEqual([".agents"]);
+      // The hook, and the marker that makes the folder the root of its own git repository.
+      expect(readdirSync(dir).sort()).toEqual([".agents", ".git"]);
       expect(JSON.parse(readFileSync(join(dir, ".agents", "hooks.json"), "utf8"))).toEqual(noneHooks());
     } finally {
       if (old === undefined) delete process.env.XDG_CACHE_HOME;

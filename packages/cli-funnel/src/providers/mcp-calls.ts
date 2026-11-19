@@ -44,11 +44,15 @@ export function mcpCall(name: string, input: unknown, servers: readonly string[]
   return undefined;
 }
 
-/** Adds `mcp` to the `tool.start` event of each call to one of `servers`. Other events pass unchanged. */
-export async function* tagMcpCalls(events: AsyncIterable<FunnelEvent>, servers: readonly string[], provider?: ProviderId): AsyncGenerator<FunnelEvent> {
+/**
+ * Adds `mcp` to the `tool.start` event of each call to one of `servers`. Other events pass unchanged. A provider whose own
+ * mapper tags the calls (Antigravity over ACP, which knows its servers by a name only this run has) is the only source of
+ * the tag, and `fallback: false` keeps the name-based reading from tagging a user's server that has the caller's name.
+ */
+export async function* tagMcpCalls(events: AsyncIterable<FunnelEvent>, servers: readonly string[], provider?: ProviderId, fallback = true): AsyncGenerator<FunnelEvent> {
   for await (const e of events) {
     if (e.type === "tool.start" && !e.parentId) {
-      const call = e.mcp ?? mcpCall(e.name, e.input, servers, provider);
+      const call = e.mcp ?? (fallback ? mcpCall(e.name, e.input, servers, provider) : undefined);
       if (call) {
         yield e.mcp ? e : { ...e, mcp: call };
         continue;

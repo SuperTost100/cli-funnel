@@ -79,11 +79,17 @@ export interface Capabilities {
   /** The kinds of `RunInput.mcpServers` the provider can attach. Absent or empty means none. */
   mcpServers?: McpServer["type"][];
   /**
-   * The kinds of `RunInput.mcpServers` the provider also takes at access `none`. A provider lists a kind only when its CLI
-   * is made to keep every built-in tool and every MCP server of the user's own config off for the run, so that the
-   * caller's servers are the only tools the model can use, and a run stops with an error if a tool that should have been
-   * refused finishes. Claude Code, Codex and Antigravity over ACP do that. Cursor Agent cannot and lists nothing. Absent
-   * or empty means `none` refuses `mcpServers`.
+   * The kinds of `RunInput.mcpServers` the provider also takes at access `none`, where the caller's servers are meant to be
+   * the only tools the model can call. Absent or empty means `none` refuses `mcpServers`. What enforces it differs:
+   * - Claude Code: the CLI. `--tools ""` removes every built-in tool, `--strict-mcp-config` loads only the caller's
+   *   servers, `--setting-sources ""` skips the user's settings, and `--allowed-tools` names the caller's servers. There is
+   *   no guard, because no built-in tool exists to leak.
+   * - Codex: the CLI's config. The sandbox is read-only, every approval but the caller's servers' is denied, the tool
+   *   features are off, and the servers of the user's config are switched off by name. No guard.
+   * - Antigravity over ACP: a hook that denies every tool but `finish` and the tools of a name made for this run, the
+   *   client's answers to permission requests, a guard that stops the run if another tool finishes, and a private
+   *   `--gemini-dir` so the user's own servers do not start. The print transport refuses servers at `none`.
+   * Cursor Agent lists nothing: it cannot keep the user's servers out while it allows the caller's.
    */
   mcpServersAtNone?: McpServer["type"][];
   /** True when the CLI can run on `RunInput.apiKey` instead of the saved login. */
@@ -678,7 +684,7 @@ export interface RunInput {
   persist?: boolean;
   /**
    * A name for the private folder that Cursor Agent and Antigravity run in at access `none`, so the conversations of
-   * one app pile up apart from those of every other app that uses cli-funnel. Letters, digits, `_` and `-`, up to 40.
+   * one app pile up apart from those of every other app that uses cli-funnel. Lowercase letters, digits, `_` and `-`, up to 40.
    * The folder is `agent-none.<name>` or `antigravity-none.<name>` under `~/.cache/cli-funnel/workspaces/`. Default: one
    * folder shared by every caller. Other providers ignore it.
    */

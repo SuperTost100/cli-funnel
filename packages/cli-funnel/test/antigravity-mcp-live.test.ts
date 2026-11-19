@@ -1,78 +1,154 @@
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { appendFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createFunnel } from "../src/funnel.js";
-import { noneWorkspace } from "../src/providers/antigravity/index.js";
+import { noneGeminiDir, noneWorkspace, removeRunWorkspace } from "../src/providers/antigravity/index.js";
 import type { FunnelEvent } from "../src/types.js";
 import { startNoteServer } from "./mcp-note-server.js";
 
-// A second server, configured the way a user's agy config would be, next to the one the caller attaches. In a none run
-// the caller's server must work and the other must not be callable, through `call_mcp_tool` with the server's name. The other route, the tool named mcp_<server>_<tool>, is only there for a
-// server given to the session, so it was checked once by hand with a raw `agy acp` client that allowed every permission
-// request, to see the hook alone (see docs/providers/antigravity.md). The "user" server is a plugin folder, which agy loads
-// the same way as a server of its own config, put in a folder this test owns so nobody's real config changes.
+// The hook of a none run with MCP servers, on the real agy and account. Part one drives `agy acp` with a raw client that
+// ALLOWS every permission request, so the hook is the only thing between the model and the user's servers: a server that
+// agy knows besides the caller's must not be callable by either route (the generic `call_mcp_tool` and the tool named
+// `mcp_<server>_<tool>`). Part two runs the funnel with a natural prompt, to see how the model reaches the caller's tool.
 const LIVE = process.env.CLI_FUNNEL_LIVE === "1" && process.platform !== "win32";
 const report = (line: unknown) => process.env.MCP_REPORT && appendFileSync(process.env.MCP_REPORT, `${JSON.stringify(line)}\n`);
-const funnel = createFunnel();
-const base = { provider: "antigravity" as const, model: "gemini-3.8-flash", effort: "low" };
+const MODEL = process.env.CF_LIVE_MODEL ?? "gemini-3.8-flash";
 
-function plugin(dir: string, url: string): void {
-  const folder = join(dir, ".agents", "plugins", "usersim");
-  mkdirSync(folder, { recursive: true });
-  writeFileSync(join(folder, "plugin.json"), JSON.stringify({ name: "usersim" }));
-  writeFileSync(join(folder, "mcp_config.json"), JSON.stringify({ mcpServers: { other: { url } } }));
+interface Call {
+  name: string;
+  status: string;
+  input: unknown;
 }
 
-describe.skipIf(!LIVE)("a user's server next to the caller's, at none, live", () => {
-  it("can be called at full, so the runs below test something", async () => {
+/** A minimal `agy acp` client: one session, one prompt, every permission request allowed. */
+async function rawAcp(opts: { cwd: string; servers: object[]; prompt: string; model?: string }): Promise<{ calls: Call[]; text: string; asked: string[] }> {
+  const gemini = await noneGeminiDir();
+  const child = spawn("agy", ["acp", `--gemini-dir=${gemini}`], { cwd: opts.cwd, stdio: ["pipe", "pipe", "ignore"] });
+  const calls = new Map<string, Call>();
+  const asked: string[] = [];
+  let text = "";
+  let id = 0;
+  const waiting = new Map<number, (m: any) => void>();
+  const send = (m: object) => child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", ...m })}\n`);
+  const call = (method: string, params: object) => new Promise<any>((resolve) => {
+    waiting.set(++id, resolve);
+    send({ id, method, params });
+  });
+  let buf = "";
+  child.stdout.on("data", (d) => {
+    buf += d;
+    for (let i = buf.indexOf("\n"); i >= 0; i = buf.indexOf("\n")) {
+      const line = buf.slice(0, i);
+      buf = buf.slice(i + 1);
+      if (!line.trim()) continue;
+      const m = JSON.parse(line);
+      if (m.method === "session/request_permission") {
+        asked.push(m.params.toolCall.name);
+        const allow = m.params.options.find((o: any) => o.kind === "allow_once");
+        send({ id: m.id, result: { outcome: { outcome: "selected", optionId: allow.optionId } } });
+      } else if (m.method === "session/update") {
+        const u = m.params.update;
+        if (u.sessionUpdate === "tool_call" || u.sessionUpdate === "tool_call_update") calls.set(u.toolCallId, { name: u.name, status: u.status, input: u.rawInput });
+        if (u.sessionUpdate === "agent_message_chunk" && u.content?.type === "text") text += u.content.text;
+      } else if (m.id !== undefined && waiting.has(m.id)) {
+        waiting.get(m.id)!(m);
+        waiting.delete(m.id);
+      }
+    }
+  });
+  try {
+    await call("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } });
+    const session = (await call("session/new", { cwd: opts.cwd, mcpServers: opts.servers })).result;
+    await call("session/set_config_option", { sessionId: session.sessionId, configId: "model", value: opts.model ?? MODEL });
+    await call("session/set_config_option", { sessionId: session.sessionId, configId: "thought_level", value: "low" });
+    await Promise.race([call("session/prompt", { sessionId: session.sessionId, prompt: [{ type: "text", text: opts.prompt }] }), new Promise((r) => setTimeout(r, 110_000))]);
+  } finally {
+    child.kill();
+  }
+  return { calls: [...calls.values()], text, asked };
+}
+
+describe.skipIf(!LIVE)("the hook of a none run with servers, live", () => {
+  const RUN = "5ec0de01";
+  const ours = `clifunnel${RUN}_0`;
+
+  it("refuses a user-style server called through call_mcp_tool, with every permission allowed", async () => {
+    const mine = await startNoteServer();
     const theirs = await startNoteServer();
-    const cwd = mkdtempSync(join(tmpdir(), "cf-agy-usersim-"));
-    plugin(cwd, theirs.url);
+    const cwd = await noneWorkspace("live-hook-test", RUN);
+    // A plugin in the folder is a server agy knows next to the caller's, set up the way a user's would be.
+    const plugin = join(cwd, ".agents", "plugins", "usersim");
+    mkdirSync(plugin, { recursive: true });
+    writeFileSync(join(plugin, "plugin.json"), JSON.stringify({ name: "usersim" }));
+    writeFileSync(join(plugin, "mcp_config.json"), JSON.stringify({ mcpServers: { other: { url: theirs.url } } }));
     try {
-      const events: FunnelEvent[] = [];
-      for await (const e of funnel.stream({ selection: { ...base, cwd, access: "full" }, prompt: 'Call the add_note tool of the MCP server named usersim_other with the text "from-full", using the generic call_mcp_tool tool with ServerName "usersim_other". Then say what happened.', timeoutMs: 120_000 })) events.push(e);
-      report({ run: "full", calls: theirs.calls, seen: theirs.seen.map((s) => s.method), tools: events.filter((e) => e.type === "tool.start").map((e: any) => `${e.name} ${JSON.stringify(e.input).slice(0, 100)}`) });
-      expect(theirs.calls).toEqual(["from-full"]);
+      const r = await rawAcp({
+        cwd,
+        servers: [{ type: "http", name: ours, url: mine.url, headers: [] }],
+        prompt: `Do both: (1) call the add_note tool of the MCP server named ${ours} with the text "from-caller". (2) call the add_note tool of the MCP server named usersim_other with the text "from-user", using the generic call_mcp_tool tool with ServerName "usersim_other". Then say what happened.`,
+      });
+      report({ scenario: "generic route", model: MODEL, ours: mine.calls, theirs: theirs.calls, calls: r.calls.map((c) => `${c.name} ${c.status}`), asked: r.asked, text: r.text.slice(0, 160) });
+      expect(theirs.calls).toEqual([]);
+      expect(r.calls.some((c) => /usersim/.test(JSON.stringify(c.input)) && c.status === "failed")).toBe(true);
+      expect(mine.calls).toEqual(["from-caller"]);
     } finally {
+      mine.close();
       theirs.close();
-      rmSync(cwd, { recursive: true, force: true });
+      await removeRunWorkspace(cwd);
     }
   }, 180_000);
 
-  it("none: the caller's server is called and the user's is not, through call_mcp_tool", async () => {
-    const _form = "call_mcp_tool";
-    const prompt = 'Do both: (1) call the add_note tool of the MCP server named clifunnel0 with the text "from-caller". (2) call the add_note tool of the MCP server named usersim_other with the text "from-user", using the generic call_mcp_tool tool with ServerName "usersim_other". Then say what happened.';
-    const ours = await startNoteServer();
+  it("refuses a second server given to the session, called by its own tool name, with every permission allowed", async () => {
+    const mine = await startNoteServer();
     const theirs = await startNoteServer();
-    // The folder of a none run with one server is the one cli-funnel makes for it. The plugin goes next to its hook.
-    const dir = await noneWorkspace("live-test-usersim", 1);
-    plugin(dir, theirs.url);
+    const cwd = await noneWorkspace("live-hook-test", RUN);
+    try {
+      const r = await rawAcp({
+        cwd,
+        servers: [
+          { type: "http", name: ours, url: mine.url, headers: [] },
+          { type: "http", name: "usersim2", url: theirs.url, headers: [] },
+        ],
+        prompt: `Do both: (1) call the add_note tool of the MCP server named ${ours} with the text "from-caller". (2) call the tool named mcp_usersim2_add_note with the text "from-user". Then say what happened.`,
+      });
+      report({ scenario: "direct route", model: MODEL, ours: mine.calls, theirs: theirs.calls, calls: r.calls.map((c) => `${c.name} ${c.status}`), asked: r.asked, text: r.text.slice(0, 160) });
+      expect(theirs.calls).toEqual([]);
+      expect(r.calls.some((c) => c.name === "mcp_usersim2_add_note" && c.status === "failed")).toBe(true);
+      expect(mine.calls).toEqual(["from-caller"]);
+    } finally {
+      mine.close();
+      theirs.close();
+      await removeRunWorkspace(cwd);
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  }, 180_000);
+});
+
+describe.skipIf(!LIVE)("how the model reaches the caller's tool, live", () => {
+  const funnel = createFunnel();
+  const selection = { provider: "antigravity" as const, model: MODEL, effort: "low", cwd: tmpdir(), access: "none" as const };
+  const prompts: [string, string][] = [
+    ["natural", "Save a note that says hello-from-the-model, then tell me it is saved."],
+    ["generic first", "Use the generic call_mcp_tool tool to call add_note with the text hello-from-the-model. Then tell me what happened."],
+    ["server named", "Call the add_note tool of the MCP server named notes with the text hello-from-the-model."],
+  ];
+  // A prompt that tells the model to use `call_mcp_tool` asks for a route the hook refuses (a matcher cannot see the server
+  // in its arguments). gemini-3.8-flash fell back to the tool's own name and saved the note, gemini-4-neon answered that the
+  // tool is not available and saved nothing. Either way the run finishes cleanly, so only that is asserted for it.
+  it.each(prompts)("%s prompt: the run finishes, and the note is saved unless the prompt demanded the generic route", async (label, prompt) => {
+    const server = await startNoteServer();
     try {
       const events: FunnelEvent[] = [];
-      const s = funnel.stream({
-        selection: { ...base, cwd: tmpdir(), access: "none" },
-        workspaceName: "live-test-usersim",
-        prompt,
-        mcpServers: { notes: { type: "http", url: ours.url } },
-        timeoutMs: 120_000,
-      });
+      const s = funnel.stream({ selection, prompt, mcpServers: { notes: { type: "http", url: server.url } }, timeoutMs: 120_000 });
       for await (const e of s) events.push(e);
       const r = await s.result;
-      const starts = events.filter((e): e is Extract<FunnelEvent, { type: "tool.start" }> => e.type === "tool.start");
-      report({ run: _form, ours: ours.calls, theirs: theirs.calls, tools: r.toolCalls.map((c) => `${c.name} ${JSON.stringify(c.input).slice(0, 90)} ${c.error?.slice(0, 60) ?? "ok"}`), tagged: starts.filter((e) => e.mcp).map((e) => e.mcp), text: r.text.slice(0, 200) });
-      expect(ours.calls).toEqual(["from-caller"]);
-      expect(theirs.calls).toEqual([]);
-      // The model did try the other server, and the attempt ended in an error.
-      const tried = r.toolCalls.filter((c) => /usersim/.test(`${c.name} ${JSON.stringify(c.input)}`));
-      expect(tried.length).toBeGreaterThan(0);
-      expect(tried.every((c) => c.error !== undefined)).toBe(true);
-      // The caller's own call is tagged with the caller's name, not the one agy knows it by.
-      expect(r.toolCalls.some((c) => c.mcp?.server === "notes" && c.mcp.tool === "add_note")).toBe(true);
+      report({ scenario: `funnel ${label}`, model: MODEL, notes: server.calls, finish: r.finishReason, tools: r.toolCalls.map((c) => `${c.name}${c.error ? ` (${c.error.slice(0, 60)})` : ""}`), text: r.text.slice(0, 140) });
+      expect(r.finishReason).toBe("stop");
+      if (label !== "generic first") expect(server.calls).toEqual(["hello-from-the-model"]);
     } finally {
-      ours.close();
-      theirs.close();
-      rmSync(dir, { recursive: true, force: true });
+      server.close();
     }
   }, 180_000);
 });

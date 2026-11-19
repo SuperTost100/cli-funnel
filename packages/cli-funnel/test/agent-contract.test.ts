@@ -332,7 +332,7 @@ describe("server answers", () => {
 });
 
 describe("run secrets", () => {
-  it("masks the API key and credential headers in every event, and leaves other values alone", async () => {
+  it("masks the API key, every MCP header value and the credential env values in every event, and leaves other env values alone", async () => {
     const leaky: Provider = {
       ...base,
       capabilities: { ...base.capabilities, apiKey: true, mcpServers: ["http"] },
@@ -352,7 +352,8 @@ describe("run secrets", () => {
       env: { SERVICE_TOKEN: "env-token-value-1", PROJECT_HOME: "/home/user/project" },
     });
     expect(events.find((e) => e.type === "tool.end")).toMatchObject({ output: "CURSOR_API_KEY=[redacted] X=[redacted] T=[redacted] HOME=/home/user/project" });
-    expect(result.text).toBe("Your key is [redacted] and the type is application/json");
+    // Every header value of a caller's MCP server is a secret, whatever the header is called.
+    expect(result.text).toBe("Your key is [redacted] and the type is [redacted]");
     expect(result.toolCalls[0]!.input).toEqual({ command: "echo [redacted]" });
     expect(JSON.stringify(events)).not.toMatch(/sk-test-key|Bearer-header-secret|env-token-value/);
   });
