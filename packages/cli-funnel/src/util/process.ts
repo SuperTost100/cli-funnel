@@ -361,16 +361,19 @@ export function spawnStream(
     if (overflowed) return;
     buffer += chunk;
     let i: number;
+    const tooLong = () => {
+      overflowed = true;
+      buffer = "";
+      channel.fail(new FunnelError(`${basename(file)} printed a line of more than ${maxLine} characters. The run was stopped.`, "cli-failed"));
+      terminate(child);
+    };
     while ((i = buffer.indexOf("\n")) >= 0) {
+      // A line over the cap is not parsed or emitted, whether or not its line break came in the same chunk.
+      if (i > maxLine) return tooLong();
       flush(buffer.slice(0, i));
       buffer = buffer.slice(i + 1);
     }
-    if (buffer.length > maxLine) {
-      overflowed = true;
-      buffer = "";
-      channel.fail(new FunnelError(`${basename(file)} printed more than ${maxLine} characters without a line break. The run was stopped.`, "cli-failed"));
-      terminate(child);
-    }
+    if (buffer.length > maxLine) tooLong();
   });
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (d: string) => {

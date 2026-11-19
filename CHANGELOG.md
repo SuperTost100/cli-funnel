@@ -12,6 +12,9 @@ Antigravity runs over the Agent Client Protocol by default, and token counts fol
 - **Antigravity lists an `xhigh` effort** on the models that have one. 0.9.x did not group those ids into a model.
 - A quota or rate limit that agy reports over ACP becomes a `limit` event with `resetAt`, then an `error`.
 
+- **Antigravity `none` runs read less of the user's setup.** Over ACP they start with a private `--gemini-dir`, so the user's MCP servers do not start and their skills and global `GEMINI.md` are not read. On `print` the servers still start, and every call to them is refused. Both transports run in a folder that is the root of its own git repository, so the `AGENTS.md` and `.agents/` of a repository above it are not read.
+- **MCP server values are masked wherever they show up.** Every header value and env value of a caller's `mcpServers`, whatever its name, and the password and the long query values of a server URL, are masked in events, raw events, the run log and error text.
+
 ### Migrating from 0.9.x
 
 1. Update agy to 1.5.0 or newer, or set `providerOptions.antigravity.transport: "print"` to stay on the old transport. `provider.detect()` says in `detail` when agy is too old.

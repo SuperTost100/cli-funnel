@@ -9,13 +9,19 @@ function funnelCacheDir(): string {
 }
 
 /**
- * Returns a private folder that holds only `files`, for runs that must not see the user's project.
+ * Returns a private folder that holds only `files`, for runs that must not see the user's project. A key that ends in a
+ * slash is an empty folder.
  * Files are rewritten when their content differs, through a rename so a concurrent run never reads half a file.
  */
 export async function ownedWorkspace(name: string, files: Record<string, string>): Promise<string> {
   const dir = join(funnelCacheDir(), "workspaces", name);
   await mkdir(dir, { recursive: true, mode: 0o700 });
   for (const [rel, content] of Object.entries(files)) {
+    // A name that ends in a slash is an empty folder.
+    if (rel.endsWith("/")) {
+      await mkdir(join(dir, rel), { recursive: true, mode: 0o700 });
+      continue;
+    }
     const path = join(dir, rel);
     if ((await readFile(path, "utf8").catch(() => undefined)) === content) continue;
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });

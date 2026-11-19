@@ -11,7 +11,7 @@ const start = (id: string, name: string, extra: object = {}): FunnelEvent => ({ 
 const end = (id: string, extra: object = {}): FunnelEvent => ({ type: "tool.end", id, ...extra });
 
 describe("the none guard", () => {
-  const guard = () => createNoneGuard((name) => name !== "finish");
+  const guard = () => createNoneGuard((start) => start.name !== "finish");
 
   it("stays quiet while every forbidden tool ends with an error, as the rules make it", () => {
     const g = guard();
@@ -26,26 +26,50 @@ describe("the none guard", () => {
     expect(g.check(end("1", { output: "secret" }))).toMatch(/"read_file" ran at access "none".*stopped/);
   });
 
-  it("allows what the caller allows, and ignores a subagent's calls and an end it never saw start", () => {
+  it("allows what the caller allows, and ignores an end it never saw start", () => {
     const g = guard();
     g.check(start("1", "finish"));
     expect(g.check(end("1"))).toBeUndefined();
-    g.check(start("2", "run_command", { parentId: "9" }));
-    expect(g.check(end("2", { parentId: "9" }))).toBeUndefined();
     expect(g.check(end("unknown"))).toBeUndefined();
   });
 
+  it("checks a subagent's calls too", () => {
+    const g = guard();
+    g.check(start("2", "run_command", { parentId: "9" }));
+    expect(g.check(end("2", { parentId: "9", output: "ok" }))).toMatch(/"run_command" ran at access "none"/);
+    g.check(start("3", "run_command", { parentId: "9" }));
+    expect(g.check(end("3", { parentId: "9", error: "denied: no" }))).toBeUndefined();
+  });
+
+  it("forgets a call when it ends, so a long session holds nothing from earlier calls", () => {
+    const g = guard();
+    for (let i = 0; i < 500; i++) {
+      g.check(start(String(i), "finish", { input: { big: "x".repeat(1000) } }));
+      g.check(end(String(i)));
+    }
+    expect(g.pending()).toBe(0);
+    g.check(start("open", "run_command"));
+    expect(g.pending()).toBe(1);
+  });
+
   it("knows Cursor Agent's tools by the names its stream uses", () => {
-    for (const name of ["shell", "read", "edit", "delete", "mcp", "task"]) {
+    for (const name of ["shell", "read", "edit", "delete", "mcp", "task", "webFetch"]) {
       const g = cursorNoneGuard();
       g.check(start("1", name));
       expect(g.check(end("1")), name).toMatch(/ran at access "none"/);
     }
-    for (const name of ["glob", "grep", "getMcpTools", "updateTodos"]) {
+    for (const name of ["glob", "grep", "getMcpTools", "updateTodos", "createPlan", "askQuestion"]) {
       const g = cursorNoneGuard();
       g.check(start("1", name));
       expect(g.check(end("1")), name).toBeUndefined();
     }
+    // A tool the list does not know ends the run when it completes, and one that was refused does not.
+    const unknown = cursorNoneGuard();
+    unknown.check(start("1", "somethingNew"));
+    expect(unknown.check(end("1"))).toMatch(/"somethingNew" ran at access "none"/);
+    const refused = cursorNoneGuard();
+    refused.check(start("1", "read"));
+    expect(refused.check(end("1", { error: "Permission denied" }))).toBeUndefined();
   });
 });
 
@@ -107,6 +131,23 @@ describe.skipIf(process.platform === "win32")("Antigravity print at none, with a
     const run: RunInput = { selection: { provider: "antigravity", model: "m", cwd: dir, access: "none" }, prompt: "hi", providerOptions: { antigravity: { transport: "print" } } };
     for await (const e of antigravityProvider.run(run)) events.push(e);
     expect(events.at(-1)).toMatchObject({ type: "error", code: "cli-failed", message: expect.stringContaining('"run_command" ran at access "none"') });
+    expect(events.some((e) => e.type === "done")).toBe(false);
+  }, 20_000);
+
+  it("keeps the error the last event of a verbose run, with no raw line or transcript event after it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cf-agy-guard-"));
+    const out = [JSON.stringify({ event: "init", conversation_id: "c1", init: { model: "m", cwd: "/w" } }), step(1, "RUNNING"), step(1, "DONE", { output: "Command exited with code 0." })];
+    writeFileSync(join(dir, "out.ndjson"), `${out.join("\n")}\n`);
+    const bin = join(dir, "agy");
+    // stderr written right after the line that ends the run, and the process stays up.
+    writeFileSync(bin, `#!/bin/sh\ncat ${join(dir, "out.ndjson")}\necho "late stderr" >&2\nsleep 3\n`);
+    chmodSync(bin, 0o755);
+    process.env.CLI_FUNNEL_AGY_BIN = bin;
+    const events: FunnelEvent[] = [];
+    const run: RunInput = { selection: { provider: "antigravity", model: "m", cwd: dir, access: "none" }, prompt: "hi", verbose: true, providerOptions: { antigravity: { transport: "print" } } };
+    for await (const e of antigravityProvider.run(run)) events.push(e);
+    expect(events.at(-1)).toMatchObject({ type: "error", message: expect.stringContaining("ran at access") });
+    expect(events.filter((e) => e.type === "error")).toHaveLength(1);
     expect(events.some((e) => e.type === "done")).toBe(false);
   }, 20_000);
 });

@@ -55,7 +55,7 @@ When a CLI refuses an action because nobody could approve it, the run reports it
 
 ## When the folder carries its own settings
 
-A level is enforced with the CLI's own permission settings, and the working folder can add to them. A `.claude/settings.local.json` with an allow rule lets Claude Code run commands at `supervised` without asking `onApproval`, and a Codex project's `.codex/rules/` can do the same. Set `folderConfig: "ignore"` on Claude Code 2.1.325 or newer and Codex 0.150.0 or newer so only the caller's settings and the user's own apply. Cursor Agent and Antigravity cannot turn folder config off. See [Folder config](run-options.md#folder-config).
+A level is enforced with the CLI's own permission settings, and the working folder can add to them. A `.claude/settings.local.json` with an allow rule lets Claude Code run commands at `supervised` without asking `onApproval`, and a Codex project's `.codex/rules/` can do the same. Set `folderConfig: "ignore"` on Claude Code 2.1.325 or newer and Codex 0.150.0 or newer so only the caller's settings and the user's own apply. Cursor Agent and Antigravity cannot turn folder config off. See [Folder config](run-options.md#folder-config). At `none` Antigravity's own folder is the root of its own git repository, so the instructions of a repository above it are not read, and over ACP it also starts without the user's MCP servers, skills and global `GEMINI.md`. On the `print` transport the user's MCP servers still start at `none` (every call to them is refused). See [Antigravity](providers/antigravity.md#none).
 
 ## Choosing a level
 

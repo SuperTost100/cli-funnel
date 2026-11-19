@@ -367,5 +367,6 @@ export function failureFromTurn(stopReason: string, text: string): Failure | und
   const api = API_ERROR_REPLY.exec(text);
   if (!api) return undefined;
   const failure = failureFromError({ message: text });
-  return failure.limit ? failure : { message: api[2]!.trim(), code: "cli-failed" };
+  // A limit, a sign-in or a subscription failure keeps its own classification. Any other failure says what the line says.
+  return failure.limit || failure.code === "not-logged-in" || failure.message !== text.trim() ? failure : { message: api[2]!.trim(), code: "cli-failed" };
 }
