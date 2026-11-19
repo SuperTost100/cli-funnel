@@ -452,12 +452,13 @@ describe.skipIf(process.platform === "win32")("antigravity over ACP, with a fake
       await drain(input());
       const dir = dirOf(agy.received()[0]!.argv)!;
       expect(dir).toMatch(/antigravity-gemini-none$/);
-      expect(readdirSync(dir)).toEqual(["antigravity-cli"]);
+      // The link to the data folder, and a config that is already migrated and empty, so agy has nothing to move.
+      expect(readdirSync(dir).sort()).toEqual(["antigravity-cli", "config"]);
       expect(lstatSync(join(dir, "antigravity-cli")).isSymbolicLink()).toBe(true);
       expect(realpathSync(join(dir, "antigravity-cli"))).toBe(realpathSync(real()));
     });
 
-    it("points a stale link at the data folder again, and makes none when there is no data folder yet", async () => {
+    it("points a stale link at the data folder again, and makes the data folder when there is none yet", async () => {
       mkdirSync(real(), { recursive: true });
       const agy = fakeAgy();
       await drain(input());
@@ -466,10 +467,12 @@ describe.skipIf(process.platform === "win32")("antigravity over ACP, with a fake
       symlinkSync(tmpdir(), join(dir, "antigravity-cli"));
       await drain(input());
       expect(realpathSync(join(dir, "antigravity-cli"))).toBe(realpathSync(real()));
-      rmSync(real(), { recursive: true });
+      // No data folder yet: it is made, so no conversation is ever kept in the private folder.
       rmSync(join(dir, "antigravity-cli"));
+      rmSync(real(), { recursive: true });
       await drain(input());
-      expect(existsSync(join(dir, "antigravity-cli"))).toBe(false);
+      expect(existsSync(real())).toBe(true);
+      expect(realpathSync(join(dir, "antigravity-cli"))).toBe(realpathSync(real()));
     });
 
     it("leaves every other level on the user's own setup", async () => {
@@ -605,6 +608,15 @@ describe.skipIf(process.platform === "win32")("antigravity over ACP, with a fake
       expect(events.some((e) => e.type === "done")).toBe(false);
     });
 
+    it("stops the run when a tool fails with a message that is not a refusal, or starts and never ends", async () => {
+      fakeAgy({ script: [call("c1", "run_command", "in_progress"), call("c1u", "run_command", "failed", { rawOutput: { output: "exit status 1" } }), text, result] });
+      expect((await drain(input())).at(-1)).toMatchObject({ type: "error", message: expect.stringContaining("failed without being refused") });
+      fakeAgy({ script: [call("c1", "run_command", "in_progress"), text, result] });
+      const events = await drain(input());
+      expect(events.at(-1)).toMatchObject({ type: "error", code: "cli-failed", message: expect.stringContaining("started and never ended") });
+      expect(events.some((e) => e.type === "done")).toBe(false);
+    });
+
     it("lets refused tools and finish through, and does not guard the other levels", async () => {
       const refused = [call("c1", "read_file", "in_progress"), call("c1u", "read_file", "failed"), call("c2", "finish", "in_progress"), call("c2u", "finish", "completed"), text, result];
       fakeAgy({ script: refused });
@@ -628,6 +640,16 @@ describe.skipIf(process.platform === "win32")("antigravity over ACP, with a fake
     const stderr = events.flatMap((e, i) => (e.type === "raw" && e.source === "stderr" && e.data === "late-log-line" ? [i] : []));
     expect(stderr).toHaveLength(1);
     expect(stderr[0]).toBeLessThan(events.findIndex((e) => e.type === "done"));
+  });
+
+  it("masks the run's secrets in the errors it reports, also when no funnel is in between", async () => {
+    // agy quotes the address of a server as the caller wrote it: percent-encoded, with the password in it.
+    const url = "https://user:p%40ssword12@host.example/mcp?token=abcdefg%2Fh12";
+    fakeAgy({ promptError: { code: -32603, message: `connection to ${url} failed with header-value-1` } });
+    const events = await drain(input({ mcpServers: { api: { type: "http", url, headers: { "X-Custom": "header-value-1" } } } }, { access: "full" }));
+    const error = events.find((e) => e.type === "error") as Extract<FunnelEvent, { type: "error" }>;
+    expect(error.message).not.toMatch(/p%40ssword12|abcdefg%2Fh12|header-value-1/);
+    expect(error.message).toContain("[redacted]");
   });
 
   it("refuses the print-only subagent options and an API key, which run on the print transport", async () => {

@@ -65,19 +65,42 @@ export function runSecrets(input: Pick<RunInput, "apiKey" | "mcpServers" | "env"
   };
   named(input.env);
   const servers = typeof input.mcpServers === "object" && input.mcpServers !== null ? Object.values(input.mcpServers) : [];
-  const all = (entries: unknown) => {
+  // A header value is a secret whatever the header is called. An env value is one when its name looks like a credential,
+  // or when it is long enough that it is unlikely to be a plain word: `DEBUG=true` must not turn every "true" in an answer
+  // into [redacted].
+  const headers = (entries: unknown) => {
     if (typeof entries !== "object" || entries === null) return;
     for (const value of Object.values(entries)) if (typeof value === "string" && value.length >= 4) values.push(value);
   };
+  const env = (entries: unknown) => {
+    if (typeof entries !== "object" || entries === null) return;
+    for (const [name, value] of Object.entries(entries)) if (typeof value === "string" && value.length >= 4 && (SECRET_NAME.test(name) || value.length >= 12)) values.push(value);
+  };
+  /** The value as written in a URL and decoded, since a CLI's error text quotes the address as written. */
+  const both = (raw: string, floor: number) => {
+    let decoded = raw;
+    try {
+      decoded = decodeURIComponent(raw);
+    } catch {
+      /* not valid percent-encoding: the raw form is all there is */
+    }
+    for (const v of new Set([raw, decoded])) if (v.length >= floor) values.push(v);
+  };
   for (const server of servers) {
     if (typeof server !== "object" || server === null) continue;
-    all(server.type === "http" ? server.headers : server.env);
+    if (server.type === "http") headers(server.headers);
+    else env(server.env);
     if (server.type === "http" && typeof server.url === "string" && URL.canParse(server.url)) {
       const url = new URL(server.url);
-      // A query value such as `mode=fast` is ordinary text, so only a value of 8 characters or more, where a token sits, counts.
-      const password = decodeURIComponent(url.password);
-      if (password.length >= 4) values.push(password);
-      for (const value of url.searchParams.values()) if (value.length >= 8) values.push(value);
+      // The address as the CLI quotes it has the password and the query as the caller wrote them, so the raw text of the
+      // address is read, not only what `URL` decodes. A query value such as `mode=fast` is ordinary text, so only a value
+      // of 8 characters or more, where a token sits, counts.
+      both(url.password, 4);
+      const query = server.url.split("#")[0]!.split("?")[1] ?? "";
+      for (const pair of query.split("&")) {
+        const value = pair.slice(pair.indexOf("=") + 1);
+        if (pair.includes("=")) both(value, 8);
+      }
     }
   }
   // Output is masked line by line in places, such as stderr, so each line of a multiline secret (a PEM key) counts

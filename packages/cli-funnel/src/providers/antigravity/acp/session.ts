@@ -5,7 +5,8 @@ import { compareVersions, spawnStream } from "../../../util/process.js";
 import { requireMachine } from "../../../selection.js";
 import { composePrompt } from "../../prompt.js";
 import { rawEvent, stderrTail } from "../../base.js";
-import { createNoneGuard } from "../../none-guard.js";
+import { NO_GIT_ENV } from "../../../util/workspace.js";
+import { AGY_REFUSAL, createNoneGuard } from "../../none-guard.js";
 import { runSecrets } from "../../../util/redact.js";
 import { AcpClient, AcpError } from "./client.js";
 import {
@@ -35,7 +36,7 @@ export interface AcpSetup {
   cwd: string;
   /** The arguments after `acp`: `--add-dir`, `--dangerously-skip-permissions`. */
   args: string[];
-  env?: Record<string, string>;
+  env?: Record<string, string | undefined>;
   /** Ends the turn after this many seconds, as `providerOptions.antigravity.printTimeoutSec`. */
   timeoutSec?: number;
   /** Where agy keeps conversation files, for the task list that becomes a `plan` event. */
@@ -93,7 +94,7 @@ function within<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
  */
 export async function openAcpSession(first: RunInput, setup: AcpSetup): Promise<LiveSession> {
   const access = requireMachine(first.selection).access;
-  const proc = spawnStream(setup.path, ["acp", ...setup.args], { cwd: setup.cwd, env: first.env });
+  const proc = spawnStream(setup.path, ["acp", ...setup.args], { cwd: setup.cwd, env: access === "none" ? { ...first.env, ...NO_GIT_ENV } : first.env });
   proc.hold(false);
   let sessionId: string | undefined;
   let facts: AgentFacts | undefined;
@@ -114,7 +115,7 @@ export async function openAcpSession(first: RunInput, setup: AcpSetup): Promise<
   };
   // Only `finish` may complete at `none`, which ends a turn and carries nothing out. `allowTool` adds the caller's own tools.
   // One guard per turn, so a live session does not keep the arguments of every call it ever made.
-  const newGuard = () => (access === "none" ? createNoneGuard((start) => start.name !== "finish" && !setup.allowTool?.(start.name, start.input)) : undefined);
+  const newGuard = () => (access === "none" ? createNoneGuard((start) => start.name !== "finish" && !setup.allowTool?.(start.name, start.input), AGY_REFUSAL) : undefined);
 
   const finish = (t: Turn, events: FunnelEvent[]) => {
     if (t.finished) return;
@@ -273,6 +274,12 @@ export async function openAcpSession(first: RunInput, setup: AcpSetup): Promise<
         if (failure) {
           fail(t, failure);
           return;
+        }
+        // A forbidden call that never ended may have run, so the turn does not end as done.
+        const unfinished = t.guard?.unfinished();
+        if (unfinished) {
+          stop();
+          return finish(t, [{ type: "error", message: unfinished, code: "cli-failed" }]);
         }
         finish(t, t.mapper.finish(stopReason, result?.usage));
       } catch (e) {

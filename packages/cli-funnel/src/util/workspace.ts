@@ -24,6 +24,13 @@ export function workspaceFor(name: string, caller: string | undefined): string {
 }
 
 /**
+ * Variables that point git at another repository. A CLI at access `none` runs in a folder with a git marker of its own
+ * so it reads no instructions from above, and these would send it to someone else's repository instead. A value of
+ * `undefined` removes the variable from the child's environment.
+ */
+export const NO_GIT_ENV: Record<string, undefined> = { GIT_DIR: undefined, GIT_WORK_TREE: undefined };
+
+/**
  * Returns a private folder that holds only `files`, for runs that must not see the user's project. A key that ends in a
  * slash is an empty folder.
  * Files are rewritten when their content differs, through a rename so a concurrent run never reads half a file.

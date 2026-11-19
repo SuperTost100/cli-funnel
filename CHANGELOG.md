@@ -14,6 +14,8 @@ Antigravity runs over the Agent Client Protocol by default, and token counts fol
 
 - **Antigravity `none` runs read less of the user's setup.** Over ACP they start with a private `--gemini-dir`, so the user's MCP servers do not start and their skills and global `GEMINI.md` are not read. On `print` the servers still start, and every call to them is refused. Both transports run in a folder that is the root of its own git repository, so the `AGENTS.md` and `.agents/` of a repository above it are not read.
 - **MCP server values are masked wherever they show up.** Every header value and env value of a caller's `mcpServers`, whatever its name, and the password and the long query values of a server URL, are masked in events, raw events, the run log and error text.
+- **A tool that fails at `none` without being refused stops the run.** On Antigravity and Cursor Agent, a forbidden call that ends in an error stops the run unless the error is the hook's or the permission answer's refusal, and so does a forbidden call that started and never ended by the end of the turn.
+- **`none` runs of Antigravity and Cursor Agent drop `GIT_DIR` and `GIT_WORK_TREE`** from the child's environment.
 
 ### Added
 
