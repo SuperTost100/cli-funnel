@@ -305,6 +305,21 @@ describe("MCP calls in the event stream", () => {
     expect(out[0]).toMatchObject({ mcp: { server: "notes", tool: "add_note" } });
   });
 
+  it("leaves the tagging to the mapper where the mapper is the only source, so a user's server with the caller's name is not tagged", async () => {
+    const events: FunnelEvent[] = [
+      { type: "tool.start", id: "1", name: "mcp_notes_add_note", input: {} },
+      { type: "tool.start", id: "2", name: "mcp_notes_add_note", input: {}, mcp: { server: "notes", tool: "add_note" } },
+    ];
+    const run = async (fallback: boolean) => {
+      const out: FunnelEvent[] = [];
+      for await (const e of tagMcpCalls((async function* () { yield* events; })(), ["notes"], "antigravity", fallback)) out.push(e);
+      return out;
+    };
+    // With the fallback on, the display name tags both. With it off, only the call the mapper tagged keeps its tag.
+    expect((await run(true)).map((e) => "mcp" in e)).toEqual([true, true]);
+    expect((await run(false)).map((e) => "mcp" in e)).toEqual([false, true]);
+  });
+
   it("takes the longest server name, so a short one never claims another's tool", () => {
     expect(mcpCall("mcp_notes_two_add", {}, names)).toEqual({ server: "notes_two", tool: "add" });
   });
