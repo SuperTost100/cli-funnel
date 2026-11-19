@@ -46,8 +46,10 @@ describe("claude MCP servers", () => {
     }
   });
 
-  it("refuses an HTTP server at none", () => {
-    expect(outcome(() => buildArgs(input("none", { mcpServers: { app } })))).toBe("invalid-selection");
+  it("takes an HTTP server at none, allowed by name as the only tool", () => {
+    const args = buildArgs(input("none", { mcpServers: { app } }));
+    expect(args).toEqual(expect.arrayContaining(["--tools", "", "--strict-mcp-config", "--allowed-tools=mcp__app"]));
+    expect(Object.keys(mcpArg(args).mcpServers)).toEqual(["app"]);
   });
 
   it("merges with providerOptions.claude.mcpConfig and refuses a name in both", () => {

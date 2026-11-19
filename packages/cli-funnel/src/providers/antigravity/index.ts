@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
@@ -27,7 +28,7 @@ import { detectInstallation, exitedEarly, findBinary, isTerminal, LOGIN_TIMEOUT_
 import { runSecrets } from "../../util/redact.js";
 import { createMapper, parseModels, parseRateLimits, parseWarning } from "./parser.js";
 import { openAcpSession, type AcpSetup } from "./acp/session.js";
-import { ACP_MIN_VERSION } from "./acp/protocol.js";
+import { acpMcpServers, ACP_MIN_VERSION, MCP_TOOL, mcpToolPrefix } from "./acp/protocol.js";
 import { SubagentTranscripts, type ForwardSubagents } from "./transcript.js";
 import { composePrompt } from "../prompt.js";
 import { FEEDBACK_CHANNELS } from "../feedback.js";
@@ -121,19 +122,60 @@ const DENY = { decision: "deny", reason: "Tools are disabled. Answer in text onl
 export const NONE_MATCHER = "^(?:[^f].*|f[^i].*|fi[^n].*|fin[^i].*|fini[^s].*|finis[^h].*|finish.+|.{0,5})$";
 
 /**
+ * A regular expression that matches every string except `names`. Go regexp has no lookahead, so it is spelled out as a
+ * trie: at each step a character that continues no name matches the rest, a character that continues a name goes on
+ * with that name, and a string that ends early or runs past a whole name matches. `NONE_MATCHER` is this for `finish`.
+ * Every string that starts with one of `prefixes` is left out as well.
+ */
+export function exceptNames(names: readonly string[], prefixes: readonly string[] = []): string {
+  type Node = { children: Map<string, Node>; end: boolean; prefix: boolean };
+  const root: Node = { children: new Map(), end: false, prefix: false };
+  const add = (word: string, flag: "end" | "prefix") => {
+    let node = root;
+    for (const ch of word) {
+      if (!node.children.has(ch)) node.children.set(ch, { children: new Map(), end: false, prefix: false });
+      node = node.children.get(ch)!;
+    }
+    node[flag] = true;
+  };
+  for (const name of names) add(name, "end");
+  for (const prefix of prefixes) add(prefix, "prefix");
+  const esc = (c: string) => c.replace(/[\\^$.|?*+()[\]{}-]/g, "\\$&");
+  const alternatives = (node: Node): string[] => {
+    // Everything from here on starts with an excluded prefix.
+    if (node.prefix) return [];
+    const chars = [...node.children.keys()].map(esc).join("");
+    const out = [chars ? `[^${chars}].*` : ".+"];
+    for (const [ch, child] of node.children) out.push(...alternatives(child).map((a) => esc(ch) + a));
+    // A string that ends here is a proper prefix of a name, or is empty, and is not a name. One that runs on is longer.
+    if (node.end) out.push(".+");
+    else out.push("");
+    return out;
+  };
+  return `^(?:${alternatives(root).join("|")})$`;
+}
+
+/**
  * Hook file for `none`. agy loads `.agents/hooks.json` from the cwd, and a `deny` from a PreToolUse hook blocks the
  * call before any permission check. Allow decisions from other hooks do not override it, and a failing hook also blocks.
+ * `except` are tool names the hook leaves alone besides `finish`: for a run with MCP servers, `call_mcp_tool` and the
+ * `mcp_<server>_` tools of those servers. Their calls reach the permission check, where the client allows them.
  */
-export function noneHooks(platform: NodeJS.Platform = process.platform): Record<string, unknown> {
+export function noneHooks(platform: NodeJS.Platform = process.platform, except?: { names: readonly string[]; prefixes: readonly string[] }): Record<string, unknown> {
   const json = JSON.stringify(DENY);
   // The hook runs through `sh -c`, or `cmd /c` on Windows. It drains stdin so agy never writes to a closed pipe.
   const command = platform === "win32" ? `echo ${json}` : `cat >/dev/null; printf '%s\\n' '${json}'`;
-  return { "cli-funnel-none": { PreToolUse: [{ matcher: NONE_MATCHER, hooks: [{ type: "command", command, timeout: 10 }] }] } };
+  const matcher = except ? exceptNames(except.names, except.prefixes) : NONE_MATCHER;
+  return { "cli-funnel-none": { PreToolUse: [{ matcher, hooks: [{ type: "command", command, timeout: 10 }] }] } };
 }
 
 /** The empty folder `none` runs in. It holds only the deny hook. */
-export function noneWorkspace(caller?: string): Promise<string> {
-  return ownedWorkspace(workspaceFor("antigravity-none", caller), { ".agents/hooks.json": `${JSON.stringify(noneHooks(), null, 2)}\n` });
+export function noneWorkspace(caller?: string, mcpNames: readonly string[] = []): Promise<string> {
+  // A run with MCP servers lets their tools through the hook, and the permission request decides. Its folder is its own.
+  const sorted = [...mcpNames].sort();
+  const suffix = sorted.length ? `-mcp-${createHash("sha256").update(sorted.join("\0")).digest("hex").slice(0, 12)}` : "";
+  const except = sorted.length ? { names: ["finish", MCP_TOOL], prefixes: sorted.map(mcpToolPrefix) } : undefined;
+  return ownedWorkspace(workspaceFor("antigravity-none", caller) + suffix, { ".agents/hooks.json": `${JSON.stringify(noneHooks(process.platform, except), null, 2)}\n` });
 }
 
 /**
@@ -319,8 +361,10 @@ async function* runPrint(input: RunInput): AsyncGenerator<FunnelEvent> {
   if (!path) throw new FunnelError("agy is not installed.", "not-installed");
   if (input.attachments?.length) throw new FunnelError('Antigravity takes image attachments only over ACP. Use providerOptions.antigravity.transport "acp".', "unsupported");
   const models = listed?.some((m) => m.id === input.selection.model) ? listed : await manifestModels("antigravity");
-  const servers = mcpServersFor(input, ["http", "stdio"], "Antigravity");
+  const servers = mcpServersFor(input, ["http", "stdio"], "Antigravity", ["http", "stdio"]);
   // At accept-edits agy denies every MCP tool call, because headless mode cannot ask. Attaching servers there would only fail.
+  // At none the print transport has no way to let the servers through its deny hook and refuse the rest.
+  if (servers.length && input.selection.access === "none") throw new FunnelError('MCP servers at access "none" need the ACP transport.', "unsupported");
   if (servers.length) requireAccess(requireMachine(input.selection).access, ["full"], "Antigravity MCP servers");
   const cwd = input.selection.access === "none" ? await noneWorkspace(input.workspaceName) : input.selection.cwd;
   const home = input.apiKey ? await apiKeyHome() : undefined;
@@ -455,11 +499,11 @@ async function acpSetup(input: RunInput): Promise<AcpSetup> {
   if (input.apiKey !== undefined) throw new FunnelError('Antigravity runs on an API key only with transport "print".', "unsupported");
   if (forward) throw new FunnelError('forwardSubagentText and forwardSubagentTools read the print transport\'s output. Use transport "print" for them.', "unsupported");
   const access = requireMachine(input.selection).access;
-  const servers = mcpServersFor(input, ["http", "stdio"], "Antigravity");
-  if (servers.length) requireAccess(access, ["full"], "Antigravity MCP servers");
-  const cwd = access === "none" ? await noneWorkspace(input.workspaceName) : input.selection.cwd!;
-  const mcp = servers.length ? await mcpWorkspace(servers) : undefined;
-  const args = [...(dirs ?? []).map((d) => flag("--add-dir", d)), ...(mcp ? [flag("--add-dir", mcp.dir)] : []), ...(access === "full" ? ["--dangerously-skip-permissions"] : [])];
+  const servers = mcpServersFor(input, ["http", "stdio"], "Antigravity", ["http", "stdio"]);
+  // At accept-edits agy asks about every MCP call, and nobody can answer there.
+  if (servers.length) requireAccess(access, ["none", "full"], "Antigravity MCP servers");
+  const cwd = access === "none" ? await noneWorkspace(input.workspaceName, servers.map(([name]) => name)) : input.selection.cwd!;
+  const args = [...(dirs ?? []).map((d) => flag("--add-dir", d)), ...(access === "full" ? ["--dangerously-skip-permissions"] : [])];
   return {
     path,
     cwd,
@@ -472,9 +516,9 @@ async function acpSetup(input: RunInput): Promise<AcpSetup> {
     onModels: (live) => {
       listed = mergeModels(live, listed ?? []);
     },
-    cleanup: async () => {
-      await mcp?.remove();
-    },
+    mcpServers: acpMcpServers(servers),
+    ...(access === "none" && servers.length ? { allowMcp: new Set(servers.map(([name]) => name)) } : {}),
+    cleanup: async () => undefined,
   };
 }
 
@@ -569,6 +613,7 @@ export const antigravityProvider: Provider = {
     // ACP has no schema field. The `print` transport passes `--json-schema`, but the default does not.
     schema: "prompt",
     mcpServers: ["http", "stdio"],
+    mcpServersAtNone: ["http", "stdio"],
     apiKey: true,
     plan: true,
     fileChanges: true,

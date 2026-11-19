@@ -6,6 +6,7 @@ import { SessionPool, type LiveSessionInfo, type SessionOptions } from "./sessio
 import { createRunFolder } from "./providers/base.js";
 import { mcpServersFor } from "./providers/options.js";
 import { checkFeedbackReport } from "./providers/feedback.js";
+import { tagMcpCalls } from "./providers/mcp-calls.js";
 import { redactSecrets, runSecrets } from "./util/redact.js";
 import { PROVIDERS } from "./providers/index.js";
 import { WORKSPACE_NAME } from "./util/workspace.js";
@@ -194,7 +195,7 @@ export function createFunnel(options: FunnelOptions = {}) {
     if (input.attachments?.length && !p.capabilities.images) {
       throw new FunnelError(`${p.displayName} cannot take image attachments.`, "unsupported");
     }
-    mcpServersFor(input, p.capabilities.mcpServers ?? [], p.displayName);
+    mcpServersFor(input, p.capabilities.mcpServers ?? [], p.displayName, p.capabilities.mcpServersAtNone ?? []);
     // Providers read it by truthiness, so a JSON body with "false" as a string would turn the tool on.
     if (input.planTool !== undefined && typeof input.planTool !== "boolean") throw new FunnelError("planTool must be true or false.", "invalid-selection");
     if (input.sandbox !== undefined && typeof input.sandbox !== "boolean") throw new FunnelError("sandbox must be true or false.", "invalid-selection");
@@ -244,7 +245,8 @@ export function createFunnel(options: FunnelOptions = {}) {
         release();
       }
     })();
-    const masked = redactSecrets(source, runSecrets(input));
+    const servers = Object.keys(input.mcpServers ?? {});
+    const masked = redactSecrets(servers.length ? tagMcpCalls(source, servers) : source, runSecrets(input));
     const events = options.onEvent ? observeRun(options.onEvent, input, masked) : masked;
     // Fold events as they pass, so `.result` works next to `for await` without keeping them.
     const folder = createRunFolder(input);

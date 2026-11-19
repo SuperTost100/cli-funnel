@@ -165,6 +165,21 @@ Antigravity keeps its plan as artifacts in the conversation folder: `task.md`, a
 
 ## MCP servers
 
+### Over ACP
+
+The default transport hands the servers to `session/new` and `session/resume`: `{type: "http", name, url, headers: [{name, value}]}` for HTTP and `{name, command, args, env: [{name, value}]}` for stdio. They go over the pipe, so a token is on no disk. agy shows each tool as `mcp_<server>_<tool>`, and it may also call one through `call_mcp_tool` with `ServerName` and `ToolName`. Both forms were seen. Access is `none` and `full`.
+
+At `none` the run's folder holds a hook that leaves `finish`, `call_mcp_tool` and every `mcp_<server>_` tool of the run's servers alone and denies the rest. Those calls reach the permission check, and the client answers each `session/request_permission`: allow the call to a tool of one of the caller's servers, deny everything else, the user's own servers included. The folder is `antigravity-none-mcp-<hash>`, one per set of server names. A live run over HTTP and over stdio on 1.5.12 called the tool, and agy denied `read_file` and `run_command` with `tool call denied by pre-tool hook`.
+
+Caveats seen on 1.5.12:
+
+- agy sends `server/discover` before `initialize`. A server must answer an unknown method with a JSON-RPC error (`-32601`). A server that answers `202` with no body fails to load (`unsupported content type`), and a stdio server that ignores the request makes the call hang.
+- Over HTTP the `Authorization` header is on every `POST`, but not on the `GET` that opens the event stream.
+- The model discovers servers by looking, for example `ls ~/.gemini/antigravity-cli/mcp`, so name the server in the prompt.
+- `accept-edits` is refused: agy asks about every MCP call and nobody can answer there. The `print` transport refuses `none` with servers.
+
+### Over `print`
+
 `mcpServers` attaches the caller's servers for one run without writing into the project or into agy's config. agy has no flag or environment variable for MCP servers, but it loads plugins from `.agents/plugins/<name>/` in every workspace folder, and `--add-dir` makes a folder a workspace folder. So each run:
 
 1. creates a private folder (mode 0700) with `.agents/plugins/funnel/plugin.json` and `mcp_config.json`,

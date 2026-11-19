@@ -183,8 +183,8 @@ These fields are for the CLI agents. Each provider lists what it supports in `ca
 | Questions | AskUserQuestion | `request_user_input` | no: print mode skips them | no: print mode skips them |
 | Plans | task tools or TodoWrite. Sonnet 5 and Opus 5.5 need `planTool` | `update_plan`, with `planTool` | the agent's todo list | the agent's `task.md` checklist |
 | File changes | Write, Edit, MultiEdit, NotebookEdit | `apply_patch` changes | edit and delete tools | `write_file`, `edit_file` and a plain `rm` |
-| HTTP MCP servers | `supervised` and up | `supervised` and up | `auto`, `full` | `full` only |
-| Stdio MCP servers | `full` | `full` | `full` | `full` |
+| HTTP MCP servers | `none`, `supervised` and up | `none`, `supervised` and up | `none`, `auto`, `full` | `none` and `full` |
+| Stdio MCP servers | `none` and `full` | `none` and `full` | `none` and `full` | `none` and `full` |
 | `toolTimeoutSec` | applied | applied | refused | applied |
 | `autoApprove` | applied | applied | no effect, nothing asks | no effect, nothing asks |
 | API key | `ANTHROPIC_API_KEY` | an in-memory login | `CURSOR_API_KEY` with an in-memory credential store | `GEMINI_API_KEY` with a home folder of its own |
@@ -234,10 +234,47 @@ mcpServers: {
 
 | Type | Fields | Access levels |
 |---|---|---|
-| `http` | `url`, `headers`, `toolTimeoutSec`, `autoApprove` | every level but `none`, because it starts no process |
-| `stdio` | `command`, `args`, `env`, `toolTimeoutSec` | `full` only, because the command runs before any permission check |
+| `http` | `url`, `headers`, `toolTimeoutSec`, `autoApprove` | every level, because it starts no process. At `none` where `capabilities.mcpServersAtNone` lists it |
+| `stdio` | `command`, `args`, `env`, `toolTimeoutSec` | `full`, because the command runs before any permission check, and `none` where `capabilities.mcpServersAtNone` lists it |
 
 `toolTimeoutSec` is how long a tool call may run. Raise it for tools that wait for the user. At `supervised` each call to the server's tools goes to `onApproval`, unless `autoApprove` is set: the server is the caller's, so skipping the approval gives the agent no new access to the machine. A type missing from `capabilities.mcpServers` fails the run with `unsupported`.
+
+#### Only your tools, at `none`
+
+At `none`, `mcpServers` turns the run into a model that can call your tools and nothing else. Every built-in tool stays off (no file reads or writes, no commands, no web), the servers in the user's own CLI config stay off, and calls to your servers' tools run without asking, because they are the only tools there are. That is how an app lets the model create a map or save a note while it answers.
+
+```ts
+await funnel.run({
+  selection: { provider: "claude", model, cwd, access: "none" },
+  prompt: "Save a note that the exam is on Monday.",
+  mcpServers: { notes: { type: "http", url, headers: { Authorization: `Bearer ${token}` } } },
+});
+```
+
+All four CLIs list `http` and `stdio` in `capabilities.mcpServersAtNone`. A run with servers at `none` was checked live on each, with a local server that has one tool, `add_note(text)`, and a prompt that asks the model to call it, to read a file and to run `touch`. The server recorded the note. The file was not read and the marker file was not created. `claude-haiku-5-5`, `gpt-6-luna`, `gemini-3.8-flash` and `cursor-grok-4.5` were used, over HTTP with a bearer header on every one, and over stdio on every one.
+
+| CLI | How the tools of other servers and the built-in tools stay off | Name of your tool in `tool.start` |
+| --- | --- | --- |
+| Claude Code | `--tools ""`, `--strict-mcp-config` with only your `--mcp-config`, `--setting-sources ""`, and `--allowed-tools=mcp__<server>` for each of your servers | `mcp__<server>__<tool>` |
+| Codex | your servers go in the thread's `mcp_servers` table with `default_tools_approval_mode = "approve"` and `required = true`, next to the user's servers switched off by name | `mcp:<server>/<tool>` |
+| Antigravity | `agy acp` gets the servers in `session/new`. The deny hook leaves their `mcp_<server>_` tools alone, and the client allows a permission request only for them | `mcp_<server>_<tool>` |
+| Cursor Agent | the deny rules lose `Mcp(*:*)`, each MCP server of the user's is denied by name, and your plugin servers are allowed. Ask mode is off, since it blocks MCP calls | `mcp` with the server and tool in `input` |
+
+The name differs per CLI, so a `tool.start` for your server carries `mcp: { server, tool }` with the names you used, on every provider. `tool.end` follows with the result as `output` where the CLI reports it, or the failure as `error`. `RunResult.toolCalls` carries the same `mcp` field.
+
+```ts
+for await (const e of funnel.stream(run)) {
+  if (e.type === "tool.start" && e.mcp?.tool === "create_map") showSpinner("Creating a map");
+}
+```
+
+What to know:
+
+- Name servers so they do not clash with the user's own. Codex refuses a name its config already has, and Antigravity cannot tell `mcp_a_b_x` from server `a` with tool `b_x` and server `a_b` with tool `x`, so it would allow a call to a user's server whose name begins with one of yours.
+- Antigravity on `print` cannot do this and refuses it with `unsupported`. The default ACP transport does.
+- Cursor Agent: the user's servers are found with `agent mcp list` before each run. A server that command does not list is not denied. Cursor's `task` tool (a subagent) and `glob` stay available at `none` with servers, because ask mode is off. A subagent's own tools were not checked.
+- Codex waits for each of your servers to start before the first turn (`required = true`) and fails the thread with `cli-failed` when one cannot start. Without that, the first run with a stdio server answered without the tool once.
+- agy 1.5.12 asks for `server/discover` first. A server that does not answer an unknown method with a JSON-RPC error fails to load there, as the MCP SDKs' servers do not. Over HTTP agy leaves the `Authorization` header off the stream request (`GET`), and sends it on every `POST`.
 
 ### API key
 
@@ -409,7 +446,7 @@ cli-funnel run claude claude-sonnet-5 "Update the shared types" --opt addDirs=/s
 
 ## Text only: access `none`
 
-`none` is for apps that want a model, not an agent. Nothing on the machine changes: no file writes, no commands, no MCP tool calls. Point `cwd` at an empty folder anyway, since some CLIs can still read files.
+`none` is for apps that want a model, not an agent. Nothing on the machine changes: no file writes, no commands, no MCP tool calls, except the tools of the `mcpServers` you pass (see [Only your tools, at `none`](#only-your-tools-at-none)). Point `cwd` at an empty folder anyway, since some CLIs can still read files.
 
 | CLI | How `none` is enforced | "Reply with the single word OK.", input tokens |
 |---|---|---|

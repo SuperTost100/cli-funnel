@@ -8,7 +8,8 @@ export type ProviderId = CliProviderId | ApiProviderId | ServerProviderId;
 
 /**
  * How much the agent may do on the machine. Providers list the levels they can really enforce.
- * `none` is text in, text out: no file writes, no commands, no MCP servers, no approvals.
+ * `none` is text in, text out: no file writes, no commands, no approvals, and no MCP servers except the ones the caller
+ * attaches with `RunInput.mcpServers`, where a provider lists `capabilities.mcpServersAtNone`.
  */
 export type AccessLevel = "none" | "supervised" | "accept-edits" | "auto" | "full";
 
@@ -77,6 +78,12 @@ export interface Capabilities {
   manageModels?: boolean;
   /** The kinds of `RunInput.mcpServers` the provider can attach. Absent or empty means none. */
   mcpServers?: McpServer["type"][];
+  /**
+   * The kinds of `RunInput.mcpServers` the provider also takes at access `none`. There the caller's servers are the
+   * only tools the model has: every built-in tool stays off, and so do the servers of the user's own CLI config. Absent
+   * or empty means `none` refuses `mcpServers`.
+   */
+  mcpServersAtNone?: McpServer["type"][];
   /** True when the CLI can run on `RunInput.apiKey` instead of the saved login. */
   apiKey?: boolean;
   /** True when the provider emits `plan` events. */
@@ -306,7 +313,8 @@ export interface FileChange {
 }
 
 /**
- * An MCP server reached over HTTP. It starts no process on the machine, so every access level but `none` accepts it.
+ * An MCP server reached over HTTP. It starts no process on the machine, so every access level accepts it where the
+ * provider lists it. `none` accepts it only where `capabilities.mcpServersAtNone` does.
  * The agent calls its tools under the run's access level: at `supervised` each call goes to `onApproval` unless
  * `autoApprove` is set.
  */
@@ -321,7 +329,10 @@ export interface McpHttpServer {
   autoApprove?: boolean;
 }
 
-/** An MCP server the CLI starts as a command. Starting it runs code before any permission check, so only `full` accepts it. */
+/**
+ * An MCP server the CLI starts as a command. Starting it runs code before any permission check, so only `full` accepts it,
+ * and `none` where `capabilities.mcpServersAtNone` lists it: there the caller's servers are the only tools.
+ */
 export interface McpStdioServer {
   type: "stdio";
   command: string;
@@ -390,9 +401,11 @@ export type FunnelEvent =
    * A CLI agent started one of its own tools, such as a shell command or a file edit. `parentId` is set on a tool call
    * a subagent made, when the provider's `forwardSubagentTools` option is on (Claude Code, Codex, Antigravity): it is the id of the
    * tool call that started the subagent, so it matches that call's `tool.start`. `agent` is the subagent's type, when the CLI names it.
-   * Subagent calls are not in `RunResult.toolCalls`.
+   * Subagent calls are not in `RunResult.toolCalls`. `mcp` is set when the call is to a tool of one of the run's
+   * `mcpServers`, with the server's name as the caller gave it and the tool's own name, whatever the CLI calls the tool
+   * in `name`. A caller can show "the model is using <tool>" from it on every provider.
    */
-  | { type: "tool.start"; id: string; name: string; input?: unknown; parentId?: string; agent?: string }
+  | { type: "tool.start"; id: string; name: string; input?: unknown; parentId?: string; agent?: string; mcp?: { server: string; tool: string } }
   /** The end of a `tool.start`. It carries the same `parentId` and `agent`. */
   | { type: "tool.end"; id: string; output?: string; error?: string; parentId?: string; agent?: string }
   /** A piece of the JSON arguments of a call to one of `RunInput.tools`, as the model writes it. Not every vendor streams them. */
@@ -576,7 +589,7 @@ export interface RunResult {
   /** How many times an API provider sent the request again after a 429 or 5xx. Absent when it did not. */
   retries?: number;
   /** Tool calls the CLI agent made with its own tools, in order. */
-  toolCalls: { id: string; name: string; input?: unknown; error?: string }[];
+  toolCalls: { id: string; name: string; input?: unknown; error?: string; mcp?: { server: string; tool: string } }[];
   /** Calls to `RunInput.tools` that the model waits on, in order. Present when there are any. */
   pendingToolCalls?: ToolCall[];
   /** Tool calls the CLI refused because nobody could approve them. */
@@ -685,9 +698,12 @@ export interface RunInput {
    */
   onQuestion?: (request: QuestionRequest) => Promise<QuestionAnswers | null> | QuestionAnswers | null;
   /**
-   * MCP servers to attach to the agent, keyed by a name of letters, digits, `_` and `-`. Servers from the user's own
-   * CLI config stay as they are. Needs the server's type in `capabilities.mcpServers`. See `McpHttpServer` and
-   * `McpStdioServer` for the access levels each needs.
+   * MCP servers to attach to the agent for this run, keyed by a name of letters, digits, `_` and `-`. Needs the server's
+   * type in `capabilities.mcpServers`. At `supervised` and above the servers from the user's own CLI config stay as they
+   * are. At `none` they do not: every built-in tool and every server of the user's is off, and the model can call the
+   * tools of these servers and nothing else, with no approval asked. That needs the type in
+   * `capabilities.mcpServersAtNone`. A call to one of these tools shows as `tool.start` with `mcp` set. See
+   * `McpHttpServer` and `McpStdioServer` for the access levels each needs.
    */
   mcpServers?: Record<string, McpServer>;
   /**

@@ -403,6 +403,32 @@ describe.skipIf(process.platform === "win32")("antigravity over ACP, with a fake
     expect(agy.received()[0]!.cwd).toMatch(/workspaces[/\\]antigravity-none-pyxis$/);
   });
 
+  it("hands MCP servers to the session and allows only their calls at none", async () => {
+    const asks = [
+      { jsonrpc: "2.0", id: "p1", method: "session/request_permission", params: { sessionId: SESSION, toolCall: { toolCallId: "a", name: "mcp_notes_add_note", rawInput: { text: "x" } }, options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }, { optionId: "deny", name: "Deny", kind: "reject_once" }] } },
+      { jsonrpc: "2.0", id: "p2", method: "session/request_permission", params: { sessionId: SESSION, toolCall: { toolCallId: "b", name: "mcp_theirs_x", rawInput: {} }, options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }, { optionId: "deny", name: "Deny", kind: "reject_once" }] } },
+      { jsonrpc: "2.0", id: 1, result: { stopReason: "end_turn" } },
+    ];
+    const agy = fakeAgy({ script: asks });
+    await drain(input({ mcpServers: { notes: { type: "http", url: "http://127.0.0.1:9/mcp", headers: { Authorization: "Bearer t" } } } }));
+    await new Promise((r) => setTimeout(r, 100));
+    const got = agy.received();
+    expect(got.find((m) => m.method === "session/new")!.params.mcpServers).toEqual([{ type: "http", name: "notes", url: "http://127.0.0.1:9/mcp", headers: [{ name: "Authorization", value: "Bearer t" }] }]);
+    expect(got.find((m) => m.id === "p1" && m.result)!.result).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+    expect(got.find((m) => m.id === "p2" && m.result)!.result).toEqual({ outcome: { outcome: "selected", optionId: "deny" } });
+    // The hook folder for this run lets the server's tools reach the permission check.
+    expect(got[0]!.cwd).toMatch(/antigravity-none-mcp-[0-9a-f]{12}$/);
+  });
+
+  it("sends the servers again when a session is resumed, and refuses them at accept-edits and on print at none", async () => {
+    const agy = fakeAgy({}, "resume-turn.ndjson");
+    const mcpServers = { notes: { type: "http" as const, url: "http://127.0.0.1:9/mcp" } };
+    await drain(input({ sessionId: SESSION, mcpServers }));
+    expect(agy.received().find((m) => m.method === "session/resume")!.params.mcpServers).toHaveLength(1);
+    await expect(drain(input({ mcpServers: { local: { type: "stdio", command: "node" } } }, { access: "accept-edits" }))).rejects.toMatchObject({ code: "invalid-selection" });
+    await expect(drain(input({ mcpServers, providerOptions: { antigravity: { transport: "print" } } }))).rejects.toMatchObject({ code: "unsupported" });
+  });
+
   it("starts `agy acp` with --dangerously-skip-permissions only at full, in the caller's folder", async () => {
     const agy = fakeAgy();
     const cwd = mkdtempSync(join(tmpdir(), "cf-agy-cwd-"));

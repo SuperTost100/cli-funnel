@@ -130,6 +130,8 @@ A deny with `message` goes to the CLI as `{behavior: "deny", message}`, and the 
 
 ### MCP servers
 
+At `none` the flags are `--tools ""`, `--strict-mcp-config`, `--setting-sources ""`, `--mcp-config=<file>` with the caller's servers and `--allowed-tools=mcp__<server>` for each, so the model can call their tools and has no other. The user's servers stay out because of `--strict-mcp-config`. Checked live over HTTP and stdio on 2.1.328. The model still tries `Read` and `Bash`, and the stream shows the calls ending in an error.
+
 The MCP config is written to a private temp file (mode 0600) and passed as `--mcp-config=<file>`, because headers and env often carry tokens that argv would show to other users of the machine. This holds whether the servers came from `mcpServers`, from `providerOptions.claude.mcpConfig` or from both. The file is removed after the run, or after the first turn of a live session. Each server becomes `{type: "http", url, headers, timeout}` or `{type: "stdio", command, args, env, timeout}`. It is merged with `providerOptions.claude.mcpConfig`, which stays `full` only, and a name in both fails the run with `invalid-selection`. A server with the same name as one in the user's own config replaces it for the run.
 
 `toolTimeoutSec` becomes the server's `timeout` in milliseconds. Claude Code 2.1.310 reads it per server and prefers it over the `MCP_TOOL_TIMEOUT` environment variable. It also raises the idle timeout of HTTP servers (5 minutes by default) to the same value. Live check: a server whose tool waits 8 seconds, with `toolTimeoutSec: 3`, failed with `MCP server "cftest" tool "slow_echo" timed out after 3s`.

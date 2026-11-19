@@ -7,6 +7,9 @@ const ENV_PREFIX = "CLI_FUNNEL_MCP_";
 /** The plugin folder name. It becomes part of the tool names the model sees: `plugin-funnel-<server>-<tool>`. */
 const PLUGIN_NAME = "funnel";
 
+/** What Cursor puts in front of the name of a server that a plugin carries: `plugin-<folder>-<server>`. */
+export const PLUGIN_NAME_PREFIX = `plugin-${PLUGIN_NAME}-`;
+
 export interface McpPlugin {
   /** The plugin's `.mcp.json`. Every value is a `${env:NAME}` reference, so the file holds no secret and no URL. */
   config: { mcpServers: Record<string, Record<string, unknown>> };

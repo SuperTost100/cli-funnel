@@ -14,6 +14,7 @@ import {
   createAcpMapper,
   currentModel,
   currentThought,
+  decidePermission,
   denyPermission,
   failureFromError,
   failureFromTurn,
@@ -41,6 +42,10 @@ export interface AcpSetup {
   brainDir: string;
   readText(path: string): string | undefined;
   createdInRun(startedAt: number): ((path: string) => boolean | undefined) | undefined;
+  /** The caller's MCP servers in the shape `session/new` takes, sent again on every activation. */
+  mcpServers: unknown[];
+  /** At `none`: the names of the servers whose tool calls are allowed. Every other permission request is denied. */
+  allowMcp?: ReadonlySet<string>;
   /** The default thinking level of a model from the model list, for a run that names none. */
   defaultEffort(model: string): string | undefined;
   /** Gets the models the account's session listed. */
@@ -134,7 +139,7 @@ export async function openAcpSession(first: RunInput, setup: AcpSetup): Promise<
       if (method === "session/request_permission") {
         const toolCallId = params?.toolCall?.toolCallId;
         if (typeof toolCallId === "string") t?.mapper?.refuse(toolCallId);
-        rpc.respond(id, denyPermission(params));
+        rpc.respond(id, setup.allowMcp ? decidePermission(params, setup.allowMcp) : denyPermission(params));
         return;
       }
       // Nothing was offered at `initialize`, so a request for a file or a terminal is the agent's mistake.
@@ -156,7 +161,7 @@ export async function openAcpSession(first: RunInput, setup: AcpSetup): Promise<
     facts = agentFacts(init);
     if (!facts.version || compareVersions(facts.version, ACP_MIN_VERSION) < 0) throw new FunnelError(TOO_OLD(facts.version), "unsupported");
     if (first.attachments?.length && !facts.images) throw new FunnelError("This agy cannot take image attachments over ACP.", "unsupported");
-    const params = { cwd: setup.cwd, mcpServers: [] as unknown[], ...(sessionMeta(first.system, facts) ? { _meta: sessionMeta(first.system, facts) } : {}) };
+    const params = { cwd: setup.cwd, mcpServers: setup.mcpServers, ...(sessionMeta(first.system, facts) ? { _meta: sessionMeta(first.system, facts) } : {}) };
     let started: Record<string, any>;
     try {
       if (first.sessionId) {

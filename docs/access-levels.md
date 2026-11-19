@@ -4,7 +4,7 @@ Access says how much the agent may do on the machine. cli-funnel has four levels
 
 | Level | Meaning |
 |---|---|
-| `none` | Text in, text out. No writes, no commands, no MCP servers, no approvals. See [Run options](run-options.md). |
+| `none` | Text in, text out. No writes, no commands, no approvals, and no MCP servers but the ones you attach for the run. See [Run options](run-options.md). |
 | `supervised` | Every risky action waits for a human. Your `onApproval` callback gets the request. |
 | `accept-edits` | File edits go through. Other actions ask, or are refused when nobody can answer. |
 | `auto` | The CLI decides which actions are safe. The rest ask or are refused. |

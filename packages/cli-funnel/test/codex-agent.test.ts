@@ -337,8 +337,8 @@ describe("codex MCP servers and feature config", () => {
     });
   });
 
-  it("refuses servers at none and stdio below full", () => {
-    expect(() => mcpConfig(input("none", { mcpServers: { a: http() } }))).toThrow(/not allowed/);
+  it("leaves servers at none to the table that switches the user's servers off, and refuses stdio below full", () => {
+    expect(mcpConfig(input("none", { mcpServers: { a: http() } }))).toEqual({});
     expect(() => mcpConfig(input("supervised", { mcpServers: { a: { type: "stdio", command: "x" } } }))).toThrow(/not allowed/);
     expect(mcpConfig(input("supervised", { mcpServers: { a: http() } }))).toEqual({ "mcp_servers.a.url": "http://127.0.0.1:7777/mcp" });
   });

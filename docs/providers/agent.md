@@ -183,7 +183,7 @@ The provider writes such a folder to `~/.cache/cli-funnel/workspaces/agent-mcp/<
 
 - Plugin servers need no approval, so `--approve-mcps` is not passed. It would also approve every unapproved server in the user's own config, and the approvals live in a file under `~/.cursor`, which this provider must not write.
 - At `auto` the classifier lets the calls through. At `full` `--force` does. Both were run live with a local server that checks the `Authorization` header (`test/agent-mcp-live.test.ts`, `CLI_FUNNEL_LIVE=1`).
-- `none` is refused by the contract, and its deny rules block `Mcp(*:*)` anyway. `supervised` does not exist here.
+- At `none` the run keeps its deny rules for `Shell(*)`, `Read(**)`, `Write(**)` and `WebFetch(*)`, drops `Mcp(*:*)` and denies each server `agent mcp list` prints by name instead, and allows `Mcp(plugin-funnel-<server>:*)`. The rules go in a folder of their own (`agent-none-mcp-<hash>`). It does not pass `--mode ask`: on the live run ask mode refused the MCP call ("Blocked by Ask mode"). With the rules alone a live run called the server's tool over HTTP and over stdio, and `read` answered "Permission denied" and `shell` "Command blocked by permissions configuration". `glob` (inside the empty folder), `getMcpTools` and `task` stay available. `supervised` does not exist here.
 - `toolTimeoutSec` fails the run with `unsupported`: the MCP config has no timeout field.
 - `autoApprove` has no effect. There is no approval step to skip.
 - The model sees the tools as `plugin-funnel-<server>-<tool>`. The stream reports them as `mcp` tool calls whose input holds the server and tool name.

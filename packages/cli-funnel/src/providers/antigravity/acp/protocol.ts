@@ -1,4 +1,4 @@
-import { FunnelError, type AccessLevel, type FunnelEvent, type Limit, type PlanStep, type Usage } from "../../../types.js";
+import { FunnelError, type AccessLevel, type FunnelEvent, type Limit, type McpServer, type PlanStep, type Usage } from "../../../types.js";
 import { parseDuration } from "../../limits.js";
 import { createMapper, parseModels } from "../parser.js";
 import type { ModelInfo } from "../../../types.js";
@@ -118,6 +118,42 @@ export function checkThought(configOptions: unknown, model: string, thought: str
 export function modelsFromSession(models: Json | undefined): ModelInfo[] {
   const list: Json[] = Array.isArray(models?.availableModels) ? models.availableModels : [];
   return parseModels(list.flatMap((m) => (typeof m?.modelId === "string" && typeof m?.name === "string" ? [`${m.modelId}\t${m.name}`] : [])).join("\n"));
+}
+
+/**
+ * The caller's servers as `session/new` and `session/resume` take them. A stdio server is `command`, `args` and `env`
+ * as name and value pairs. An HTTP server is `type: "http"`, `url` and `headers` as pairs. They go over the pipe to
+ * agy, so a header token is on no disk.
+ */
+export function acpMcpServers(servers: [string, McpServer][]): Json[] {
+  const pairs = (o: Record<string, string> | undefined) => Object.entries(o ?? {}).map(([name, value]) => ({ name, value }));
+  return servers.map(([name, s]) =>
+    s.type === "http" ? { type: "http", name, url: s.url, headers: pairs(s.headers) } : { name, command: s.command, args: s.args ?? [], env: pairs(s.env) },
+  );
+}
+
+/** The generic tool agy calls an MCP tool through. The server and the tool are in its arguments. */
+export const MCP_TOOL = "call_mcp_tool";
+
+/** agy shows the tools of a server the session was given as `mcp_<server>_<tool>`. */
+export const mcpToolPrefix = (server: string): string => `mcp_${server}_`;
+
+/**
+ * The answer to a `session/request_permission` at access `none` with the caller's MCP servers: allow the call to a
+ * tool of one of `servers`, as `call_mcp_tool` or as that server's own `mcp_<server>_<tool>`, deny everything else. `none` runs with no flag, so agy asks before each MCP call, the
+ * user's own servers' included, and this is the check that keeps those out.
+ */
+export function decidePermission(params: Json | undefined, servers: ReadonlySet<string>): Json {
+  const call = params?.toolCall;
+  const server = call?.rawInput?.ServerName ?? call?.args?.ServerName;
+  const generic = call?.name === MCP_TOOL && typeof server === "string" && servers.has(server);
+  const direct = typeof call?.name === "string" && [...servers].some((s) => call.name.startsWith(mcpToolPrefix(s)));
+  if (generic || direct) {
+    const options: Json[] = Array.isArray(params?.options) ? params.options : [];
+    const allow = options.find((o) => o?.kind === "allow_once");
+    if (allow && typeof allow.optionId === "string") return { outcome: { outcome: "selected", optionId: allow.optionId } };
+  }
+  return denyPermission(params);
 }
 
 /** `session/prompt` content blocks for the run: the text, then the images. */
