@@ -113,7 +113,7 @@ describe("Antigravity at none with servers", () => {
       expect(h.hooks[0].command).not.toContain("node");
       expect(h.hooks[0].command).not.toContain(process.execPath);
       expect(hook().hooks[0].command.replace(/'[^']*'$/, "")).toBe(h.hooks[0].command.replace(/'[^']*'$/, ""));
-      expect(JSON.parse(h.hooks[0].command.match(/'(\{.*\})'$/)![1])).toMatchObject({ decision: "deny", reason: expect.stringContaining("mcp_<server>_<tool>") });
+      expect(JSON.parse(h.hooks[0].command.match(/'(\{.*\})'$/)![1])).toMatchObject({ decision: "deny", reason: expect.stringContaining("start with mcp_") });
     });
 
     it("matches every tool name but finish and the run's own, so the hook denies them", () => {
@@ -121,6 +121,14 @@ describe("Antigravity at none with servers", () => {
       for (const hit of ["", "f", "finis", "finishx", "Finish", "call_mcp_tool", "run_command", "read_file", "write_file", "invoke_subagent",
         "mcp_notes_add_note", "mcp_clifunnel0_add_note", "mcp_clifunnel00000000_0_add_note", "mcp_clifunnel", `mcp_clifunnel${RUN}`, `mcp_clifunnel${RUN.slice(0, -1)}_0_x`, `xmcp_clifunnel${RUN}_0_x`, "mcp", "usersim_other"]) {
         expect(matches(re(), hit), hit).toBe(true);
+      }
+    });
+
+    it("has an answer with nothing in it that cmd.exe reads as an operator, since on Windows the hook is an echo of it", () => {
+      for (const run of [undefined, RUN]) {
+        const command = (noneHooks("win32", run) as any)["cli-funnel-none"].PreToolUse[0].hooks[0].command as string;
+        expect(command.startsWith("echo {")).toBe(true);
+        expect(command.slice(5), String(run)).not.toMatch(/[<>&|^%]/);
       }
     });
 

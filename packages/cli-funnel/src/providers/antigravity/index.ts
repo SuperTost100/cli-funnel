@@ -158,8 +158,12 @@ export function exceptNames(names: readonly string[], prefixes: readonly string[
   return `(?s)^(?:${alternatives(root).join("|")})$`;
 }
 
-/** What the deny hook of a run with MCP servers tells the model: where its tools are, so it does not stop at the first refusal. */
-const DENY_WITH_MCP = { decision: "deny", reason: "Tools are disabled except your MCP tools. Call those by their own names (mcp_<server>_<tool>), not through call_mcp_tool." };
+/**
+ * What the deny hook of a run with MCP servers tells the model: where its tools are, so it does not stop at the first
+ * refusal. No character here may mean something to `cmd.exe` (`<`, `>`, `&`, `|`, `^`, `%`): on Windows the hook is an
+ * `echo` of this text, and the hook self-test on a Windows runner refused it with `<server>` in it.
+ */
+const DENY_WITH_MCP = { decision: "deny", reason: "Tools are disabled except your MCP tools. Call those by their own names, which start with mcp_, not through call_mcp_tool." };
 
 /** The tool names that start with a run's prefix are the run's own servers' tools. */
 export const mcpPrefix = (run: string): string => `mcp_clifunnel${run}_`;
