@@ -81,7 +81,8 @@ describe("Codex at none with servers", () => {
 
 describe("Antigravity at none with servers", () => {
   const RUN = "ab12cd34";
-  const matches = (re: string, s: string) => new RegExp(re).test(s);
+  /** A hook matcher is a Go regexp, where a leading `(?s)` lets `.` match a line break. JavaScript spells that as a flag. */
+  const matches = (re: string, s: string) => (re.startsWith("(?s)") ? new RegExp(re.slice(4), "s") : new RegExp(re)).test(s);
   const hook = (run?: string) => (noneHooks("linux", run) as any)["cli-funnel-none"].PreToolUse[0];
 
   it("sends each server to agy under a reserved name with a part of this run only, and maps it back", () => {
@@ -127,6 +128,13 @@ describe("Antigravity at none with servers", () => {
       const plain = hook().matcher as string;
       expect(plain).toBe(NONE_MATCHER);
       for (const s of ["finish", "", "f", "fini", "finishes", "write_file", "call_mcp_tool", "mcp_x_y"]) expect(matches(re(), s), s).toBe(matches(plain, s));
+    });
+
+    it("starts with (?s), so a name with a line break in it is refused", () => {
+      const e = exceptNames(["finish"], ["mcp_a_"]);
+      expect(e.startsWith("(?s)")).toBe(true);
+      for (const hit of ["finishes\nx", "x\ny", "mcp_b_x\n", "finish\n"]) expect(matches(e, hit), JSON.stringify(hit)).toBe(true);
+      for (const left of ["finish", "mcp_a_x\ny"]) expect(matches(e, left), JSON.stringify(left)).toBe(false);
     });
 
     it("builds the complement as a trie, for names and prefixes", () => {

@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readlink, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { readFileSync, statSync } from "node:fs";
+import { lstat, mkdir, mkdtemp, readdir, realpath, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { manifestModels, mergeModels } from "../../catalog/manifest.js";
@@ -25,17 +25,17 @@ import {
 } from "../../types.js";
 import { compareVersions } from "../../util/process.js";
 import { detectInstallation, exitedEarly, findBinary, isTerminal, LOGIN_TIMEOUT_MS, rawTap, runUpdate, SETTLE_MS, stderrTail } from "../base.js";
-import { runSecrets } from "../../util/redact.js";
+import { redactErrors, runSecrets } from "../../util/redact.js";
 import { createMapper, parseModels, parseRateLimits, parseWarning } from "./parser.js";
 import { openAcpSession, type AcpSetup } from "./acp/session.js";
 import { ACP_MIN_VERSION, checkAcpServers, reserveServers } from "./acp/protocol.js";
 import { SubagentTranscripts, type ForwardSubagents } from "./transcript.js";
 import { composePrompt } from "../prompt.js";
-import { createNoneGuard } from "../none-guard.js";
+import { AGY_REFUSAL, createNoneGuard } from "../none-guard.js";
 import { FEEDBACK_CHANNELS } from "../feedback.js";
 import { bool, dirList, flag, mcpServersFor, oneOf, optionsFor, positive, requireAccess } from "../options.js";
 import { requireMachine } from "../../selection.js";
-import { ownedWorkspace, workspaceFor, workspacePath } from "../../util/workspace.js";
+import { NO_GIT_ENV, ownedWorkspace, workspaceFor, workspacePath } from "../../util/workspace.js";
 
 const TESTED = { min: "1.2.0" };
 
@@ -120,7 +120,7 @@ const DENY = { decision: "deny", reason: "Tools are disabled. Answer in text onl
  * Matches every tool name except `finish`, which ends the turn and carries the `--json-schema` answer.
  * Go regexp has no lookahead, so the exclusion is spelled out.
  */
-export const NONE_MATCHER = "^(?:[^f].*|f[^i].*|fi[^n].*|fin[^i].*|fini[^s].*|finis[^h].*|finish.+|.{0,5})$";
+export const NONE_MATCHER = "(?s)^(?:[^f].*|f[^i].*|fi[^n].*|fin[^i].*|fini[^s].*|finis[^h].*|finish.+|.{0,5})$";
 
 /**
  * A regular expression that matches every string except `names`, and every string that starts with one of `prefixes`
@@ -154,7 +154,8 @@ export function exceptNames(names: readonly string[], prefixes: readonly string[
     else out.push("");
     return out;
   };
-  return `^(?:${alternatives(root).join("|")})$`;
+  // `(?s)` lets `.` match a line break, so a name with one in it is still refused.
+  return `(?s)^(?:${alternatives(root).join("|")})$`;
 }
 
 /** What the deny hook of a run with MCP servers tells the model: where its tools are, so it does not stop at the first refusal. */
@@ -226,6 +227,7 @@ export async function requireWorkingHook(run?: string): Promise<void> {
  * the repository root and loads `AGENTS.md`, `GEMINI.md` and `.agents/` from every folder between the working folder and
  * that root, so a `none` folder inside a user's repository, or under a home folder that is one, would read the user's
  * instructions. With its own root it reads nothing above itself. An empty `.git` folder is not enough: agy walked past it.
+ * Cursor Agent does not stop at it: see `docs/providers/agent.md`.
  */
 export const GIT_MARKER: Record<string, string> = { ".git/HEAD": "ref: refs/heads/main\n", ".git/objects/": "", ".git/refs/": "" };
 
@@ -266,18 +268,46 @@ export async function sweepRunWorkspaces(maxAgeMs = 24 * 3_600_000): Promise<voi
  * the first prompt. A folder of our own that holds only a link to the user's `antigravity-cli` data folder has none of
  * them, and agy still finds the sign-in and the conversations through the link. Checked on 1.5.12: a stdio server in the
  * user's config started with the default and did not start with this folder, and the session and its models still came
- * back. No link is made while the user has no data folder, and agy then keeps its own in this one.
+ * back.
+ *
+ * The folder is made inert before agy sees it. A first start in a Gemini folder with no `config/.migrated` runs agy's
+ * migration, and through the link that moved a user's `antigravity-cli/skills` into the private folder and left a link
+ * behind, or re-pointed an existing link at the private folder. So the folder always holds `config/.migrated`, an empty
+ * `config/skills` folder and an empty MCP config, and agy has nothing to migrate. Checked in a throwaway home on 1.5.12: with
+ * these the user's `skills` came out of a start exactly as it went in, as a folder and as a link to `config/skills`.
+ *
+ * Nothing is removed recursively here. A link is replaced by `unlink`, an old real data folder in the private folder is
+ * moved aside, and the user's data folder is made when there is none, so no conversation is ever kept where a later
+ * run would delete it.
  */
 export async function noneGeminiDir(home: string = homedir()): Promise<string> {
-  const dir = await ownedWorkspace("antigravity-gemini-none", {});
+  const dir = await ownedWorkspace("antigravity-gemini-none", { "config/.migrated": "", "config/mcp_config.json": `${JSON.stringify({ mcpServers: {} })}\n`, "config/skills/": "" });
+  // `config/skills` is a link when an earlier agy re-pointed it. Replace the link, never what it points at.
+  const skills = join(dir, "config", "skills");
+  if ((await lstat(skills)).isSymbolicLink()) {
+    await unlink(skills);
+    await mkdir(skills, { mode: 0o700 });
+  }
   const target = dataDir(home);
+  await mkdir(target, { recursive: true, mode: 0o700 });
   const link = join(dir, "antigravity-cli");
-  if (!existsSync(target)) return dir;
-  const current = await readlink(link).catch(() => undefined);
-  if (current === target) return dir;
-  await rm(link, { recursive: true, force: true });
-  // A junction needs no privilege on Windows, where a symbolic link to a folder does.
-  await symlink(target, link, process.platform === "win32" ? "junction" : "dir");
+  const info = await lstat(link).catch(() => undefined);
+  if (info?.isSymbolicLink()) {
+    // By what it resolves to: the home may be reached through a link, and a dangling link resolves to nothing.
+    const [now, want] = await Promise.all([realpath(link).catch(() => undefined), realpath(target)]);
+    if (now === want) return dir;
+    await unlink(link);
+  } else if (info) {
+    // A real data folder left here by an earlier run holds conversations. Move it aside, never delete it.
+    await rename(link, `${link}.kept-${Date.now()}`);
+  }
+  try {
+    // A junction needs no privilege on Windows, where a symbolic link to a folder does.
+    await symlink(target, link, process.platform === "win32" ? "junction" : "dir");
+  } catch (e) {
+    // Another run made it first. That is fine when it points where ours would.
+    if ((e as NodeJS.ErrnoException).code !== "EEXIST" || (await realpath(link).catch(() => undefined)) !== (await realpath(target))) throw e;
+  }
   return dir;
 }
 
@@ -487,7 +517,7 @@ async function* runPrint(input: RunInput): AsyncGenerator<FunnelEvent> {
     const placed = placePrompt(input, process.platform);
     stream = spawnStream(path, buildArgs(input, models, process.platform, schemaFile?.path ?? schema, placed, mcp?.dir), {
       cwd,
-      env: home && input.apiKey ? apiKeyEnv(input.apiKey, home, input.env) : input.env,
+      env: runEnv(input, home && input.apiKey ? apiKeyEnv(input.apiKey, home, input.env) : input.env),
       signal: input.signal,
       input: placed.stdin ?? "",
     });
@@ -525,7 +555,7 @@ async function* runPrint(input: RunInput): AsyncGenerator<FunnelEvent> {
   };
   let sessionSent = false;
   let guarded = false;
-  const guard = input.selection.access === "none" ? createNoneGuard((start) => start.name !== "finish") : undefined;
+  const guard = input.selection.access === "none" ? createNoneGuard((start) => start.name !== "finish", AGY_REFUSAL) : undefined;
   const forward = antigravityForward(input);
   // Only with a forward option: the stream lines and the subagents' transcripts then go through one channel.
   let source: AsyncIterable<unknown> = stream.lines;
@@ -554,7 +584,8 @@ async function* runPrint(input: RunInput): AsyncGenerator<FunnelEvent> {
       const before = mapper.finished;
       let events = mapper.map(line);
       // The deny hook is agy's own. A tool that finishes at `none` means it did not apply, and the run stops.
-      const reason = guard && !before ? events.map((e) => guard.check(e)).find((r) => r !== undefined) : undefined;
+      // At the end of the run, a forbidden call that never ended may have run too.
+      const reason = guard && !before ? events.map((e) => guard.check(e)).find((r) => r !== undefined) ?? (events.some(isTerminal) ? guard.unfinished() : undefined) : undefined;
       if (reason) {
         stream.kill();
         guarded = true;
@@ -600,6 +631,9 @@ async function* runPrint(input: RunInput): AsyncGenerator<FunnelEvent> {
     yield last;
   }
 }
+
+/** The environment of a run. At `none` the variables that point git at another repository are removed, as the folder has a git marker of its own. */
+const runEnv = (input: RunInput, env: Record<string, string> | undefined) => (input.selection.access === "none" ? { ...env, ...NO_GIT_ENV } : env);
 
 /** The folder where agy keeps its conversation files and artifacts, for runs on the user's login. */
 const brainFolder = () => join(dataDir(homedir()), "brain");
@@ -660,7 +694,7 @@ async function openSession(input: RunInput): Promise<LiveSession | undefined> {
   return openAcpSession(input, await acpSetup(input));
 }
 
-async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
+async function* runRaw(input: RunInput): AsyncGenerator<FunnelEvent> {
   if (transportOf(input) === "print") return yield* runPrint(input);
   const session = await openAcpSession(input, await acpSetup(input));
   try {
@@ -669,6 +703,9 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
     session.close();
   }
 }
+
+/** The run, with the run's secrets masked in what it reports as an error, as the other CLI providers do: agy quotes the address of a server as written. */
+const run = (input: RunInput): AsyncGenerator<FunnelEvent> => redactErrors(runRaw(input), runSecrets(input));
 
 /** How long agy gets to exit after its `result` before the run stops it. */
 const EXIT_GRACE_MS = 1000;
@@ -685,7 +722,7 @@ async function rateLimits(options: ProcessOptions = {}): Promise<RateLimits> {
   if (!path) throw new FunnelError("agy is not installed.", "not-installed");
   const res = await exec(path, ["--print=/usage", "--output-format", "stream-json"], {
     cwd: await noneWorkspace(),
-    env: options.env,
+    env: { ...options.env, ...NO_GIT_ENV },
     signal: options.signal,
     timeoutMs: USAGE_TIMEOUT_MS,
   }).catch((e: unknown) => {

@@ -115,12 +115,25 @@ describe("antigravity none", () => {
     expect(antigravityProvider.capabilities.access).toEqual(["none", "accept-edits", "full"]);
   });
 
+  /** A hook matcher is a Go regexp, where a leading `(?s)` lets `.` match a line break. JavaScript spells that as a flag. */
+  const goRegExp = (pattern: string) => (pattern.startsWith("(?s)") ? new RegExp(pattern.slice(4), "s") : new RegExp(pattern));
+
   it("matches every tool except finish", () => {
-    const re = new RegExp(NONE_MATCHER);
+    const re = goRegExp(NONE_MATCHER);
     for (const t of ["run_command", "write_to_file", "view_file", "call_mcp_tool", "invoke_subagent", "fin", "f", "finished", "finish_task", "x"]) {
       expect(re.test(t), t).toBe(true);
     }
     expect(re.test("finish")).toBe(false);
+  });
+
+  it("matches a name that holds a line break too, which a pattern without (?s) lets escape", () => {
+    expect(NONE_MATCHER.startsWith("(?s)")).toBe(true);
+    // Without the flag, `.` stops at a line break, and these names match nothing: the hook would not see the call.
+    const plain = new RegExp(NONE_MATCHER.slice(4));
+    for (const name of ["run\ncommand", "run_command\n", "finish\n", "mcp_x\n_y"]) {
+      expect(plain.test(name), `without the flag: ${name}`).toBe(false);
+      expect(goRegExp(NONE_MATCHER).test(name), name).toBe(true);
+    }
   });
 
   it.skipIf(process.platform === "win32")("hook command prints a deny decision", () => {
