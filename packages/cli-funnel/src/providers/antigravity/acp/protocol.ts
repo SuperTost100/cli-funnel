@@ -321,7 +321,8 @@ function goDuration(text: string | undefined): number | undefined {
  * `quotaResetTimeStamp`, else the delay Google's error carries (`quotaResetDelay`, `retryDelay`).
  */
 export function limitFrom(text: string, now = Date.now()): Limit | undefined {
-  const quota = /QUOTA_EXHAUSTED|quota/i.test(text);
+  // `quota` alone is not enough: an auth error can talk about a "quota project". It has to say a quota ran out.
+  const quota = /QUOTA_EXHAUSTED|quotaReset|\bquota\b[^.]{0,60}\b(?:exceed|exhaust|reach|limit)|\b(?:exceed|exhaust|reach)\w*\b[^.]{0,60}\bquota\b/i.test(text);
   if (!quota && !/RESOURCE_EXHAUSTED|\b429\b|rate.?limit/i.test(text)) return undefined;
   const stamp = RESET_TIMESTAMP.exec(text)?.[1];
   const parsed = stamp ? Date.parse(stamp) : NaN;
@@ -342,10 +343,11 @@ const AUTH = /not (?:logged|signed) in|sign in|log ?in required|authentication (
 /** What a JSON-RPC error from `agy acp` means for the run. */
 export function failureFromError(error: { code?: number; message?: string; data?: unknown }): Failure {
   const text = `${error.message ?? ""} ${error.data === undefined ? "" : typeof error.data === "string" ? error.data : JSON.stringify(error.data)}`;
-  const limit = limitFrom(text);
-  if (limit) return { message: limit.detail, code: "cli-failed", limit };
+  // Subscription and sign-in first: their texts can mention a quota project, and they must not read as a limit.
   if (/SUBSCRIPTION_REQUIRED/.test(text)) return { message: "This Google account has no Antigravity subscription (SUBSCRIPTION_REQUIRED).", code: "cli-failed" };
   if (AUTH.test(text)) return { message: "Run agy in a terminal and sign in.", code: "not-logged-in" };
+  const limit = limitFrom(text);
+  if (limit) return { message: limit.detail, code: "cli-failed", limit };
   return { message: (error.message ?? "agy acp failed.").trim() || "agy acp failed.", code: "cli-failed" };
 }
 
