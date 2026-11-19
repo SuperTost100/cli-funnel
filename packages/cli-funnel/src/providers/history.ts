@@ -131,7 +131,7 @@ export async function* runWithHistory<M>(
       if (e.type === "error") failed = true;
       if (e.type === "tool_call") called = true;
       // A turn that did not finish leaves the store alone, so it cannot overwrite a turn that finished meanwhile.
-      if (e.type === "done" && e.finishReason !== "cancelled" && !failed && (text || called)) await store.set(key, [...messages, assistant(text)]);
+      if (input.persist !== false && e.type === "done" && e.finishReason !== "cancelled" && !failed && (text || called)) await store.set(key, [...messages, assistant(text)]);
       yield e;
     }
   } finally {

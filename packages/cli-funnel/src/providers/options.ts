@@ -123,4 +123,17 @@ export function mcpServersFor(input: RunInput, kinds: readonly McpServer["type"]
   });
 }
 
+/**
+ * Whether the run is unsaved: `persist: false`, or the provider's own `ephemeral` option, which `persist` is the
+ * portable name for. The two must agree, and a resume needs the saved session.
+ */
+export function unsaved(input: RunInput, own: boolean | undefined): boolean {
+  if (input.persist === false && own === false) bad("persist: false and ephemeral: false disagree.");
+  if (input.persist === true && own === true) bad("persist: true and ephemeral: true disagree.");
+  if ((input.persist === false || own !== undefined) && input.sessionId) {
+    bad("persist: false and ephemeral apply to new conversations only, because a run that is not saved cannot be resumed. Leave them out when you pass sessionId.");
+  }
+  return input.persist === false || own === true;
+}
+
 export { bad as invalidOption };

@@ -87,6 +87,12 @@ export interface Capabilities {
   questions?: boolean;
   /** True when an approval reply can change the tool input with `updatedInput`. */
   approvalInput?: boolean;
+  /**
+   * True when a run with `RunInput.persist: false` leaves no saved conversation: Claude Code (`--no-session-persistence`),
+   * Codex (an ephemeral thread), and the providers that keep history in cli-funnel's own store. Cursor Agent and
+   * Antigravity save every conversation and have no way to stop that, so they refuse such a run with `unsupported`.
+   */
+  ephemeral?: boolean;
   /** True when the CLI can run the agent's commands in a sandbox for `RunInput.sandbox`. */
   sandbox?: boolean;
   /**
@@ -648,6 +654,20 @@ export interface RunInput {
   cachedContent?: string;
   /** Continue an earlier conversation. Use the `sessionId` from a previous result. */
   sessionId?: string;
+  /**
+   * `false` keeps a one-shot run out of the tool's saved history, so a flashcard batch or a grading call does not pile
+   * up in the user's account. The run's `sessionId` cannot be resumed, and passing one with `persist: false` fails
+   * with `invalid-selection`. Needs `capabilities.ephemeral`: a provider without it refuses the run with `unsupported`
+   * instead of saving it anyway. Default `true`. On Claude Code and Codex it is the same as `providerOptions.<id>.ephemeral`.
+   */
+  persist?: boolean;
+  /**
+   * A name for the private folder that Cursor Agent and Antigravity run in at access `none`, so the conversations of
+   * one app pile up apart from those of every other app that uses cli-funnel. Letters, digits, `_` and `-`, up to 40.
+   * The folder is `agent-none-<name>` or `antigravity-none-<name>` under `~/.cache/cli-funnel/workspaces/`. Default: one
+   * folder shared by every caller. Other providers ignore it.
+   */
+  workspaceName?: string;
   signal?: AbortSignal;
   /** Names the run in `onEvent` records and logs. Default: generated. The HTTP server passes the id it sends to clients. */
   runId?: string;

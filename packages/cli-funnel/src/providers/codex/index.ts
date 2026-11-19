@@ -69,6 +69,7 @@ export const codexProvider: Provider = {
     contextWindow: false,
     fast: true,
     resume: true,
+    ephemeral: true,
     approvals: true,
     images: true,
     system: "native",

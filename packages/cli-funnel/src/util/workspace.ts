@@ -8,6 +8,12 @@ function funnelCacheDir(): string {
   return join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "cli-funnel");
 }
 
+/** Letters, digits, `_` and `-`, up to 40: a name that is safe in a folder name. */
+export const WORKSPACE_NAME = /^[A-Za-z0-9_-]{1,40}$/;
+
+/** `name` for the shared folder, `name-<caller>` for a caller's own. */
+export const workspaceFor = (name: string, caller: string | undefined): string => (caller ? `${name}-${caller}` : name);
+
 /**
  * Returns a private folder that holds only `files`, for runs that must not see the user's project.
  * Files are rewritten when their content differs, through a rename so a concurrent run never reads half a file.

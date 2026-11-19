@@ -8,6 +8,7 @@ import { mcpServersFor } from "./providers/options.js";
 import { checkFeedbackReport } from "./providers/feedback.js";
 import { redactSecrets, runSecrets } from "./util/redact.js";
 import { PROVIDERS } from "./providers/index.js";
+import { WORKSPACE_NAME } from "./util/workspace.js";
 import { memoryHistory } from "./providers/history.js";
 import { createApiProviders, type ApiConfig, type ApiKeys } from "./providers/api.js";
 import { createOllamaProvider, type OllamaOptions } from "./providers/ollama/index.js";
@@ -203,6 +204,16 @@ export function createFunnel(options: FunnelOptions = {}) {
       throw new FunnelError(`${p.displayName} cannot run the agent's commands in a sandbox.`, "unsupported");
     }
     checkFolderConfig(input.folderConfig, p, install);
+    if (input.persist !== undefined && typeof input.persist !== "boolean") throw new FunnelError("persist must be true or false.", "invalid-selection");
+    if (input.persist === false) {
+      if (input.sessionId) throw new FunnelError("persist: false cannot be resumed, so it takes no sessionId.", "invalid-selection");
+      if (!p.capabilities.ephemeral) {
+        throw new FunnelError(`${p.displayName} saves every conversation and has no way to stop that, so it cannot run with persist: false.`, "unsupported");
+      }
+    }
+    if (input.workspaceName !== undefined && (typeof input.workspaceName !== "string" || !WORKSPACE_NAME.test(input.workspaceName))) {
+      throw new FunnelError("workspaceName must be 1 to 40 letters, digits, _ or -.", "invalid-selection");
+    }
     if (input.apiKey !== undefined) {
       if (!p.capabilities.apiKey) throw new FunnelError(`${p.displayName} cannot run on an API key passed with the run.`, "unsupported");
       if (typeof input.apiKey !== "string" || !input.apiKey.trim()) throw new FunnelError("apiKey must be a non-empty string.", "invalid-selection");

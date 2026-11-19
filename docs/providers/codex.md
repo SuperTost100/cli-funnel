@@ -176,7 +176,7 @@ With every value the user's `~/.codex/config.toml` (MCP servers, hooks, rules, s
 
 | Option | App-server param | Access levels |
 | --- | --- | --- |
-| `ephemeral: boolean` | `ephemeral` on `thread/start`. Refused with `sessionId`, since `thread/resume` has no such param | all |
+| `ephemeral: boolean` | `ephemeral` on `thread/start`, the same as `persist: false` on the run. Refused with `sessionId`, since `thread/resume` has no such param | all |
 | `webSearch: "disabled" \| "cached" \| "indexed" \| "live"` | config `web_search` | `"disabled"` at all levels, `"cached"` and `"indexed"` from `supervised` up, `"live"` at `auto` and `full` only |
 | `approvalPolicy: "untrusted" \| "on-request" \| "never"` | `approvalPolicy`, in place of the level's own | see below |
 | `addDirs: string[]` | config `sandbox_workspace_write.writable_roots` | refused at `none`, accepted from `supervised` up (see below) |

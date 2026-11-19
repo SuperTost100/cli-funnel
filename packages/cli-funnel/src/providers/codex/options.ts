@@ -1,5 +1,5 @@
 import type { RunInput } from "../../types.js";
-import { bool, dirList, invalidOption, mcpServersFor, oneOf, optionsFor, requireAccess } from "../options.js";
+import { bool, dirList, invalidOption, mcpServersFor, oneOf, optionsFor, requireAccess, unsaved } from "../options.js";
 import { requireMachine } from "../../selection.js";
 import { planAccess, POLICIES, type ApprovalPolicy } from "./access.js";
 import type { ForwardSubagents } from "./events.js";
@@ -27,11 +27,7 @@ export function threadOptions(input: RunInput): CodexThreadOptions {
   bool(o.forwardSubagentText, "forwardSubagentText");
   bool(o.forwardSubagentTools, "forwardSubagentTools");
 
-  const ephemeral = bool(o.ephemeral, "ephemeral");
-  if (ephemeral !== undefined) {
-    if (input.sessionId) invalidOption("ephemeral applies to new threads only. Leave it out when you pass sessionId.");
-    out.start.ephemeral = ephemeral;
-  }
+  if (unsaved(input, bool(o.ephemeral, "ephemeral"))) out.start.ephemeral = true;
 
   const search = oneOf(o.webSearch, "webSearch", WEB_SEARCH);
   // "live" fetches pages with nobody approving it, so it needs a level that runs without approvals.

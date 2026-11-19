@@ -33,7 +33,7 @@ import { composePrompt } from "../prompt.js";
 import { FEEDBACK_CHANNELS } from "../feedback.js";
 import { bool, dirList, flag, mcpServersFor, oneOf, optionsFor, positive, requireAccess } from "../options.js";
 import { requireMachine } from "../../selection.js";
-import { ownedWorkspace } from "../../util/workspace.js";
+import { ownedWorkspace, workspaceFor } from "../../util/workspace.js";
 
 const TESTED = { min: "1.2.0" };
 
@@ -132,8 +132,8 @@ export function noneHooks(platform: NodeJS.Platform = process.platform): Record<
 }
 
 /** The empty folder `none` runs in. It holds only the deny hook. */
-export function noneWorkspace(): Promise<string> {
-  return ownedWorkspace("antigravity-none", { ".agents/hooks.json": `${JSON.stringify(noneHooks(), null, 2)}\n` });
+export function noneWorkspace(caller?: string): Promise<string> {
+  return ownedWorkspace(workspaceFor("antigravity-none", caller), { ".agents/hooks.json": `${JSON.stringify(noneHooks(), null, 2)}\n` });
 }
 
 /**
@@ -322,7 +322,7 @@ async function* runPrint(input: RunInput): AsyncGenerator<FunnelEvent> {
   const servers = mcpServersFor(input, ["http", "stdio"], "Antigravity");
   // At accept-edits agy denies every MCP tool call, because headless mode cannot ask. Attaching servers there would only fail.
   if (servers.length) requireAccess(requireMachine(input.selection).access, ["full"], "Antigravity MCP servers");
-  const cwd = input.selection.access === "none" ? await noneWorkspace() : input.selection.cwd;
+  const cwd = input.selection.access === "none" ? await noneWorkspace(input.workspaceName) : input.selection.cwd;
   const home = input.apiKey ? await apiKeyHome() : undefined;
   const mcp = servers.length ? await mcpWorkspace(servers) : undefined;
   // A long schema would count against the command-line limit, so it goes through a private temp file removed after the run.
@@ -457,7 +457,7 @@ async function acpSetup(input: RunInput): Promise<AcpSetup> {
   const access = requireMachine(input.selection).access;
   const servers = mcpServersFor(input, ["http", "stdio"], "Antigravity");
   if (servers.length) requireAccess(access, ["full"], "Antigravity MCP servers");
-  const cwd = access === "none" ? await noneWorkspace() : input.selection.cwd!;
+  const cwd = access === "none" ? await noneWorkspace(input.workspaceName) : input.selection.cwd!;
   const mcp = servers.length ? await mcpWorkspace(servers) : undefined;
   const args = [...(dirs ?? []).map((d) => flag("--add-dir", d)), ...(mcp ? [flag("--add-dir", mcp.dir)] : []), ...(access === "full" ? ["--dangerously-skip-permissions"] : [])];
   return {
