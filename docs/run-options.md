@@ -73,7 +73,9 @@ const r = await funnel.run({ selection, prompt: "Grade this answer.", persist: f
 | --- | --- |
 | Claude Code | passes `--no-session-persistence`: no session file in `~/.claude/projects` |
 | Codex | starts an ephemeral thread (`ephemeral` on `thread/start`): no rollout file in `~/.codex/sessions` |
-| Anthropic, OpenAI and Gemini APIs, Ollama, OpenAI-compatible servers | leaves the turn out of the funnel's history store |
+| Anthropic and Gemini APIs, Ollama, OpenAI-compatible servers in `chat` mode, the OpenAI API on chat models | leaves the turn out of the funnel's history store |
+| OpenAI API on a model that runs on the Responses API | sends `store: false`, since OpenAI keeps every response unless told not to, and the Responses API keeps the conversation on the server instead of in the funnel's store |
+| OpenAI-compatible server in `responses` mode | refused with `unsupported`: the server keeps the response, and one that ignores `store: false` would keep it anyway, which nothing here can check |
 | Cursor Agent | refused with `unsupported`. `agent` has no flag, setting or command that skips saving, and it saves each chat under `~/.cursor/chats` |
 | Antigravity | refused with `unsupported`. `agy` and `agy acp` have no such option, and ACP has no `session/delete` (it answers "Method not found" on 1.5.12) |
 
@@ -81,7 +83,7 @@ A run that is not saved cannot be resumed, so `persist: false` with a `sessionId
 
 ### Keeping apps apart on Cursor Agent and Antigravity
 
-At access `none` these two run in a folder cli-funnel owns, and each saves its chats by folder. Every app that uses cli-funnel on the machine therefore shares one chat folder: 63 chats were in Cursor's `agent-none` folder on the test machine, and every call adds one. `workspaceName` gives an app its own folder, `agent-none-<name>` or `antigravity-none-<name>` under `~/.cache/cli-funnel/workspaces/`, so its chats stay apart from every other app's and the app can see which are its own. The name is 1 to 40 letters, digits, `_` or `-`. Other providers ignore it.
+At access `none` these two run in a folder cli-funnel owns, and each saves its chats by folder. Every app that uses cli-funnel on the machine therefore shares one chat folder: 63 chats were in Cursor's `agent-none` folder on the test machine, and every call adds one. `workspaceName` gives an app its own folder, `agent-none.<name>` or `antigravity-none.<name>` under `~/.cache/cli-funnel/workspaces/`, so its chats stay apart from every other app's and the app can see which are its own. The name is 1 to 40 letters, digits, `_` or `-`. Other providers ignore it.
 
 ```ts
 await funnel.run({ selection, prompt, workspaceName: "pyxis" });

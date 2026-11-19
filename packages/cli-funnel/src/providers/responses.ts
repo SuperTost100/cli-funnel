@@ -34,6 +34,8 @@ export function responsesBody(input: RunInput, strictSchema = false): Record<str
     // Instructions do not carry over through previous_response_id, so they go with every turn.
     ...(input.system ? { instructions: input.system } : {}),
     ...(input.sessionId ? { previous_response_id: input.sessionId } : {}),
+    // OpenAI keeps every response unless the request says `store: false`. `persist: false` is the caller's word that it must not.
+    ...(input.persist === false ? { store: false } : {}),
     ...(input.maxOutputTokens ? { max_output_tokens: input.maxOutputTokens } : {}),
     ...(selection.effort ? { reasoning: { effort: selection.effort, summary: "auto" } } : {}),
     ...(sampling?.temperature !== undefined ? { temperature: sampling.temperature } : {}),

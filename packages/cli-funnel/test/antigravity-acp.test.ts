@@ -416,7 +416,7 @@ describe.skipIf(process.platform === "win32")("antigravity over ACP, with a fake
   it("runs at none in the caller's own folder when the run has a workspaceName", async () => {
     const agy = fakeAgy();
     await drain(input({ workspaceName: "pyxis" }));
-    expect(agy.received()[0]!.cwd).toMatch(/workspaces[/\\]antigravity-none-pyxis$/);
+    expect(agy.received()[0]!.cwd).toMatch(/workspaces[/\\]antigravity-none\.pyxis$/);
   });
 
   it("starts `agy acp` with --dangerously-skip-permissions only at full, in the caller's folder", async () => {
