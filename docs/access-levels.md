@@ -28,11 +28,11 @@ The picker shows only the levels a provider offers. `funnel.providers.claude.cap
 
 Claude Code has a stdio permission channel. The CLI pauses and asks the host, and the provider answers. Codex does the same through its app-server protocol. Both are tested live: an allowed write lands on disk, a denied write does not.
 
-Cursor Agent runs unrestricted in print mode when the user's Cursor config says so, and its ACP server never asked for permission in testing. Antigravity refuses gated tools in headless mode and lists them as denied. Neither has a channel to answer through, so `supervised` is not offered. When one of them adds one, the provider will list it.
+Cursor Agent runs unrestricted in print mode when the user's Cursor config says so, and its ACP server never asked for permission in testing. Antigravity refuses gated tools in print mode and lists them as denied. Over ACP it does send a permission request, but cli-funnel has no way yet to pass it to `onApproval`, so it denies each one. Neither has a channel to answer through, so `supervised` is not offered. When one of them adds one, the provider will list it.
 
 Antigravity's `accept-edits` writes only inside workspaces the user has already trusted in `agy`.
 
-`none` needs a mode the CLI enforces, not one the model is asked to respect. Claude Code can remove every tool. Codex runs in a read-only sandbox with its tool features off and every approval denied. Cursor Agent and Antigravity have no such flag. Their read-only modes still ran shell commands in testing. Both do read config from the folder they run in, so cli-funnel runs them in an empty folder of its own that holds a rule refusing every tool call. The CLI applies the rule, not the model. See [Run options](run-options.md#text-only-access-none).
+`none` needs a mode the CLI enforces, not one the model is asked to respect. Claude Code can remove every tool. Codex runs in a read-only sandbox with its tool features off and every approval denied. Cursor Agent and Antigravity have no such flag. Their read-only modes still ran shell commands in testing. Both do read config from the folder they run in, so cli-funnel runs them in an empty folder of its own that holds a rule refusing every tool call. The CLI applies the rule, not the model. Antigravity over ACP also grants the agent no file or terminal access on the client side and denies every permission request, and a live run showed that without the rule a read outside the folder is not even asked about. See [Run options](run-options.md#text-only-access-none).
 
 ## When the CLI starts with less access
 

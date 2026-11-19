@@ -1,6 +1,6 @@
 # Live sessions
 
-By default every turn starts a new CLI process and resumes the conversation by `sessionId`. With `sessions.keepAlive`, Claude Code and Codex keep their process between turns, so the next turn of the same session skips the startup. In a live test with `claude-haiku-4-5-20251001` the second turn took 1.0 s instead of 2.0 s; with Codex `gpt-5.6-luna` it took 1.1 s instead of 4.1 s.
+By default every turn starts a new CLI process and resumes the conversation by `sessionId`. With `sessions.keepAlive`, Claude Code, Codex and Antigravity over ACP keep their process between turns, so the next turn of the same session skips the startup. In a live test with `claude-haiku-4-5-20251001` the second turn took 1.0 s instead of 2.0 s; with Codex `gpt-5.6-luna` it took 1.1 s instead of 4.1 s.
 
 ```ts
 const funnel = createFunnel({ sessions: { keepAlive: true, idleMs: 5 * 60_000 } });
@@ -12,13 +12,15 @@ const second = await funnel.run({ selection, prompt: "Now summarize it.", sessio
 funnel.close(); // stop every live process
 ```
 
-Other providers ignore the option and run as before.
+Cursor Agent, the Antigravity `print` transport and the other providers ignore the option and run as before. In a live test with `gemini-3.8-flash` over ACP, the second turn of a session was served 15,940 of its 18,063 input tokens from the cache. See [Antigravity](providers/antigravity.md#sessions).
+
+Every CLI continues a conversation by `sessionId`, with or without `keepAlive`: Claude Code with `--resume`, Codex with `thread/resume`, Cursor Agent with `--resume`, and Antigravity with `session/resume` (`--conversation` on `print`). A live test tells a word to a conversation, then asks for it again on a new process, on each of the four.
 
 ## Options
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `keepAlive` | `false` | Keep Claude Code and Codex processes between turns |
+| `keepAlive` | `false` | Keep Claude Code, Codex and Antigravity (ACP) processes between turns |
 | `idleMs` | 10 minutes | Close a live session after this long without a turn |
 | `max` | 8 | Most live sessions at once. Above it, the least recently used idle session closes |
 
@@ -42,6 +44,7 @@ An aborted turn ends with `finishReason: "cancelled"`. What happens to the proce
 
 - **Codex** keeps the app-server when the abort ended cleanly: Codex acknowledged `turn/interrupt` and sent `turn/completed` for the turn within five seconds. The next turn runs on the same process and thread. If Codex did not acknowledge the interrupt, did not end the turn in time, or had not started the turn yet, the process stops.
 - **Claude Code** stops the process. It has no interrupt call, so the conversation may be mid-answer and cli-funnel does not try to reuse it.
+- **Antigravity** sends `session/cancel` and keeps the process when agy answers the prompt with `cancelled` within five seconds. Otherwise the process stops.
 
 A consumer that stops reading before `done` or `error` also stops the process. Stopping right at `done` is fine and keeps it. After a stopped process, the next turn with that `sessionId` resumes in a new one.
 

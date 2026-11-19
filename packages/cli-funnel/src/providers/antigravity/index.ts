@@ -10,6 +10,7 @@ import {
   FunnelError,
   type AuthStatus,
   type FunnelEvent,
+  type LiveSession,
   type LoginEvent,
   type LoginSession,
   type McpServer,
@@ -21,13 +22,16 @@ import {
   type RunInput,
   type Selection,
 } from "../../types.js";
+import { compareVersions } from "../../util/process.js";
 import { detectInstallation, exitedEarly, findBinary, isTerminal, LOGIN_TIMEOUT_MS, rawTap, runUpdate, SETTLE_MS, stderrTail } from "../base.js";
 import { runSecrets } from "../../util/redact.js";
 import { createMapper, parseModels, parseRateLimits, parseWarning } from "./parser.js";
+import { openAcpSession, type AcpSetup } from "./acp/session.js";
+import { ACP_MIN_VERSION } from "./acp/protocol.js";
 import { SubagentTranscripts, type ForwardSubagents } from "./transcript.js";
 import { composePrompt } from "../prompt.js";
 import { FEEDBACK_CHANNELS } from "../feedback.js";
-import { bool, dirList, flag, mcpServersFor, optionsFor, positive, requireAccess } from "../options.js";
+import { bool, dirList, flag, mcpServersFor, oneOf, optionsFor, positive, requireAccess } from "../options.js";
 import { requireMachine } from "../../selection.js";
 import { ownedWorkspace } from "../../util/workspace.js";
 
@@ -84,20 +88,26 @@ export function buildArgs(
   return args;
 }
 
-/** Flags for `providerOptions.antigravity`. Throws `invalid-selection` when an option would widen `selection.access`. */
-function optionArgs(input: RunInput): string[] {
-  const o = optionsFor(input, "antigravity", ["addDirs", "printTimeoutSec", "forwardSubagentText", "forwardSubagentTools"]);
-  // Read by the run loop. Checked here so a bad value fails like the other options.
-  bool(o.forwardSubagentText, "forwardSubagentText");
-  bool(o.forwardSubagentTools, "forwardSubagentTools");
-  const args: string[] = [];
+/** The values of `providerOptions.antigravity`, checked. Throws `invalid-selection` when an option would widen `selection.access`. */
+function checkOptions(input: RunInput) {
+  const o = optionsFor(input, "antigravity", ["addDirs", "printTimeoutSec", "forwardSubagentText", "forwardSubagentTools", "transport"]);
+  const forwardText = bool(o.forwardSubagentText, "forwardSubagentText");
+  const forwardTools = bool(o.forwardSubagentTools, "forwardSubagentTools");
   const dirs = dirList(o.addDirs, "addDirs");
   if (dirs) {
     // At `none` the run happens in a folder that holds only the deny hook. Another directory would undo that.
     requireAccess(requireMachine(input.selection).access, ["accept-edits", "full"], "addDirs");
-    for (const d of dirs) args.push(flag("--add-dir", d));
   }
   const timeout = positive(o.printTimeoutSec, "printTimeoutSec");
+  const transport = oneOf(o.transport, "transport", ["acp", "print"] as const) ?? (input.apiKey ? "print" : "acp");
+  return { dirs, timeout, transport, forward: Boolean(forwardText || forwardTools) };
+}
+
+/** Flags for the print transport from `providerOptions.antigravity`. */
+function optionArgs(input: RunInput): string[] {
+  const { dirs, timeout } = checkOptions(input);
+  const args: string[] = [];
+  for (const d of dirs ?? []) args.push(flag("--add-dir", d));
   if (timeout !== undefined) args.push(flag("--print-timeout", `${timeout}s`));
   return args;
 }
@@ -304,9 +314,10 @@ const antigravityForward = (input: RunInput): ForwardSubagents => ({
   tools: input.providerOptions?.antigravity?.forwardSubagentTools === true,
 });
 
-async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
+async function* runPrint(input: RunInput): AsyncGenerator<FunnelEvent> {
   const path = findBinary("agy");
   if (!path) throw new FunnelError("agy is not installed.", "not-installed");
+  if (input.attachments?.length) throw new FunnelError('Antigravity takes image attachments only over ACP. Use providerOptions.antigravity.transport "acp".', "unsupported");
   const models = listed?.some((m) => m.id === input.selection.model) ? listed : await manifestModels("antigravity");
   const servers = mcpServersFor(input, ["http", "stdio"], "Antigravity");
   // At accept-edits agy denies every MCP tool call, because headless mode cannot ask. Attaching servers there would only fail.
@@ -432,6 +443,74 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   }
 }
 
+/** The folder where agy keeps its conversation files and artifacts, for runs on the user's login. */
+const brainFolder = () => join(dataDir(homedir()), "brain");
+
+/** What an ACP session needs before its process starts. Throws for an option the transport cannot honour. */
+async function acpSetup(input: RunInput): Promise<AcpSetup> {
+  const path = findBinary("agy");
+  if (!path) throw new FunnelError("agy is not installed.", "not-installed");
+  const { dirs, timeout, transport, forward } = checkOptions(input);
+  if (transport !== "acp") throw new FunnelError('transport "print" does not open an ACP session.', "invalid-selection");
+  if (input.apiKey !== undefined) throw new FunnelError('Antigravity runs on an API key only with transport "print".', "unsupported");
+  if (forward) throw new FunnelError('forwardSubagentText and forwardSubagentTools read the print transport\'s output. Use transport "print" for them.', "unsupported");
+  const access = requireMachine(input.selection).access;
+  const servers = mcpServersFor(input, ["http", "stdio"], "Antigravity");
+  if (servers.length) requireAccess(access, ["full"], "Antigravity MCP servers");
+  const cwd = access === "none" ? await noneWorkspace() : input.selection.cwd!;
+  const mcp = servers.length ? await mcpWorkspace(servers) : undefined;
+  const args = [...(dirs ?? []).map((d) => flag("--add-dir", d)), ...(mcp ? [flag("--add-dir", mcp.dir)] : []), ...(access === "full" ? ["--dangerously-skip-permissions"] : [])];
+  return {
+    path,
+    cwd,
+    args,
+    ...(timeout !== undefined ? { timeoutSec: timeout } : {}),
+    brainDir: brainFolder(),
+    readText: readTaskList,
+    createdInRun: (startedAt) => createdInRunFor(input, startedAt),
+    defaultEffort: (model) => toCliModel({ ...input.selection, model, effort: undefined }, listed ?? []).effort,
+    onModels: (live) => {
+      listed = mergeModels(live, listed ?? []);
+    },
+    cleanup: async () => {
+      await mcp?.remove();
+    },
+  };
+}
+
+const transportOf = (input: RunInput) => checkOptions(input).transport;
+
+async function openSession(input: RunInput): Promise<LiveSession> {
+  if (transportOf(input) === "print") {
+    // The print transport starts a process per turn. A session of it only carries the conversation id between turns.
+    let id = input.sessionId;
+    return {
+      get sessionId() {
+        return id;
+      },
+      alive: true,
+      async *turn(turn) {
+        for await (const e of runPrint({ ...turn, sessionId: id ?? turn.sessionId })) {
+          if (e.type === "session") id = e.sessionId;
+          yield e;
+        }
+      },
+      close() {},
+    };
+  }
+  return openAcpSession(input, await acpSetup(input));
+}
+
+async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
+  if (transportOf(input) === "print") return yield* runPrint(input);
+  const session = await openSession(input);
+  try {
+    yield* session.turn(input);
+  } finally {
+    session.close();
+  }
+}
+
 /** How long agy gets to exit after its `result` before the run stops it. */
 const EXIT_GRACE_MS = 1000;
 
@@ -485,15 +564,23 @@ export const antigravityProvider: Provider = {
     fast: false,
     resume: true,
     approvals: false,
-    images: false,
-    system: "prompt",
-    schema: "native",
+    images: true,
+    system: "native",
+    // ACP has no schema field. The `print` transport passes `--json-schema`, but the default does not.
+    schema: "prompt",
     mcpServers: ["http", "stdio"],
     apiKey: true,
     plan: true,
     fileChanges: true,
   },
-  detect: () => detectInstallation("agy", TESTED),
+  async detect() {
+    const install = await detectInstallation("agy", TESTED);
+    // The default transport needs `agy acp`, which 1.5.0 introduced. `print` runs on older builds.
+    if (install.installed && install.version && compareVersions(install.version, ACP_MIN_VERSION) < 0) {
+      return { ...install, detail: `agy ${ACP_MIN_VERSION} or newer is needed for the default ACP transport. This version runs only with providerOptions.antigravity.transport "print".` };
+    }
+    return install;
+  },
   authStatus,
   login,
   async logout() {
@@ -514,4 +601,5 @@ export const antigravityProvider: Provider = {
     return listed;
   },
   run,
+  openSession,
 };

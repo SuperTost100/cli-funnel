@@ -7,3 +7,8 @@ export async function collect(events: AsyncIterable<FunnelEvent>, input: RunInpu
   for await (const e of events) folder.add(e);
   return folder.finish();
 }
+
+/** The same run on Antigravity's print transport. The offline tests of that transport fake `agy --print`. */
+export function printTransport(input: RunInput): RunInput {
+  return { ...input, providerOptions: { ...input.providerOptions, antigravity: { ...input.providerOptions?.antigravity, transport: "print" } } };
+}

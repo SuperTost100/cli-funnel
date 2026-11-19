@@ -1,0 +1,296 @@
+import { FunnelError, type FunnelEvent, type LiveSession, type ModelInfo, type RunInput } from "../../../types.js";
+import { Channel } from "../../../util/channel.js";
+import { packageVersion } from "../../../util/package-version.js";
+import { compareVersions, spawnStream } from "../../../util/process.js";
+import { requireMachine } from "../../../selection.js";
+import { composePrompt } from "../../prompt.js";
+import { rawEvent, stderrTail } from "../../base.js";
+import { runSecrets } from "../../../util/redact.js";
+import { AcpClient, AcpError } from "./client.js";
+import {
+  ACP_MIN_VERSION,
+  agentFacts,
+  checkThought,
+  createAcpMapper,
+  currentModel,
+  currentThought,
+  denyPermission,
+  failureFromError,
+  failureFromTurn,
+  initializeParams,
+  modelsFromSession,
+  planModel,
+  promptBlocks,
+  sessionMeta,
+  thoughtLevels,
+  type AgentFacts,
+  type Failure,
+} from "./protocol.js";
+
+/** What `index.ts` works out before a process starts: the checked options, the folder and the files the run owns. */
+export interface AcpSetup {
+  path: string;
+  /** The folder `agy acp` runs in and the session works in. */
+  cwd: string;
+  /** The arguments after `acp`: `--add-dir`, `--dangerously-skip-permissions`. */
+  args: string[];
+  env?: Record<string, string>;
+  /** Ends the turn after this many seconds, as `providerOptions.antigravity.printTimeoutSec`. */
+  timeoutSec?: number;
+  /** Where agy keeps conversation files, for the task list that becomes a `plan` event. */
+  brainDir: string;
+  readText(path: string): string | undefined;
+  createdInRun(startedAt: number): ((path: string) => boolean | undefined) | undefined;
+  /** The default thinking level of a model from the model list, for a run that names none. */
+  defaultEffort(model: string): string | undefined;
+  /** Gets the models the account's session listed. */
+  onModels(models: ModelInfo[]): void;
+  /** Removes what the run owns: temp folders. Runs once, when the process ends. */
+  cleanup(): Promise<void>;
+}
+
+/** How long agy gets to end a cancelled turn. After that the turn ends as cancelled and the process stops. */
+const CANCEL_GRACE_MS = 5000;
+
+/** How long a setup request may take. `session/new` answers in a few hundred milliseconds. */
+const SETUP_TIMEOUT_MS = 60_000;
+
+const TOO_OLD = (version: string | undefined) =>
+  `agy ${version ?? "(unknown version)"} is too old for the ACP transport, which needs ${ACP_MIN_VERSION} or newer. Update agy, or run with providerOptions.antigravity.transport "print".`;
+
+interface Turn {
+  input: RunInput;
+  out: Channel<FunnelEvent>;
+  mapper?: ReturnType<typeof createAcpMapper>;
+  finished: boolean;
+  end(): void;
+  ended: Promise<void>;
+}
+
+/** Races `p` against a timer, so a hung agent cannot hold a run open. */
+function within<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new FunnelError(`agy acp did not answer ${what} in time.`, "cli-failed")), ms);
+    timer.unref();
+  });
+  return Promise.race([p, late]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * One `agy acp` process and one conversation, kept across turns. A one-shot run opens it, runs one turn and closes it.
+ * The process serves one session, so the system prompt, the model and the thinking level are set when it starts.
+ */
+export async function openAcpSession(first: RunInput, setup: AcpSetup): Promise<LiveSession> {
+  const access = requireMachine(first.selection).access;
+  const proc = spawnStream(setup.path, ["acp", ...setup.args], { cwd: setup.cwd, env: first.env });
+  proc.hold(false);
+  let sessionId: string | undefined;
+  let facts: AgentFacts | undefined;
+  let model: string | undefined;
+  let exited = false;
+  let closed = false;
+  let current: Turn | undefined;
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    void setup.cleanup().catch(() => undefined);
+  };
+
+  const stop = () => {
+    closed = true;
+    proc.kill();
+  };
+
+  const finish = (t: Turn, events: FunnelEvent[]) => {
+    if (t.finished) return;
+    t.finished = true;
+    const close = () => {
+      for (const e of events) t.out.push(e);
+      t.out.end();
+      t.end();
+    };
+    // Stderr comes through another pipe. A verbose turn gives stderr written just before the end time to arrive.
+    if (t.input.verbose) setTimeout(close, 20);
+    else close();
+  };
+
+  const fail = (t: Turn, failure: Failure) =>
+    finish(t, [...(failure.limit ? [{ type: "limit" as const, ...failure.limit }] : []), { type: "error", message: failure.message, code: failure.code }]);
+
+  const rpc = new AcpClient(proc, {
+    line(raw) {
+      const t = current;
+      if (t && !t.finished && t.input.verbose) t.out.push(rawEvent("antigravity", "stdout", raw, t.input));
+    },
+    notification(method, params) {
+      const t = current;
+      if (method !== "session/update" || !t || t.finished || !t.mapper || params?.sessionId !== sessionId) return;
+      for (const e of t.mapper.update(params.update ?? {})) t.out.push(e);
+    },
+    request(id, method, params) {
+      const t = current;
+      if (method === "session/request_permission") {
+        const toolCallId = params?.toolCall?.toolCallId;
+        if (typeof toolCallId === "string") t?.mapper?.refuse(toolCallId);
+        rpc.respond(id, denyPermission(params));
+        return;
+      }
+      // Nothing was offered at `initialize`, so a request for a file or a terminal is the agent's mistake.
+      rpc.fail(id, -32601, `Method not found: ${method}`);
+    },
+    closed() {
+      exited = true;
+      cleanup();
+      const t = current;
+      if (!t) return;
+      const err = stderrTail(proc.stderr());
+      finish(t, [closed ? { type: "done", text: "", finishReason: "cancelled" } : { type: "error", message: `agy acp exited early.${err ? ` ${err}` : ""}`, code: /sign in|not logged in/i.test(err) ? "not-logged-in" : "cli-failed" }]);
+    },
+  });
+
+  // Started once. Every turn waits for it.
+  const ready = (async () => {
+    const init = await within(rpc.request("initialize", initializeParams(packageVersion() ?? "0.0.0")), SETUP_TIMEOUT_MS, "initialize");
+    facts = agentFacts(init);
+    if (!facts.version || compareVersions(facts.version, ACP_MIN_VERSION) < 0) throw new FunnelError(TOO_OLD(facts.version), "unsupported");
+    if (first.attachments?.length && !facts.images) throw new FunnelError("This agy cannot take image attachments over ACP.", "unsupported");
+    const params = { cwd: setup.cwd, mcpServers: [] as unknown[], ...(sessionMeta(first.system, facts) ? { _meta: sessionMeta(first.system, facts) } : {}) };
+    let started: Record<string, any>;
+    try {
+      if (first.sessionId) {
+        if (!facts.resume && !facts.load) throw new FunnelError("This agy cannot resume a conversation over ACP.", "unsupported");
+        started = (await within(rpc.request(facts.resume ? "session/resume" : "session/load", { ...params, sessionId: first.sessionId }), SETUP_TIMEOUT_MS, "the conversation")) ?? {};
+        sessionId = first.sessionId;
+      } else {
+        started = await within(rpc.request("session/new", params), SETUP_TIMEOUT_MS, "session/new");
+        sessionId = String(started.sessionId ?? "");
+        if (!sessionId) throw new FunnelError("agy acp started no session.", "cli-failed");
+      }
+    } catch (e) {
+      if (!(e instanceof AcpError)) throw e;
+      if (first.sessionId && /failed to read session|not found/i.test(e.message)) {
+        throw new FunnelError(`Conversation ${first.sessionId} was not found.`, "cli-failed");
+      }
+      const failure = failureFromError(e);
+      throw new FunnelError(failure.message, failure.code);
+    }
+    const live = modelsFromSession(started.models);
+    if (live.length) setup.onModels(live);
+    // A resumed session answers with the account's default model, so the selection is applied on every activation.
+    let options: unknown = started.configOptions;
+    const effort = first.selection.effort ?? setup.defaultEffort(first.selection.model);
+    const plan = planModel(options, first.selection.model, effort);
+    const set = async (configId: string, value: string) => {
+      const answer = await within(rpc.request("session/set_config_option", { sessionId, configId, value }), SETUP_TIMEOUT_MS, `the ${configId} setting`);
+      options = answer?.configOptions ?? options;
+    };
+    if (plan.model !== currentModel(options)) await set("model", plan.model);
+    // A model without a thinking option takes no level, and `validateSelection` has already refused one the caller named.
+    if (plan.thought && thoughtLevels(options).length) {
+      checkThought(options, plan.model, plan.thought);
+      if (plan.thought !== currentThought(options)) await set("thought_level", plan.thought);
+    }
+    model = plan.model;
+    if (access === "accept-edits") await within(rpc.request("session/set_mode", { sessionId, modeId: "accept-edits" }), SETUP_TIMEOUT_MS, "the mode");
+    return sessionId;
+  })();
+  // A session that failed to start cannot take a turn. Stopping it makes the pool drop it.
+  ready.catch(() => stop());
+
+  async function* turn(input: RunInput): AsyncGenerator<FunnelEvent> {
+    if (current && !current.finished) throw new FunnelError("A turn is already running in this session.", "invalid-selection");
+    let end!: () => void;
+    const ended = new Promise<void>((resolve) => (end = resolve));
+    const t: Turn = { input, out: new Channel<FunnelEvent>(), finished: false, end, ended };
+    current = t;
+    proc.hold(true);
+    const offStderr = input.verbose ? proc.onStderr((line) => !t.finished && t.out.push(rawEvent("antigravity", "stderr", line, input)), runSecrets(input)) : undefined;
+    if (exited || closed) finish(t, [{ type: "error", message: "agy acp is not running.", code: "cli-failed" }]);
+
+    const signal = input.signal;
+    let aborted = false;
+    let grace: NodeJS.Timeout | undefined;
+    let timer: NodeJS.Timeout | undefined;
+    let forced = false;
+    const cancel = () => {
+      if (t.finished || aborted) return;
+      aborted = true;
+      if (sessionId) rpc.notify("session/cancel", { sessionId });
+      // agy ends a cancelled prompt with its own answer. If it does not, the funnel ends the turn and stops the process.
+      grace = setTimeout(() => {
+        forced = true;
+        finish(t, [{ type: "done", text: "", finishReason: "cancelled" }]);
+      }, CANCEL_GRACE_MS);
+      grace.unref();
+    };
+    if (signal?.aborted) cancel();
+    else signal?.addEventListener("abort", cancel, { once: true });
+    if (setup.timeoutSec) {
+      timer = setTimeout(cancel, setup.timeoutSec * 1000);
+      timer.unref();
+    }
+
+    void (async () => {
+      try {
+        const id = await ready;
+        if (t.finished) return;
+        if (aborted) return finish(t, [{ type: "done", text: "", finishReason: "cancelled" }]);
+        const startedAt = Date.now();
+        t.mapper = createAcpMapper(id, { access, cwd: setup.cwd, brainDir: setup.brainDir, readText: setup.readText, createdInRun: setup.createdInRun(startedAt) });
+        t.out.push({ type: "session", sessionId: id, ...(model ? { model } : {}) });
+        // The system prompt went in with the session when agy takes one there, and goes in front of the prompt when not.
+        const text = composePrompt(input, { system: !facts || sessionMeta(first.system, facts) === undefined, schema: true });
+        const result = await rpc.request("session/prompt", { sessionId: id, prompt: promptBlocks(text, input.attachments) });
+        if (t.finished) return;
+        const stopReason = String(result?.stopReason ?? "end_turn");
+        const failure = failureFromTurn(stopReason, t.mapper.text);
+        if (failure) {
+          fail(t, failure);
+          return;
+        }
+        finish(t, t.mapper.finish(stopReason, result?.usage));
+      } catch (e) {
+        if (t.finished) return;
+        if (aborted) finish(t, [{ type: "done", text: "", finishReason: "cancelled" }]);
+        else if (e instanceof AcpError) fail(t, failureFromError(e));
+        else finish(t, [{ type: "error", message: e instanceof Error ? e.message : String(e), code: e instanceof FunnelError ? e.code : "cli-failed" }]);
+      }
+    })();
+
+    let terminal = false;
+    try {
+      for await (const e of t.out) {
+        if (e.type === "done" || e.type === "error") terminal = true;
+        yield e;
+      }
+    } finally {
+      offStderr?.();
+      signal?.removeEventListener("abort", cancel);
+      clearTimeout(grace);
+      clearTimeout(timer);
+      // A turn the consumer left before it ended leaves the conversation in an unknown state. An aborted turn that agy
+      // ended by itself leaves it idle and reusable.
+      if (!terminal || forced) stop();
+      if (current === t) current = undefined;
+      proc.hold(false);
+    }
+  }
+
+  return {
+    get sessionId() {
+      return sessionId;
+    },
+    get alive() {
+      return !exited && !closed;
+    },
+    turn,
+    close() {
+      if (closed) return;
+      const t = current;
+      stop();
+      if (t) finish(t, [{ type: "done", text: "", finishReason: "cancelled" }]);
+    },
+  };
+}

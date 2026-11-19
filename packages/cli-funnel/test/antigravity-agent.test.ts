@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { collect } from "./helpers.js";
+import { collect, printTransport } from "./helpers.js";
 import { antigravityProvider, apiKeyEnv, buildArgs, createdInRunFor, createdSince, mcpConfig } from "../src/providers/antigravity/index.js";
 import { createMapper, parseRm, parseTaskList, type MapperOptions } from "../src/providers/antigravity/parser.js";
 import type { FunnelEvent, McpServer, RunInput } from "../src/types.js";
@@ -318,7 +318,7 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"ok"}}'
   });
   const drain = async (r: RunInput) => {
     const out: FunnelEvent[] = [];
-    for await (const e of antigravityProvider.run(r)) out.push(e);
+    for await (const e of antigravityProvider.run(printTransport(r))) out.push(e);
     return out;
   };
 
@@ -430,7 +430,7 @@ describe.skipIf(process.env.CLI_FUNNEL_LIVE !== "1")("antigravity agent features
     writeFileSync(join(cwd, "existing.txt"), "old content\n");
     writeFileSync(join(cwd, "gone.txt"), "x\n");
     const r = await collect(
-      antigravityProvider.run(live(cwd, "Use your file tools: create new.txt containing 'hello'; change existing.txt so it says 'updated' instead of 'old content'; delete gone.txt. Reply with just: done.")),
+      antigravityProvider.run(printTransport(live(cwd, "Use your file tools: create new.txt containing 'hello'; change existing.txt so it says 'updated' instead of 'old content'; delete gone.txt. Reply with just: done."))),
       live(cwd, ""),
     );
     const byPath = Object.fromEntries((r.fileChanges ?? []).map((c) => [c.path.slice(cwd.length + 1), c]));
@@ -443,7 +443,7 @@ describe.skipIf(process.env.CLI_FUNNEL_LIVE !== "1")("antigravity agent features
   it("reports the task list as a plan", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "cf-agy-live-"));
     const r = await collect(
-      antigravityProvider.run(live(cwd, "Create a.txt containing 'a', then b.txt containing 'b'. Keep a task list in a task.md artifact and update it as you go. Reply with just: done.")),
+      antigravityProvider.run(printTransport(live(cwd, "Create a.txt containing 'a', then b.txt containing 'b'. Keep a task list in a task.md artifact and update it as you go. Reply with just: done."))),
       live(cwd, ""),
     );
     expect(r.plan?.length).toBeGreaterThan(0);
@@ -475,7 +475,7 @@ describe.skipIf(process.env.CLI_FUNNEL_LIVE !== "1")("antigravity agent features
       const cwd = mkdtempSync(join(tmpdir(), "cf-agy-live-"));
       const mcpServers = { probe: { type: "http" as const, url: `http://127.0.0.1:${port}/mcp`, headers: { Authorization: "Bearer cf-live-token" } } };
       const r = await collect(
-        antigravityProvider.run(live(cwd, "Call the MCP tool cf_ping with call_mcp_tool (ServerName funnel_probe). Do not use the shell. Tell me the secret word it returns.", { mcpServers })),
+        antigravityProvider.run(printTransport(live(cwd, "Call the MCP tool cf_ping with call_mcp_tool (ServerName funnel_probe). Do not use the shell. Tell me the secret word it returns.", { mcpServers }))),
         live(cwd, "", { mcpServers }),
       );
       expect(seen).toEqual(["Bearer cf-live-token"]);
@@ -497,7 +497,7 @@ describe.skipIf(!GEMINI_KEY)("antigravity api key live", () => {
     const cwd = mkdtempSync(join(tmpdir(), "cf-agy-live-"));
     mkdirSync(cwd, { recursive: true });
     const run: RunInput = { ...input({ cwd, model: "gemini-3.8-flash", effort: "low", access: "none" }), prompt: "Reply with the word OK", apiKey: GEMINI_KEY };
-    const r = await collect(antigravityProvider.run(run), run);
+    const r = await collect(antigravityProvider.run(printTransport(run)), run);
     expect(r.text).toMatch(/OK/);
     expect(r.auth).toBe("api-key");
     expect(digest()).toEqual(before);

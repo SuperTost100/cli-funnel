@@ -1,3 +1,4 @@
+import { printTransport } from "./helpers.js";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -153,7 +154,7 @@ describe.skipIf(process.platform === "win32")("Antigravity subagent transcripts 
     chmodSync(bin, 0o755);
     process.env.CLI_FUNNEL_AGY_BIN = bin;
     const events: FunnelEvent[] = [];
-    for await (const e of antigravityProvider.run({ selection: { provider: "antigravity", model: "m", cwd: dir, access: "full" }, prompt: "hi", providerOptions })) events.push(e);
+    for await (const e of antigravityProvider.run(printTransport({ selection: { provider: "antigravity", model: "m", cwd: dir, access: "full" }, prompt: "hi", providerOptions }))) events.push(e);
     return events;
   };
 

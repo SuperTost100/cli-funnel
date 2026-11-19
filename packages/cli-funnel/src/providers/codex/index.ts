@@ -1,7 +1,7 @@
-import { readFileSync } from "node:fs";
 import { manifestModels } from "../../catalog/manifest.js";
 import type { AuthStatus, FunnelEvent, ModelInfo, Provider, ProviderContext, RunInput } from "../../types.js";
 import { exec } from "../../util/process.js";
+import { packageVersion } from "../../util/package-version.js";
 import { detectInstallation, findBinary, runLogout, runUpdate, spawnLogin } from "../base.js";
 import { accountStatus, parseLoginStatus } from "./auth.js";
 import { FEEDBACK_CHANNELS } from "../feedback.js";
@@ -42,19 +42,6 @@ async function models(ctx?: ProviderContext): Promise<ModelInfo[]> {
     }
   }
   return manifestModels("codex", ctx?.manifestUrl);
-}
-
-/** This package's version. Source files sit three levels below the package root, bundled files one or two. */
-function packageVersion(): string | undefined {
-  for (const rel of ["../../../package.json", "../package.json", "../../package.json"]) {
-    try {
-      const pkg = JSON.parse(readFileSync(new URL(rel, import.meta.url), "utf8"));
-      if (pkg.name === "cli-funnel") return pkg.version;
-    } catch {
-      /* not at this level */
-    }
-  }
-  return undefined;
 }
 
 export const INITIALIZE_PARAMS = {

@@ -125,13 +125,24 @@ export interface Selection {
   access?: AccessLevel;
 }
 
+/**
+ * Token counts of a run. Every provider follows one convention: `inputTokens` is everything the model read, the cached
+ * part included, so `totalTokens` is `inputTokens + outputTokens`. `cachedInputTokens`, `cacheCreationInputTokens` and
+ * `reasoningTokens` are shares of those two numbers, not additions to them. Fresh input is
+ * `inputTokens - cachedInputTokens - cacheCreationInputTokens`.
+ */
 export interface Usage {
+  /** All input tokens, cached ones included. */
   inputTokens: number;
+  /** All output tokens, reasoning ones included. */
   outputTokens: number;
+  /** The part of `inputTokens` read from the prompt cache. */
   cachedInputTokens?: number;
-  /** Input tokens written to the prompt cache. Counted in `inputTokens`. Set by Anthropic and Codex, and only when there were any. */
+  /** The part of `inputTokens` written to the prompt cache. Set by Anthropic, Codex, Cursor Agent and Antigravity over ACP, and only when there were any. */
   cacheCreationInputTokens?: number;
+  /** The part of `outputTokens` the model spent thinking. */
   reasoningTokens?: number;
+  /** `inputTokens + outputTokens`. */
   totalTokens: number;
   /** Set only when the CLI reports it. Subscription runs often do not. */
   costUsd?: number;
@@ -787,6 +798,13 @@ export interface AgentOptions {
 
 /** Antigravity settings. See docs/providers/antigravity.md. */
 export interface AntigravityOptions {
+  /**
+   * How cli-funnel drives `agy`. `acp` (the default) talks to `agy acp`, the Agent Client Protocol server: one process
+   * per conversation, a system prompt slot, images, and the thinking levels of the account. `print` starts one
+   * `agy --print` process per turn, as 0.9.x did. Needs agy 1.5.0 or newer for `acp`. A run on `apiKey` uses `print`.
+   * See docs/providers/antigravity.md.
+   */
+  transport?: "acp" | "print";
   /** More workspace directories. Absolute paths. Refused at `none`. */
   addDirs?: string[];
   /** End the turn after this many seconds. */
