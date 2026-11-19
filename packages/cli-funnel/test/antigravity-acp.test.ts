@@ -452,7 +452,7 @@ describe.skipIf(process.platform === "win32")("antigravity over ACP, with a fake
     const asks = [ask("p1", "a", "mcp_@@R@@_add_note", { text: "x" }), ask("p2", "b", "mcp_notes_add_note", {}), { jsonrpc: "2.0", id: 1, result: { stopReason: "end_turn" } }];
     const agy = fakeAgy({ script: asks });
     await drain(input({ mcpServers: { notes: { type: "http", url: "http://127.0.0.1:9/mcp", headers: { Authorization: "Bearer t" } } } }));
-    await until(() => agy.received().some((m) => m.id === "p2" && m.result));
+    await until(() => ["p1", "p2"].every((id) => agy.received().some((m) => m.id === id && m.result)));
     const got = agy.received();
     const sent = got.find((m) => m.method === "session/new")!.params.mcpServers;
     expect(sent).toEqual([{ type: "http", name: expect.stringMatching(/^clifunnel[0-9a-f]{8}_0$/), url: "http://127.0.0.1:9/mcp", headers: [{ name: "Authorization", value: "Bearer t" }] }]);

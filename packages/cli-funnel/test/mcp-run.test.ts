@@ -182,7 +182,8 @@ describe("Antigravity at none with servers", () => {
       for (const command of ["echo hello", "echo '{\"decision\":\"allow\"}'", "exit 3", "echo '{\"decision\":\"deny\"}'; exit 1", "sleep 0.1; echo not-json"]) expect(await hookDenies(command, "linux"), command).toBe(false);
     });
 
-    it("stops the run with `unsupported` before anything starts when the shell runs nothing, the case of a host that cannot run what the hook needs", withFakeSh("exit 0", async () => {
+    // The fake is a `sh` first on the PATH. Windows runs the hook through cmd.exe, which looks for no `sh`.
+    it.skipIf(process.platform === "win32")("stops the run with `unsupported` before anything starts when the shell runs nothing, the case of a host that cannot run what the hook needs", withFakeSh("exit 0", async () => {
       await expect(requireWorkingHook()).rejects.toMatchObject({ code: "unsupported", message: expect.stringContaining("would read it as allow") });
       await expect(requireWorkingHook(RUN)).rejects.toMatchObject({ code: "unsupported" });
     }));
