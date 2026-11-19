@@ -235,7 +235,13 @@ describe("workspaceName case", () => {
   it("requires lowercase, since a folder called Notes and one called notes are one folder on macOS and Windows", async () => {
     for (const bad of ["Notes", "PYXIS", "myApp"]) expect(() => workspaceFor("agent-none", bad), bad).toThrow(FunnelError);
     expect(workspaceFor("agent-none", "my-app_2")).toBe("agent-none.my-app_2");
-    const funnel = createFunnel({ providers: { claude: claudeProvider }, allowUnlistedModels: true });
+    // A fake provider: CI has no Claude Code installed, and the check happens before any provider runs.
+    const provider: Provider = {
+      ...claudeProvider,
+      detect: async () => ({ installed: true, testedRange: { min: "0" } }),
+      models: async () => [{ id: "m", name: "M", provider: "claude", efforts: [], contextWindows: [], fast: false, source: "manifest" }],
+    };
+    const funnel = createFunnel({ providers: { claude: provider } });
     await expect(funnel.run({ selection: { provider: "claude", model: "m", cwd: tmpdir(), access: "none" }, prompt: "x", workspaceName: "Notes" })).rejects.toMatchObject({ code: "invalid-selection", message: expect.stringContaining("lowercase") });
   });
 });
