@@ -663,7 +663,7 @@ export interface RunInput {
   persist?: boolean;
   /**
    * A name for the private folder that Cursor Agent and Antigravity run in at access `none`, so the conversations of
-   * one app pile up apart from those of every other app that uses cli-funnel. Letters, digits, `_` and `-`, up to 40.
+   * one app pile up apart from those of every other app that uses cli-funnel. Lowercase letters, digits, `_` and `-`, up to 40.
    * The folder is `agent-none.<name>` or `antigravity-none.<name>` under `~/.cache/cli-funnel/workspaces/`. Default: one
    * folder shared by every caller. Other providers ignore it.
    */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { redact, redactErrors, redactSecrets } from "../src/util/redact.js";
+import { mask, redact, redactErrors, redactSecrets, runSecrets } from "../src/util/redact.js";
 import type { FunnelEvent } from "../src/types.js";
 
 const GH = "ghp_" + "a1B2c3D4e5".repeat(4);
@@ -134,5 +134,42 @@ describe("redactSecrets across text.delta events", () => {
     }
     expect(seen.join("")).toBe("tok-abcdef");
     expect(caught.message).toBe("boom [redacted]");
+  });
+});
+
+describe("runSecrets for the caller's MCP servers", () => {
+  const input = (mcpServers: object) => ({ mcpServers: mcpServers as never });
+
+  it("takes every header value and every env value, whatever the name is", () => {
+    const secrets = runSecrets(
+      input({
+        api: { type: "http", url: "http://127.0.0.1:1/mcp", headers: { "X-Custom": "header-value-1", "Content-Type": "application/json", Authorization: "Bearer abcdefgh" } },
+        local: { type: "stdio", command: "node", args: ["s.js"], env: { REGION: "eu-west-1", FLAG: "on", DEBUG: "verbose-mode" } },
+      }),
+    );
+    for (const v of ["header-value-1", "application/json", "Bearer abcdefgh", "eu-west-1", "verbose-mode"]) expect(secrets, v).toContain(v);
+    // Too short to mask without mangling ordinary text.
+    expect(secrets).not.toContain("on");
+  });
+
+  it("takes the values of a server URL's query string and its password, and leaves the rest of the URL", () => {
+    const secrets = runSecrets(input({ api: { type: "http", url: "https://user:hunter2hunter2@host.example/mcp?api_key=SECRETVALUE1&mode=fast&t=abc" } }));
+    expect(secrets).toEqual(expect.arrayContaining(["SECRETVALUE1", "hunter2hunter2"]));
+    expect(secrets).not.toContain("fast");
+    expect(secrets).not.toContain("host.example");
+  });
+
+  it("masks them in a raw-style value, in an error message and in a thrown error", async () => {
+    const run = input({ api: { type: "http", url: "https://h.example/mcp?token=QUERYTOKEN99", headers: { "X-Custom": "header-value-1" } }, local: { type: "stdio", command: "node", env: { REGION: "eu-west-1" } } });
+    const secrets = runSecrets(run);
+    expect(mask({ line: "sent header-value-1 to https://h.example/mcp?token=QUERYTOKEN99 in eu-west-1" }, secrets)).toEqual({ line: "sent [redacted] to https://h.example/mcp?token=[redacted] in [redacted]" });
+    const events: FunnelEvent[] = [{ type: "error", message: "failed: header-value-1 rejected, region eu-west-1" }];
+    const out: FunnelEvent[] = [];
+    for await (const e of redactSecrets((async function* () { yield* events; })(), secrets)) out.push(e);
+    expect(out[0]).toEqual({ type: "error", message: "failed: [redacted] rejected, region [redacted]" });
+  });
+
+  it("keeps the old rule for the run's own env: only credential-looking names", () => {
+    expect(runSecrets({ env: { MY_TOKEN: "abcdefghij", REGION: "eu-west-1" } })).toEqual(["abcdefghij"]);
   });
 });

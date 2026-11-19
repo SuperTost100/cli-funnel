@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -265,6 +265,11 @@ describe("antigravity ACP failures", () => {
     expect(failureFromTurn("end_turn", "  Error 500, Message: backend failed, Status: INTERNAL\n")).toMatchObject({ code: "cli-failed" });
   });
 
+  it("keeps a sign-in or subscription failure that arrives as the reply classified", () => {
+    expect(failureFromTurn("end_turn", "Error 401, Message: Request had invalid authentication credentials, Status: UNAUTHENTICATED")).toEqual({ message: "Run agy in a terminal and sign in.", code: "not-logged-in" });
+    expect(failureFromTurn("end_turn", "Error 403, Message: SUBSCRIPTION_REQUIRED for this account, Status: PERMISSION_DENIED")).toMatchObject({ code: "cli-failed", message: expect.stringContaining("no Antigravity subscription") });
+  });
+
   it("never reads the model's prose as a failure, even when it quotes the wording", () => {
     const quoted = "Error 500, Message: backend failed, Status: INTERNAL";
     expect(failureFromTurn("end_turn", `Here is how Google words it: ${quoted}. Handle it with a retry.`)).toBeUndefined();
@@ -288,7 +293,7 @@ const [cmd] = process.argv.slice(2);
 if (cmd === "--version") { console.log(cfg.version || "1.5.12"); process.exit(0); }
 if (cmd === "models") { process.stdout.write(fs.readFileSync(cfg.models, "utf8")); process.exit(0); }
 if (cmd !== "acp") { log({ print: process.argv.slice(2) }); console.log(JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "printed" } })); process.exit(0); }
-log({ argv: process.argv.slice(2), cwd: process.cwd() });
+log({ argv: process.argv.slice(2), cwd: process.cwd(), pid: process.pid });
 const out = (m) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...m }) + "\\n");
 const options = JSON.parse(JSON.stringify(cfg.newResult.configOptions));
 let buf = "";
@@ -315,7 +320,7 @@ function handle(m) {
       return result(m, { configOptions: options });
     }
     case "session/set_mode": return result(m, {});
-    case "session/cancel": if (promptId !== undefined) out({ id: promptId, result: { stopReason: "cancelled" } }); return;
+    case "session/cancel": if (promptId !== undefined && !cfg.ignoreCancel) out({ id: promptId, result: { stopReason: "cancelled" } }); return;
     case "session/prompt": {
       promptId = m.id;
       if (cfg.hang) return;
@@ -378,7 +383,7 @@ describe.skipIf(process.platform === "win32")("antigravity over ACP, with a fake
     expect(events[0]).toEqual({ type: "session", sessionId: SESSION, model: "gemini-3.8-flash" });
     expect(events.at(-1)).toMatchObject({ type: "done", text: "2 + 2 is 4.\n\nBANANA", finishReason: "stop" });
     const got = agy.received();
-    expect(got[0]).toMatchObject({ argv: ["acp"] });
+    expect(got[0]!.argv).toEqual(["acp", expect.stringMatching(/^--gemini-dir=.*antigravity-gemini-none$/)]);
     // `none` runs in the folder that holds the deny hook, never in the caller's folder.
     expect(got[0]!.cwd).toMatch(/workspaces[/\\]antigravity-none$/);
     const methods = got.slice(1).filter((m) => m.method).map((m) => m.method);
@@ -435,6 +440,43 @@ describe.skipIf(process.platform === "win32")("antigravity over ACP, with a fake
     const agy = fakeAgy();
     await drain(input({ workspaceName: "pyxis" }));
     expect(agy.received()[0]!.cwd).toMatch(/workspaces[/\\]antigravity-none\.pyxis$/);
+  });
+
+  describe("at none, keeping the user's own agy setup out", () => {
+    const real = () => join(process.env.HOME!, ".gemini", "antigravity-cli");
+    const dirOf = (argv: string[]) => argv.find((a) => a.startsWith("--gemini-dir="))?.slice("--gemini-dir=".length);
+
+    it("starts agy with a private --gemini-dir that holds only a link to the data folder, so the user's MCP servers, skills and GEMINI.md are not read", async () => {
+      mkdirSync(real(), { recursive: true });
+      const agy = fakeAgy();
+      await drain(input());
+      const dir = dirOf(agy.received()[0]!.argv)!;
+      expect(dir).toMatch(/antigravity-gemini-none$/);
+      expect(readdirSync(dir)).toEqual(["antigravity-cli"]);
+      expect(lstatSync(join(dir, "antigravity-cli")).isSymbolicLink()).toBe(true);
+      expect(realpathSync(join(dir, "antigravity-cli"))).toBe(realpathSync(real()));
+    });
+
+    it("points a stale link at the data folder again, and makes none when there is no data folder yet", async () => {
+      mkdirSync(real(), { recursive: true });
+      const agy = fakeAgy();
+      await drain(input());
+      const dir = dirOf(agy.received()[0]!.argv)!;
+      rmSync(join(dir, "antigravity-cli"));
+      symlinkSync(tmpdir(), join(dir, "antigravity-cli"));
+      await drain(input());
+      expect(realpathSync(join(dir, "antigravity-cli"))).toBe(realpathSync(real()));
+      rmSync(real(), { recursive: true });
+      rmSync(join(dir, "antigravity-cli"));
+      await drain(input());
+      expect(existsSync(join(dir, "antigravity-cli"))).toBe(false);
+    });
+
+    it("leaves every other level on the user's own setup", async () => {
+      const agy = fakeAgy();
+      await drain(input({}, { access: "full" }));
+      expect(dirOf(agy.received()[0]!.argv)).toBeUndefined();
+    });
   });
 
   it("starts `agy acp` with --dangerously-skip-permissions only at full, in the caller's folder", async () => {
@@ -515,6 +557,24 @@ describe.skipIf(process.platform === "win32")("antigravity over ACP, with a fake
     const events = await drain(input({ signal: ac.signal }));
     expect(events.at(-1)).toEqual({ type: "done", text: "", finishReason: "cancelled" });
     expect(agy.received().some((m) => m.method === "session/cancel" && m.params.sessionId === SESSION)).toBe(true);
+  });
+
+  it("stops the process when agy ignores the cancel, without waiting for the consumer to read on", async () => {
+    const agy = fakeAgy({ hang: true, ignoreCancel: true });
+    process.env.CLI_FUNNEL_ACP_CANCEL_GRACE_MS = "300";
+    const ac = new AbortController();
+    const it = antigravityProvider.run(input({ signal: ac.signal }))[Symbol.asyncIterator]();
+    try {
+      expect((await it.next()).value).toMatchObject({ type: "session" });
+      const pid = agy.received()[0]!.pid as number;
+      ac.abort();
+      // The consumer reads nothing more. The grace passes and the process must be gone anyway.
+      await until(() => { try { process.kill(pid, 0); return false; } catch { return true; } });
+      expect(() => process.kill(pid, 0)).toThrow();
+    } finally {
+      delete process.env.CLI_FUNNEL_ACP_CANCEL_GRACE_MS;
+      await it.return?.(undefined);
+    }
   });
 
   it("ends the turn after printTimeoutSec", async () => {

@@ -181,3 +181,61 @@ describe("workspaceFor", () => {
     for (const bad of ["", "a.b", "../x", "a/b", "a b", "x".repeat(41), "é"]) expect(() => workspaceFor("agent-none", bad), bad).toThrow(FunnelError);
   });
 });
+
+describe("persist: false and the live-session pool", () => {
+  it("runs outside the pool, since no later turn can resume an unsaved session and a kept process would only take a slot", async () => {
+    const opened: RunInput[] = [];
+    const live = (input: RunInput) => ({
+      sessionId: undefined as string | undefined,
+      alive: true,
+      async *turn(): AsyncGenerator<FunnelEvent> {
+        yield { type: "session", sessionId: "s-live" };
+        yield { type: "done", text: "live", finishReason: "stop" };
+      },
+      close() {
+        void input;
+      },
+    });
+    const provider: Provider = {
+      id: "claude",
+      displayName: "Fake",
+      capabilities: { access: ["none"], effort: false, contextWindow: false, fast: false, resume: true, approvals: false, images: false, system: "prompt", schema: "prompt", ephemeral: true },
+      detect: async () => ({ installed: true, testedRange: { min: "0" } }),
+      authStatus: async () => ({ loggedIn: true }),
+      login: () => { throw new Error("no"); },
+      logout: async () => undefined,
+      update: async () => ({ changed: false, output: "" }),
+      models: async () => [{ id: "m", name: "M", provider: "claude", efforts: [], contextWindows: [], fast: false, source: "manifest" }],
+      async *run(): AsyncGenerator<FunnelEvent> {
+        yield { type: "done", text: "direct", finishReason: "stop" };
+      },
+      async openSession(input: RunInput) {
+        opened.push(input);
+        return live(input);
+      },
+    };
+    const funnel = createFunnel({ providers: { claude: provider }, sessions: { keepAlive: true } });
+    const selection = { provider: "claude" as const, model: "m", cwd: tmpdir(), access: "none" as const };
+    try {
+      expect((await funnel.run({ selection, prompt: "x", persist: false })).text).toBe("direct");
+      expect(opened).toHaveLength(0);
+      expect(funnel.sessions()).toEqual([]);
+      expect((await funnel.run({ selection, prompt: "x" })).text).toBe("live");
+      expect(opened).toHaveLength(1);
+      // The provider's own option is a live session's business: the process keeps the conversation in memory.
+      expect((await funnel.run({ selection, prompt: "x", providerOptions: { claude: { ephemeral: true } } })).text).toBe("live");
+      expect(opened).toHaveLength(2);
+    } finally {
+      funnel.close();
+    }
+  });
+});
+
+describe("workspaceName case", () => {
+  it("requires lowercase, since a folder called Notes and one called notes are one folder on macOS and Windows", async () => {
+    for (const bad of ["Notes", "PYXIS", "myApp"]) expect(() => workspaceFor("agent-none", bad), bad).toThrow(FunnelError);
+    expect(workspaceFor("agent-none", "my-app_2")).toBe("agent-none.my-app_2");
+    const funnel = createFunnel({ providers: { claude: claudeProvider }, allowUnlistedModels: true });
+    await expect(funnel.run({ selection: { provider: "claude", model: "m", cwd: tmpdir(), access: "none" }, prompt: "x", workspaceName: "Notes" })).rejects.toMatchObject({ code: "invalid-selection", message: expect.stringContaining("lowercase") });
+  });
+});

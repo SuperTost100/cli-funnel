@@ -9,8 +9,8 @@ function funnelCacheDir(): string {
   return join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "cli-funnel");
 }
 
-/** Letters, digits, `_` and `-`, up to 40: a name that is safe in a folder name. */
-export const WORKSPACE_NAME = /^[A-Za-z0-9_-]{1,40}$/;
+/** Lowercase letters, digits, `_` and `-`, up to 40: a name that is safe in a folder name. Lowercase only, since macOS and Windows treat `Notes` and `notes` as one folder. */
+export const WORKSPACE_NAME = /^[a-z0-9_-]{1,40}$/;
 
 /**
  * `name` for the shared folder, `name.<caller>` for a caller's own. A caller's name cannot hold a dot, so what follows
@@ -19,18 +19,24 @@ export const WORKSPACE_NAME = /^[A-Za-z0-9_-]{1,40}$/;
  */
 export function workspaceFor(name: string, caller: string | undefined): string {
   if (caller === undefined) return name;
-  if (typeof caller !== "string" || !WORKSPACE_NAME.test(caller)) throw new FunnelError("workspaceName must be 1 to 40 letters, digits, _ or -.", "invalid-selection");
+  if (typeof caller !== "string" || !WORKSPACE_NAME.test(caller)) throw new FunnelError("workspaceName must be 1 to 40 lowercase letters, digits, _ or -.", "invalid-selection");
   return `${name}.${caller}`;
 }
 
 /**
- * Returns a private folder that holds only `files`, for runs that must not see the user's project.
+ * Returns a private folder that holds only `files`, for runs that must not see the user's project. A key that ends in a
+ * slash is an empty folder.
  * Files are rewritten when their content differs, through a rename so a concurrent run never reads half a file.
  */
 export async function ownedWorkspace(name: string, files: Record<string, string>): Promise<string> {
   const dir = join(funnelCacheDir(), "workspaces", name);
   await mkdir(dir, { recursive: true, mode: 0o700 });
   for (const [rel, content] of Object.entries(files)) {
+    // A name that ends in a slash is an empty folder.
+    if (rel.endsWith("/")) {
+      await mkdir(join(dir, rel), { recursive: true, mode: 0o700 });
+      continue;
+    }
     const path = join(dir, rel);
     if ((await readFile(path, "utf8").catch(() => undefined)) === content) continue;
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });

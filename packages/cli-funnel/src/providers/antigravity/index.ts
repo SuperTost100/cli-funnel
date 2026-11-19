@@ -1,5 +1,5 @@
-import { readFileSync, statSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { mkdir, mkdtemp, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { manifestModels, mergeModels } from "../../catalog/manifest.js";
@@ -132,9 +132,38 @@ export function noneHooks(platform: NodeJS.Platform = process.platform): Record<
   return { "cli-funnel-none": { PreToolUse: [{ matcher: NONE_MATCHER, hooks: [{ type: "command", command, timeout: 10 }] }] } };
 }
 
-/** The empty folder `none` runs in. It holds only the deny hook. */
+/**
+ * What makes a folder a git repository for `git rev-parse`: a `HEAD`, an `objects` folder and a `refs` folder. agy looks for
+ * the repository root and loads `AGENTS.md`, `GEMINI.md` and `.agents/` from every folder between the working folder and
+ * that root, so a `none` folder inside a user's repository, or under a home folder that is one, would read the user's
+ * instructions. With its own root it reads nothing above itself. An empty `.git` folder is not enough: agy walked past it.
+ */
+export const GIT_MARKER: Record<string, string> = { ".git/HEAD": "ref: refs/heads/main\n", ".git/objects/": "", ".git/refs/": "" };
+
+/** The empty folder `none` runs in. It holds only the deny hook, and the marker that makes it the root of its own repository. */
 export function noneWorkspace(caller?: string): Promise<string> {
-  return ownedWorkspace(workspaceFor("antigravity-none", caller), { ".agents/hooks.json": `${JSON.stringify(noneHooks(), null, 2)}\n` });
+  return ownedWorkspace(workspaceFor("antigravity-none", caller), { ...GIT_MARKER, ".agents/hooks.json": `${JSON.stringify(noneHooks(), null, 2)}\n` });
+}
+
+/**
+ * The `--gemini-dir` of a `none` run over ACP. agy reads the user's MCP servers (`config/mcp_config.json`), skills and
+ * global `GEMINI.md` from the folder it calls its Gemini folder, `~/.gemini` by default, and starts those servers before
+ * the first prompt. A folder of our own that holds only a link to the user's `antigravity-cli` data folder has none of
+ * them, and agy still finds the sign-in and the conversations through the link. Checked on 1.5.12: a stdio server in the
+ * user's config started with the default and did not start with this folder, and the session and its models still came
+ * back. No link is made while the user has no data folder, and agy then keeps its own in this one.
+ */
+export async function noneGeminiDir(home: string = homedir()): Promise<string> {
+  const dir = await ownedWorkspace("antigravity-gemini-none", {});
+  const target = dataDir(home);
+  const link = join(dir, "antigravity-cli");
+  if (!existsSync(target)) return dir;
+  const current = await readlink(link).catch(() => undefined);
+  if (current === target) return dir;
+  await rm(link, { recursive: true, force: true });
+  // A junction needs no privilege on Windows, where a symbolic link to a folder does.
+  await symlink(target, link, process.platform === "win32" ? "junction" : "dir");
+  return dir;
 }
 
 /**
@@ -378,7 +407,7 @@ async function* runPrint(input: RunInput): AsyncGenerator<FunnelEvent> {
   };
   let sessionSent = false;
   let guarded = false;
-  const guard = input.selection.access === "none" ? createNoneGuard((name) => name !== "finish") : undefined;
+  const guard = input.selection.access === "none" ? createNoneGuard((start) => start.name !== "finish") : undefined;
   const forward = antigravityForward(input);
   // Only with a forward option: the stream lines and the subagents' transcripts then go through one channel.
   let source: AsyncIterable<unknown> = stream.lines;
@@ -435,8 +464,9 @@ async function* runPrint(input: RunInput): AsyncGenerator<FunnelEvent> {
       // The terminal event ends the stream, also when the CLI keeps running (a resume that started another conversation).
       if (terminal) break;
     }
-    if (tap && !mapper.finished) yield* tap.events();
-    if (transcripts && !mapper.finished) yield* await transcripts.finish();
+    // After the guard's error nothing else goes out: the error is the last event of the run.
+    if (tap && !mapper.finished && !guarded) yield* tap.events();
+    if (transcripts && !mapper.finished && !guarded) yield* await transcripts.finish();
   } finally {
     transcripts?.stop();
     tap?.close();
@@ -469,7 +499,13 @@ async function acpSetup(input: RunInput): Promise<AcpSetup> {
   if (servers.length) requireAccess(access, ["full"], "Antigravity MCP servers");
   const cwd = access === "none" ? await noneWorkspace(input.workspaceName) : input.selection.cwd!;
   const mcp = servers.length ? await mcpWorkspace(servers) : undefined;
-  const args = [...(dirs ?? []).map((d) => flag("--add-dir", d)), ...(mcp ? [flag("--add-dir", mcp.dir)] : []), ...(access === "full" ? ["--dangerously-skip-permissions"] : [])];
+  const args = [
+    ...(dirs ?? []).map((d) => flag("--add-dir", d)),
+    ...(mcp ? [flag("--add-dir", mcp.dir)] : []),
+    ...(access === "full" ? ["--dangerously-skip-permissions"] : []),
+    // At `none` the user's own agy setup stays out: see `noneGeminiDir`.
+    ...(access === "none" ? [flag("--gemini-dir", await noneGeminiDir())] : []),
+  ];
   return {
     path,
     cwd,

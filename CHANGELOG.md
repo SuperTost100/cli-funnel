@@ -12,10 +12,13 @@ Antigravity runs over the Agent Client Protocol by default, and token counts fol
 - **Antigravity lists an `xhigh` effort** on the models that have one. 0.9.x did not group those ids into a model.
 - A quota or rate limit that agy reports over ACP becomes a `limit` event with `resetAt`, then an `error`.
 
+- **Antigravity `none` runs read less of the user's setup.** Over ACP they start with a private `--gemini-dir`, so the user's MCP servers do not start and their skills and global `GEMINI.md` are not read. On `print` the servers still start, and every call to them is refused. Both transports run in a folder that is the root of its own git repository, so the `AGENTS.md` and `.agents/` of a repository above it are not read.
+- **MCP server values are masked wherever they show up.** Every header value and env value of a caller's `mcpServers`, whatever its name, and the password and the long query values of a server URL, are masked in events, raw events, the run log and error text.
+
 ### Added
 
 - **`persist: false`** keeps a one-shot run out of the tool's saved history. It works on Claude Code (`--no-session-persistence`), Codex (an ephemeral thread) and the providers that keep history in cli-funnel's store, and `capabilities.ephemeral` says which. Cursor Agent and Antigravity have no way to skip saving and refuse the run with `unsupported`. It cannot be resumed, so it takes no `sessionId`. See [Runs that are not saved](docs/run-options.md#runs-that-are-not-saved).
-- **`workspaceName`** gives an app its own folder for the access `none` runs of Cursor Agent and Antigravity, so its chats do not pile up in one folder shared by every app.
+- **`workspaceName`** (lowercase letters, digits, `_` and `-`, up to 40) gives an app its own folder for the access `none` runs of Cursor Agent and Antigravity, so its chats do not pile up in one folder shared by every app.
 
 ### Migrating from 0.9.x
 

@@ -212,7 +212,7 @@ export function createFunnel(options: FunnelOptions = {}) {
       }
     }
     if (input.workspaceName !== undefined && (typeof input.workspaceName !== "string" || !WORKSPACE_NAME.test(input.workspaceName))) {
-      throw new FunnelError("workspaceName must be 1 to 40 letters, digits, _ or -.", "invalid-selection");
+      throw new FunnelError("workspaceName must be 1 to 40 lowercase letters, digits, _ or -.", "invalid-selection");
     }
     if (input.apiKey !== undefined) {
       if (!p.capabilities.apiKey) throw new FunnelError(`${p.displayName} cannot run on an API key passed with the run.`, "unsupported");

@@ -15,6 +15,17 @@ describe.skipIf(process.platform === "win32")("an unfinished stdout line", () =>
     expect(await proc.exited).not.toBe(0);
   }, 20_000);
 
+  it("also stops on a long line that arrives in one chunk with its own line break, and emits nothing from it", async () => {
+    const proc = spawnStream(process.execPath, ["-e", "process.stdout.write(JSON.stringify({ ok: 1 }) + '\\n' + 'x'.repeat(5000) + '\\n' + JSON.stringify({ after: 1 }) + '\\n')"], { maxLineChars: 1000 });
+    const seen: unknown[] = [];
+    const read = async () => {
+      for await (const line of proc.lines) seen.push(line);
+    };
+    await expect(read()).rejects.toMatchObject({ code: "cli-failed" });
+    // The short line before it was real output. The long one and what follows it are not emitted.
+    expect(seen).toEqual([{ ok: 1 }]);
+  }, 20_000);
+
   it("keeps lines under the cap, however many there are", async () => {
     const proc = spawnStream(process.execPath, ["-e", "for (let i = 0; i < 2000; i++) console.log(JSON.stringify({ i, pad: 'p'.repeat(1000) }))"], { maxLineChars: 100_000 });
     let n = 0;
