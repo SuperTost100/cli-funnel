@@ -1,11 +1,11 @@
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { accessFlags, agentProvider, NONE_PERMISSIONS, noneWorkspace as agentNone } from "../src/providers/agent/index.js";
 import { createFunnel } from "../src/funnel.js";
 import { checkAcpServers, createAcpMapper, decidePermission, reserveServers } from "../src/providers/antigravity/acp/protocol.js";
-import { denyCommand, exceptNames, hookDenies, NONE_MATCHER, noneHooks, noneWorkspace as agyNone, removeRunWorkspace, requireWorkingHook } from "../src/providers/antigravity/index.js";
+import { denyCommand, exceptNames, hookDenies, NONE_MATCHER, noneHooks, noneWorkspace as agyNone, removeRunWorkspace, requireWorkingHook, sweepRunWorkspaces } from "../src/providers/antigravity/index.js";
 import { buildArgs as claudeArgs } from "../src/providers/claude/index.js";
 import { agentConfig, noneServers } from "../src/providers/codex/options.js";
 import { noToolsConfig } from "../src/providers/codex/tools.js";
@@ -193,6 +193,25 @@ describe("Antigravity at none with servers", () => {
       expect(new Set(folders).size).toBe(folders.length);
       await removeRunWorkspace(a);
       expect(existsSync(a)).toBe(false);
+    } finally {
+      delete process.env.XDG_CACHE_HOME;
+    }
+  });
+
+  it("sweeps the folders of runs that ended without cleaning up, and only the old ones", async () => {
+    process.env.XDG_CACHE_HOME = join(tmpdir(), "cf-sweep-cache");
+    try {
+      const old = await agyNone(undefined, "00000001");
+      const named = await agyNone("pyxis", "00000002");
+      const fresh = await agyNone(undefined, "ffffffff");
+      const shared = await agyNone();
+      const longAgo = new Date(Date.now() - 3 * 24 * 3_600_000);
+      for (const dir of [old, named]) utimesSync(dir, longAgo, longAgo);
+      await sweepRunWorkspaces();
+      expect(existsSync(old)).toBe(false);
+      expect(existsSync(named)).toBe(false);
+      expect(existsSync(fresh)).toBe(true);
+      expect(existsSync(shared)).toBe(true);
     } finally {
       delete process.env.XDG_CACHE_HOME;
     }

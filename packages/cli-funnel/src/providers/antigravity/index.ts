@@ -1,8 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { mkdir, mkdtemp, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readlink, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { manifestModels, mergeModels } from "../../catalog/manifest.js";
 import { Channel } from "../../util/channel.js";
 import { needsArgFile, writeArgFile } from "../../util/argfile.js";
@@ -241,6 +241,24 @@ export function noneWorkspace(caller?: string, run?: string): Promise<string> {
 
 /** Removes the folder of a run with MCP servers once the run is over. */
 export const removeRunWorkspace = (dir: string): Promise<void> => rm(dir, { recursive: true, force: true });
+
+/**
+ * Removes the folders of runs that ended without cleaning up, such as a host that exited before agy did. Only folders
+ * named like a run's, and only those not touched for `maxAgeMs`, a day by default: a kept-alive session may hold its own
+ * for hours. Failures are ignored, since this is housekeeping.
+ */
+export async function sweepRunWorkspaces(maxAgeMs = 24 * 3_600_000): Promise<void> {
+  const root = dirname(workspacePath("x"));
+  const names = await readdir(root).catch(() => [] as string[]);
+  await Promise.all(
+    names
+      .filter((n) => /^antigravity-none(\.[a-z0-9_-]+)?\.run\.[0-9a-f]{8}$/.test(n))
+      .map(async (n) => {
+        const info = await stat(join(root, n)).catch(() => undefined);
+        if (info && Date.now() - info.mtimeMs > maxAgeMs) await rm(join(root, n), { recursive: true, force: true }).catch(() => undefined);
+      }),
+  );
+}
 
 /**
  * The `--gemini-dir` of a `none` run over ACP. agy reads the user's MCP servers (`config/mcp_config.json`), skills and
@@ -604,6 +622,7 @@ async function acpSetup(input: RunInput): Promise<AcpSetup> {
   const mcp = reserveServers(servers, run);
   // A run at `none` with servers has a folder of its own, removed when the process ends. The hook that runs there is
   // shown to deny before anything starts.
+  if (access === "none" && servers.length) await sweepRunWorkspaces();
   const cwd = access === "none" ? await noneWorkspace(input.workspaceName, servers.length ? run : undefined) : input.selection.cwd!;
   if (access === "none") await requireWorkingHook(servers.length ? run : undefined);
   const args = [
