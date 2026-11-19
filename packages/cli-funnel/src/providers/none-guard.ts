@@ -38,8 +38,6 @@ export function createNoneGuard(forbidden: (start: ToolStart) => boolean, refusa
   };
 }
 
-/** What agy's mapper writes for a call the hook or the permission answer refused. */
-export const AGY_REFUSAL = /^denied: (denied by pre-tool hook|denied permission)/i;
 
 /**
  * Cursor Agent's tools that can complete at `none` without touching the machine or the network: glob and grep see only

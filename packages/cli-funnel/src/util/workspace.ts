@@ -9,11 +9,12 @@ function funnelCacheDir(): string {
 }
 
 /**
- * Variables that point git at another repository. A CLI at access `none` runs in a folder with a git marker of its own
- * so it reads no instructions from above, and these would send it to someone else's repository instead. A value of
+ * Variables that point git at another repository or change where it stops looking for one. A CLI at access `none` runs
+ * in a folder with a git marker of its own so it reads no instructions from above, and these would send it to someone
+ * else's repository, or past its own root, instead. A value of
  * `undefined` removes the variable from the child's environment.
  */
-export const NO_GIT_ENV: Record<string, undefined> = { GIT_DIR: undefined, GIT_WORK_TREE: undefined };
+export const NO_GIT_ENV: Record<string, undefined> = { GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_COMMON_DIR: undefined, GIT_CEILING_DIRECTORIES: undefined };
 
 /**
  * Returns a private folder that holds only `files`, for runs that must not see the user's project. A key that ends in a

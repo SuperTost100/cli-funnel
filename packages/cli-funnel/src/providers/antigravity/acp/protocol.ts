@@ -1,5 +1,6 @@
 import { FunnelError, type AccessLevel, type FunnelEvent, type Limit, type PlanStep, type Usage } from "../../../types.js";
 import { parseDuration } from "../../limits.js";
+import { DENY_REASON, HOOK_REFUSAL_TEXTS, PERMISSION_DENIED } from "../deny.js";
 import { createMapper, parseModels } from "../parser.js";
 import type { ModelInfo } from "../../../types.js";
 
@@ -190,10 +191,22 @@ export interface AcpMapperOptions {
 }
 
 /** What `none`'s hook says when it refuses a tool call. The tool then ends as `failed` with no text. */
-const HOOK_MESSAGE = "denied by pre-tool hook: Tools are disabled. Answer in text only.";
+const HOOK_MESSAGE = `denied by pre-tool hook: ${DENY_REASON}`;
 
-/** The message of a refused tool call that we denied through `session/request_permission`. */
-export const PERMISSION_DENIED = "denied permission: cli-funnel does not approve tool calls on this transport.";
+export { PERMISSION_DENIED };
+
+/**
+ * An update with nothing in it but empty text, which is how agy reports a call the hook refused: `failed`, and at most
+ * an empty `output` and an empty text part (both shapes are in the recorded runs). Anything else on a failed call, an
+ * exit code say, is a tool that ran.
+ */
+const silent = (update: Json): boolean => {
+  const raw = update.rawOutput;
+  const noRaw =
+    raw === undefined || raw === null || raw === "" || (typeof raw === "object" && !Array.isArray(raw) && Object.keys(raw).every((k) => k === "output" && !raw[k]));
+  const parts: Json[] = Array.isArray(update.content) ? update.content : [];
+  return noRaw && parts.every((c) => c?.type === "content" && c.content?.type === "text" && !c.content.text);
+};
 
 /**
  * Turns the `session/update` notifications of one session into events. Tool calls go through the print transport's
@@ -219,10 +232,19 @@ export function createAcpMapper(sessionId: string, options: AcpMapperOptions) {
     const name = typeof update.name === "string" && update.name ? update.name : typeof update.kind === "string" ? update.kind : "tool";
     const output = toolOutput(update);
     let error: { message: string } | undefined;
+    // At `none` only a text we know counts as a refusal. What the tool wrote itself goes to the mapper as a plain
+    // failure and comes back with `tool failed: ` in front, so no line a tool prints can read as the hook's refusal.
+    let untrusted: string | undefined;
     if (state === "ERROR") {
       const given = output?.split("\n")[0];
-      const text = refused.has(id) ? PERMISSION_DENIED : given || (options.access === "none" ? HOOK_MESSAGE : "tool failed");
-      error = { message: text };
+      if (refused.has(id)) error = { message: PERMISSION_DENIED };
+      else if (options.access !== "none") error = { message: given || "tool failed" };
+      else if (output !== undefined && HOOK_REFUSAL_TEXTS.includes(output.trim())) error = { message: HOOK_MESSAGE };
+      else if (output === undefined && silent(update)) error = { message: HOOK_MESSAGE };
+      else {
+        untrusted = given ? `tool failed: ${given}` : "tool failed";
+        error = { message: "tool failed" };
+      }
     }
     const events = tools.map({
       event: "step_update",
@@ -237,6 +259,7 @@ export function createAcpMapper(sessionId: string, options: AcpMapperOptions) {
     });
     if (state !== "RUNNING") ended.add(id);
     return events.map((e) => {
+      if (e.type === "tool.end" && untrusted !== undefined && e.error) return { ...e, error: untrusted };
       if (e.type === "tool.end" && !e.error && output !== undefined) return { ...e, output };
       if (e.type === "tool.end" && e.error?.startsWith("denied:")) denied++;
       return e;

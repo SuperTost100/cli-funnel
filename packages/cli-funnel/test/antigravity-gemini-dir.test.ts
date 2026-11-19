@@ -3,7 +3,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { noneGeminiDir } from "../src/providers/antigravity/index.js";
+import { makeGeminiDir, noneGeminiDir } from "../src/providers/antigravity/index.js";
 import { findBinary } from "../src/providers/base.js";
 
 // Everything here runs under a throwaway home and cache folder, never the real ones: agy migrates its config on a first
@@ -138,6 +138,22 @@ describe("the private gemini folder of a none run", () => {
     const dirs = await Promise.all([noneGeminiDir(home), noneGeminiDir(home), noneGeminiDir(home)]);
     expect(new Set(dirs).size).toBe(1);
     expect(realpathSync(join(dirs[0]!, "antigravity-cli"))).toBe(realpathSync(join(home, ".gemini", "antigravity-cli")));
+  });
+
+  it("survives several processes that find a stale link together, which `makeGeminiDir` stands in for since they share no queue", async () => {
+    // Without the queue the calls interleave at every await, as separate processes do. A link left pointing elsewhere makes each of them unlink it.
+    for (let round = 0; round < 25; round++) {
+      const { home } = userHome("folder");
+      isolate(home);
+      const dir = await noneGeminiDir(home);
+      const link = join(dir, "antigravity-cli");
+      const { unlinkSync } = await import("node:fs");
+      unlinkSync(link);
+      symlinkSync(join(home, "somewhere-else"), link);
+      const results = await Promise.allSettled(Array.from({ length: 6 }, () => makeGeminiDir(home)));
+      expect(results.filter((r) => r.status === "rejected").map((r) => (r as PromiseRejectedResult).reason?.code ?? String((r as PromiseRejectedResult).reason)), `round ${round}`).toEqual([]);
+      expect(realpathSync(link)).toBe(realpathSync(join(home, ".gemini", "antigravity-cli")));
+    }
   });
 
   it("makes the user's data folder when there is none yet, so nothing is kept in the private folder for a later run to remove", async () => {
