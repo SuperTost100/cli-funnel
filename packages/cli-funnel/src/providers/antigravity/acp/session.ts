@@ -6,7 +6,8 @@ import { requireMachine } from "../../../selection.js";
 import { composePrompt } from "../../prompt.js";
 import { rawEvent, stderrTail } from "../../base.js";
 import { NO_GIT_ENV } from "../../../util/workspace.js";
-import { AGY_REFUSAL, createNoneGuard } from "../../none-guard.js";
+import { createNoneGuard } from "../../none-guard.js";
+import { AGY_REFUSAL } from "../deny.js";
 import { runSecrets } from "../../../util/redact.js";
 import { AcpClient, AcpError } from "./client.js";
 import {

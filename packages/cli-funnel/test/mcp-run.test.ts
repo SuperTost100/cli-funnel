@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { accessFlags, agentProvider, NONE_PERMISSIONS, noneWorkspace as agentNone } from "../src/providers/agent/index.js";
 import { createFunnel } from "../src/funnel.js";
 import { checkAcpServers, createAcpMapper, decidePermission, reserveServers } from "../src/providers/antigravity/acp/protocol.js";
+import { AGY_REFUSAL, DENY_REASON_WITH_MCP } from "../src/providers/antigravity/deny.js";
 import { denyCommand, exceptNames, hookDenies, NONE_MATCHER, noneHooks, noneWorkspace as agyNone, removeRunWorkspace, requireWorkingHook, sweepRunWorkspaces } from "../src/providers/antigravity/index.js";
 import { buildArgs as claudeArgs } from "../src/providers/claude/index.js";
 import { agentConfig, noneServers } from "../src/providers/codex/options.js";
@@ -130,6 +131,11 @@ describe("Antigravity at none with servers", () => {
         expect(command.startsWith("echo {")).toBe(true);
         expect(command.slice(5), String(run)).not.toMatch(/[<>&|^%]/);
       }
+    });
+
+    it("counts the hook's refusal of a run with servers too, in agy's words and in the mapper's, and nothing a tool wrote", () => {
+      for (const text of [`tool call denied by pre-tool hook: ${DENY_REASON_WITH_MCP}`, `denied by pre-tool hook: ${DENY_REASON_WITH_MCP}`]) expect(AGY_REFUSAL.test(`denied: ${text}`), text).toBe(true);
+      expect(AGY_REFUSAL.test(`denied: tool call denied by pre-tool hook: ${DENY_REASON_WITH_MCP} extra`)).toBe(false);
     });
 
     it("agrees with the matcher of a run with no servers on everything but the run's own tools", () => {

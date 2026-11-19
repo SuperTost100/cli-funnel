@@ -18,7 +18,8 @@ Antigravity runs over the Agent Client Protocol by default, and token counts fol
 - **Antigravity takes MCP servers at `none` only off Windows.** On Windows the run is refused with `unsupported` until a live run there shows the deny hook working. `none` without servers is unchanged there, and `docs/access-levels.md` says it is unverified.
 - **A run's folder at `none` is kept and put right every turn.** It is marked as in use and its hook file is rewritten before each turn, so another process's sweep cannot remove it from under a live session. A run that fails before agy starts removes its folder.
 - **A caller's Codex server named like one in the user's config is refused** on every path, and `noToolsConfig` itself refuses it.
-- **`none` runs of Antigravity and Cursor Agent drop `GIT_DIR` and `GIT_WORK_TREE`** from the child's environment.
+- **`none` runs of Antigravity and Cursor Agent drop `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR` and `GIT_CEILING_DIRECTORIES`** from the child's environment.
+- **A refusal at `none` is told by text agy or cli-funnel writes, not by a tool's output.** Over ACP a tool's own output is never read as the hook's refusal: only the hook's exact text, our permission answer, or a failure with nothing in it counts.
 
 ### Added
 

@@ -31,7 +31,8 @@ import { openAcpSession, type AcpSetup } from "./acp/session.js";
 import { ACP_MIN_VERSION, checkAcpServers, reserveServers } from "./acp/protocol.js";
 import { SubagentTranscripts, type ForwardSubagents } from "./transcript.js";
 import { composePrompt } from "../prompt.js";
-import { AGY_REFUSAL, createNoneGuard } from "../none-guard.js";
+import { createNoneGuard } from "../none-guard.js";
+import { AGY_REFUSAL, DENY_REASON, DENY_REASON_WITH_MCP } from "./deny.js";
 import { FEEDBACK_CHANNELS } from "../feedback.js";
 import { bool, dirList, flag, mcpServersFor, oneOf, optionsFor, positive, requireAccess } from "../options.js";
 import { requireMachine } from "../../selection.js";
@@ -114,7 +115,7 @@ function optionArgs(input: RunInput): string[] {
   return args;
 }
 
-const DENY = { decision: "deny", reason: "Tools are disabled. Answer in text only." };
+const DENY = { decision: "deny", reason: DENY_REASON };
 
 /**
  * Matches every tool name except `finish`, which ends the turn and carries the `--json-schema` answer.
@@ -158,12 +159,7 @@ export function exceptNames(names: readonly string[], prefixes: readonly string[
   return `(?s)^(?:${alternatives(root).join("|")})$`;
 }
 
-/**
- * What the deny hook of a run with MCP servers tells the model: where its tools are, so it does not stop at the first
- * refusal. No character here may mean something to `cmd.exe` (`<`, `>`, `&`, `|`, `^`, `%`): on Windows the hook is an
- * `echo` of this text, and the hook self-test on a Windows runner refused it with `<server>` in it.
- */
-const DENY_WITH_MCP = { decision: "deny", reason: "Tools are disabled except your MCP tools. Call those by their own names, which start with mcp_, not through call_mcp_tool." };
+const DENY_WITH_MCP = { decision: "deny", reason: DENY_REASON_WITH_MCP };
 
 /** The tool names that start with a run's prefix are the run's own servers' tools. */
 export const mcpPrefix = (run: string): string => `mcp_clifunnel${run}_`;
@@ -306,39 +302,54 @@ export function noneGeminiDir(home: string = homedir()): Promise<string> {
   return made;
 }
 
-async function makeGeminiDir(home: string): Promise<string> {
+/** `unlink` that takes it as done when another process got there first (`ENOENT`) and fails on anything else. */
+async function unlinkIfThere(path: string): Promise<void> {
+  await unlink(path).catch((e: NodeJS.ErrnoException) => {
+    if (e.code !== "ENOENT") throw e;
+  });
+}
+
+/** `noneGeminiDir` without the one-at-a-time queue: what several processes running together do. Exported for the test. */
+export async function makeGeminiDir(home: string): Promise<string> {
   const dir = await ownedWorkspace("antigravity-gemini-none", { "config/.migrated": "", "config/mcp_config.json": `${JSON.stringify({ mcpServers: {} })}\n`, "config/skills/": "" });
   // `config/skills` is a link when an earlier agy re-pointed it. Replace the link, never what it points at.
   const skills = join(dir, "config", "skills");
-  if ((await lstat(skills)).isSymbolicLink()) {
-    await unlink(skills);
-    await mkdir(skills, { mode: 0o700 });
+  if ((await lstat(skills).catch(() => undefined))?.isSymbolicLink()) {
+    await unlinkIfThere(skills);
+    await mkdir(skills, { recursive: true, mode: 0o700 });
   }
   const target = dataDir(home);
   await mkdir(target, { recursive: true, mode: 0o700 });
   const link = join(dir, "antigravity-cli");
-  const info = await lstat(link).catch(() => undefined);
-  if (info?.isSymbolicLink()) {
-    // By what it resolves to: the home may be reached through a link, and a dangling link resolves to nothing.
-    const [now, want] = await Promise.all([realpath(link).catch(() => undefined), realpath(target)]);
-    if (now === want) return dir;
-    await unlink(link);
-  } else if (info) {
-    // A real data folder left here by an earlier run holds conversations. Move it aside, never delete it.
-    await rename(link, `${link}.kept-${Date.now()}`).catch(async (e: unknown) => {
-      // A junction another process is making: fine once it resolves to the data folder.
-      if ((await realpath(link).catch(() => undefined)) !== (await realpath(target))) throw e;
-    });
-    if ((await lstat(link).catch(() => undefined))?.isSymbolicLink()) return dir;
+  // Other processes fix the same link at the same time. Each pass looks at what is there now, and a step that another
+  // process already took (`ENOENT` on a removal, `EEXIST` on the link) sends it round again. A few passes are enough:
+  // a process that removes a link it read before another fixed it only makes the next pass of the others make it again.
+  let last: unknown;
+  for (let pass = 0; pass < 10; pass++) {
+    const info = await lstat(link).catch(() => undefined);
+    if (info?.isSymbolicLink()) {
+      // By what it resolves to: the home may be reached through a link, and a dangling link resolves to nothing.
+      const [now, want] = await Promise.all([realpath(link).catch(() => undefined), realpath(target)]);
+      if (now === want) return dir;
+      await unlinkIfThere(link);
+    } else if (info) {
+      // A real data folder left here by an earlier run holds conversations. Move it aside, never delete it.
+      await rename(link, `${link}.kept-${Date.now()}`).catch((e: NodeJS.ErrnoException) => {
+        // Gone already, or a junction another process is making: the next pass looks again.
+        if (e.code !== "ENOENT" && e.code !== "EBUSY" && e.code !== "EPERM") throw e;
+        last = e;
+      });
+      continue;
+    }
+    try {
+      // A junction needs no privilege on Windows, where a symbolic link to a folder does.
+      await symlink(target, link, process.platform === "win32" ? "junction" : "dir");
+      return dir;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+    }
   }
-  try {
-    // A junction needs no privilege on Windows, where a symbolic link to a folder does.
-    await symlink(target, link, process.platform === "win32" ? "junction" : "dir");
-  } catch (e) {
-    // Another run made it first. That is fine when it points where ours would.
-    if ((e as NodeJS.ErrnoException).code !== "EEXIST" || (await realpath(link).catch(() => undefined)) !== (await realpath(target))) throw e;
-  }
-  return dir;
+  throw last ?? new FunnelError("The link to agy's data folder could not be made: other processes kept changing it.", "cli-failed");
 }
 
 /**

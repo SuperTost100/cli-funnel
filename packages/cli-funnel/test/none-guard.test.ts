@@ -2,7 +2,8 @@ import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { AGY_REFUSAL, createNoneGuard, cursorNoneGuard } from "../src/providers/none-guard.js";
+import { AGY_REFUSAL } from "../src/providers/antigravity/deny.js";
+import { createNoneGuard, cursorNoneGuard } from "../src/providers/none-guard.js";
 import { agentProvider } from "../src/providers/agent/index.js";
 import { antigravityProvider } from "../src/providers/antigravity/index.js";
 import type { FunnelEvent, RunInput } from "../src/types.js";
@@ -25,7 +26,7 @@ describe("the none guard", () => {
     g.check(start("1", "run_command"));
     expect(g.check(end("1", { error: "exit status 1" }))).toMatch(/"run_command" failed without being refused/);
     const h = createNoneGuard((s) => s.name !== "finish", AGY_REFUSAL);
-    for (const [i, error] of ["denied: denied by pre-tool hook: Tools are disabled.", "denied: denied permission: cli-funnel does not approve tool calls on this transport."].entries()) {
+    for (const [i, error] of ["denied: tool call denied by pre-tool hook: Tools are disabled. Answer in text only.", "denied: denied by pre-tool hook: Tools are disabled. Answer in text only.", "denied: denied permission: cli-funnel does not approve tool calls on this transport."].entries()) {
       h.check(start(String(i), "run_command"));
       expect(h.check(end(String(i), { error })), error).toBeUndefined();
     }
@@ -34,6 +35,11 @@ describe("the none guard", () => {
     expect(h.check(end("x", { error: "denied: permission check failed" }))).toMatch(/failed without being refused/);
     h.check(start("y", "run_command"));
     expect(h.check(end("y", { error: "denied by pre-tool hook" }))).toMatch(/failed without being refused/);
+    // The hook's text with something after it, or in front of it, is the tool's own line and not the hook's.
+    for (const [i, error] of ["denied: tool call denied by pre-tool hook: Tools are disabled. Answer in text only. And more", "denied: denied by pre-tool hook: made up by a tool", "denied: denied permission: cli-funnel does not approve tool calls on this transport. ok", "denied: x denied by pre-tool hook: Tools are disabled. Answer in text only."].entries()) {
+      h.check(start(`z${i}`, "run_command"));
+      expect(h.check(end(`z${i}`, { error })), error).toMatch(/failed without being refused/);
+    }
   });
 
   it("reports a forbidden call that started and never ended, and not one that is allowed", () => {
