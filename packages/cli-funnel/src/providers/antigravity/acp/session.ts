@@ -5,6 +5,7 @@ import { compareVersions, spawnStream } from "../../../util/process.js";
 import { requireMachine } from "../../../selection.js";
 import { composePrompt } from "../../prompt.js";
 import { rawEvent, stderrTail } from "../../base.js";
+import { createNoneGuard } from "../../none-guard.js";
 import { runSecrets } from "../../../util/redact.js";
 import { AcpClient, AcpError } from "./client.js";
 import {
@@ -41,6 +42,8 @@ export interface AcpSetup {
   brainDir: string;
   readText(path: string): string | undefined;
   createdInRun(startedAt: number): ((path: string) => boolean | undefined) | undefined;
+  /** At `none`: whether a tool of the run may finish, besides `finish`. Anything else that finishes stops the run. */
+  allowTool?: (name: string, input: unknown) => boolean;
   /** The default thinking level of a model from the model list, for a run that names none. */
   defaultEffort(model: string): string | undefined;
   /** Gets the models the account's session listed. */
@@ -102,6 +105,8 @@ export async function openAcpSession(first: RunInput, setup: AcpSetup): Promise<
     closed = true;
     proc.kill();
   };
+  // Only `finish` may complete at `none`, which ends a turn and carries nothing out. `allowTool` adds the caller's own tools.
+  const guard = access === "none" ? createNoneGuard((name, input) => name !== "finish" && !setup.allowTool?.(name, input)) : undefined;
 
   const finish = (t: Turn, events: FunnelEvent[]) => {
     if (t.finished) return;
@@ -127,7 +132,15 @@ export async function openAcpSession(first: RunInput, setup: AcpSetup): Promise<
     notification(method, params) {
       const t = current;
       if (method !== "session/update" || !t || t.finished || !t.mapper || params?.sessionId !== sessionId) return;
-      for (const e of t.mapper.update(params.update ?? {})) t.out.push(e);
+      for (const e of t.mapper.update(params.update ?? {})) {
+        // The hook that refuses tools is agy's own. A tool that finishes at `none` means it did not apply.
+        const reason = guard?.check(e);
+        if (reason) {
+          stop();
+          return finish(t, [{ type: "error", message: reason, code: "cli-failed" }]);
+        }
+        t.out.push(e);
+      }
     },
     request(id, method, params) {
       const t = current;
@@ -206,7 +219,7 @@ export async function openAcpSession(first: RunInput, setup: AcpSetup): Promise<
     const t: Turn = { input, out: new Channel<FunnelEvent>(), finished: false, end, ended };
     current = t;
     proc.hold(true);
-    const offStderr = input.verbose ? proc.onStderr((line) => !t.finished && t.out.push(rawEvent("antigravity", "stderr", line, input)), runSecrets(input)) : undefined;
+    const offStderr = input.verbose ? proc.onStderr((line) => t.out.push(rawEvent("antigravity", "stderr", line, input)), runSecrets(input)) : undefined;
     if (exited || closed) finish(t, [{ type: "error", message: "agy acp is not running.", code: "cli-failed" }]);
 
     const signal = input.signal;

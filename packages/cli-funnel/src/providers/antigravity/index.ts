@@ -30,6 +30,7 @@ import { openAcpSession, type AcpSetup } from "./acp/session.js";
 import { ACP_MIN_VERSION } from "./acp/protocol.js";
 import { SubagentTranscripts, type ForwardSubagents } from "./transcript.js";
 import { composePrompt } from "../prompt.js";
+import { createNoneGuard } from "../none-guard.js";
 import { FEEDBACK_CHANNELS } from "../feedback.js";
 import { bool, dirList, flag, mcpServersFor, oneOf, optionsFor, positive, requireAccess } from "../options.js";
 import { requireMachine } from "../../selection.js";
@@ -376,6 +377,8 @@ async function* runPrint(input: RunInput): AsyncGenerator<FunnelEvent> {
     clearTimeout(timer);
   };
   let sessionSent = false;
+  let guarded = false;
+  const guard = input.selection.access === "none" ? createNoneGuard((name) => name !== "finish") : undefined;
   const forward = antigravityForward(input);
   // Only with a forward option: the stream lines and the subagents' transcripts then go through one channel.
   let source: AsyncIterable<unknown> = stream.lines;
@@ -402,7 +405,14 @@ async function* runPrint(input: RunInput): AsyncGenerator<FunnelEvent> {
       }
       // Nothing goes out after the terminal event.
       const before = mapper.finished;
-      const events = mapper.map(line);
+      let events = mapper.map(line);
+      // The deny hook is agy's own. A tool that finishes at `none` means it did not apply, and the run stops.
+      const reason = guard && !before ? events.map((e) => guard.check(e)).find((r) => r !== undefined) : undefined;
+      if (reason) {
+        stream.kill();
+        guarded = true;
+        events = [{ type: "error", message: reason, code: "cli-failed" }];
+      }
       transcripts?.watch(line);
       const terminal = events.some(isTerminal);
       if (tap && !before) {
@@ -436,7 +446,7 @@ async function* runPrint(input: RunInput): AsyncGenerator<FunnelEvent> {
     void stream.exited.then(stopStderr);
     await cleanup();
   }
-  if (!mapper.finished) {
+  if (!mapper.finished && !guarded) {
     const last = await exitedEarly(stream, "agy", () => input.signal?.aborted);
     yield* takeWarnings();
     yield last;
@@ -480,30 +490,15 @@ async function acpSetup(input: RunInput): Promise<AcpSetup> {
 
 const transportOf = (input: RunInput) => checkOptions(input).transport;
 
-async function openSession(input: RunInput): Promise<LiveSession> {
-  if (transportOf(input) === "print") {
-    // The print transport starts a process per turn. A session of it only carries the conversation id between turns.
-    let id = input.sessionId;
-    return {
-      get sessionId() {
-        return id;
-      },
-      alive: true,
-      async *turn(turn) {
-        for await (const e of runPrint({ ...turn, sessionId: id ?? turn.sessionId })) {
-          if (e.type === "session") id = e.sessionId;
-          yield e;
-        }
-      },
-      close() {},
-    };
-  }
+async function openSession(input: RunInput): Promise<LiveSession | undefined> {
+  // The print transport starts a process per turn and keeps nothing alive, so it has no live session. The funnel runs it directly.
+  if (transportOf(input) === "print") return undefined;
   return openAcpSession(input, await acpSetup(input));
 }
 
 async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   if (transportOf(input) === "print") return yield* runPrint(input);
-  const session = await openSession(input);
+  const session = await openAcpSession(input, await acpSetup(input));
   try {
     yield* session.turn(input);
   } finally {
