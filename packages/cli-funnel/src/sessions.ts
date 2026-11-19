@@ -112,7 +112,14 @@ export class SessionPool {
       entry = undefined;
     }
     if (!entry) {
-      entry = { provider: p.id, live: await p.openSession(input), fingerprint: fp, selection: input.selection, busy: false, lastUsed: Date.now() };
+      const live = await p.openSession(input);
+      // A provider that has no live session for this run, such as Antigravity's print transport, runs it directly. It
+      // takes no slot in the pool, and it never makes room by closing a real live process.
+      if (!live) {
+        yield* p.run(input);
+        return;
+      }
+      entry = { provider: p.id, live, fingerprint: fp, selection: input.selection, busy: false, lastUsed: Date.now() };
       this.entries.add(entry);
     }
     entry.busy = true;

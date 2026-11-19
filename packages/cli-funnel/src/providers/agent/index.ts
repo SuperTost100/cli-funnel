@@ -9,6 +9,7 @@ import { bool, dirList, flag, mcpServersFor, oneOf, optionsFor, requireAccess } 
 import { redactErrors } from "../../util/redact.js";
 import { ownedWorkspace } from "../../util/workspace.js";
 import { attachMcp } from "./mcp.js";
+import { cursorNoneGuard } from "../none-guard.js";
 import { FEEDBACK_CHANNELS } from "../feedback.js";
 import { groupModels, parseModelList, parseStatus, StreamMapper, toCliModel, type MapperOptions } from "./parser.js";
 
@@ -174,9 +175,16 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   const mapper = new StreamMapper(mapperOptions(input));
   let finished = false;
   const tap = rawTap("agent", input, proc);
+  // The deny rules are the CLI's own. A tool that reaches the machine and finishes at `none` means they did not apply.
+  const guard = input.selection.access === "none" ? cursorNoneGuard() : undefined;
   try {
     for await (const line of proc.lines) {
-      const events = mapper.map(line);
+      let events = mapper.map(line);
+      const stop = guard && events.map((e) => guard.check(e)).find((reason) => reason !== undefined);
+      if (stop) {
+        proc.kill();
+        events = [{ type: "error", message: stop, code: "cli-failed" }];
+      }
       // Nothing goes out after the terminal event.
       if (tap && !finished) {
         if (events.some(isTerminal)) yield* await tap.settle();
@@ -186,6 +194,7 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
         if (isTerminal(event)) finished = true;
         yield event;
       }
+      if (stop) break;
     }
     if (tap && !finished) yield* tap.events();
   } finally {

@@ -246,6 +246,20 @@ describe("antigravity ACP failures", () => {
     const failure = failureFromTurn("end_turn", "Error 429, Message: Quota exceeded for this project, Status: RESOURCE_EXHAUSTED");
     expect(failure).toMatchObject({ code: "cli-failed", limit: { kind: "quota", detail: "Quota exceeded for this project" } });
     expect(failureFromTurn("end_turn", "Error 500, Message: backend failed, Status: INTERNAL")).toEqual({ message: "backend failed", code: "cli-failed" });
+    expect(failureFromTurn("end_turn", "  Error 500, Message: backend failed, Status: INTERNAL\n")).toMatchObject({ code: "cli-failed" });
+  });
+
+  it("never reads the model's prose as a failure, even when it quotes the wording", () => {
+    const quoted = "Error 500, Message: backend failed, Status: INTERNAL";
+    expect(failureFromTurn("end_turn", `Here is how Google words it: ${quoted}. Handle it with a retry.`)).toBeUndefined();
+    expect(failureFromTurn("end_turn", `The log says\n${quoted}\nand then stops.`)).toBeUndefined();
+    expect(failureFromTurn("end_turn", `\`${quoted}\``)).toBeUndefined();
+    expect(failureFromTurn("end_turn", `${quoted}, as you asked.`)).toBeUndefined();
+  });
+
+  it("keeps a successful turn successful when the answer quotes the wording", async () => {
+    // Over the whole provider, not only the parser.
+    expect(failureFromTurn("end_turn", "Error 429, Message: Quota exceeded, Status: RESOURCE_EXHAUSTED is what the API sends.")).toBeUndefined();
   });
 });
 
@@ -294,6 +308,8 @@ function handle(m) {
       for (const line of cfg.script) {
         setTimeout(() => out(line.result && line.id !== undefined ? { ...line, id: m.id } : line), (delay += 5));
       }
+      // stderr is its own pipe, so a line written just after the last reply can arrive after it.
+      if (cfg.lateStderr) setTimeout(() => process.stderr.write(cfg.lateStderr + "\\n"), delay + 2);
       return;
     }
   }
@@ -492,6 +508,36 @@ describe.skipIf(process.platform === "win32")("antigravity over ACP, with a fake
     expect(raw.every((e) => e.source === "stdout" || e.source === "stderr")).toBe(true);
   });
 
+  describe("at none, when the hook did not apply", () => {
+    const call = (id: string, name: string, status: string, extra: object = {}) => ({ jsonrpc: "2.0", method: "session/update", params: { sessionId: SESSION, update: { sessionUpdate: id.endsWith("u") ? "tool_call_update" : "tool_call", toolCallId: id.replace(/u$/, ""), name, status, kind: "execute", rawInput: { CommandLine: "touch x" }, ...extra } } });
+    const text = { jsonrpc: "2.0", method: "session/update", params: { sessionId: SESSION, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "after" } } } };
+    const result = { jsonrpc: "2.0", id: 1, result: { stopReason: "end_turn" } };
+
+    it("stops the run with an error when a tool finishes, and reads nothing after it", async () => {
+      fakeAgy({ script: [call("c1", "run_command", "in_progress"), call("c1u", "run_command", "completed", { rawOutput: { output: "ok" } }), text, result] });
+      const events = await drain(input());
+      expect(events.at(-1)).toMatchObject({ type: "error", code: "cli-failed", message: expect.stringContaining('"run_command" ran at access "none"') });
+      expect(events.some((e) => e.type === "text.delta")).toBe(false);
+      expect(events.some((e) => e.type === "done")).toBe(false);
+    });
+
+    it("lets refused tools and finish through, and does not guard the other levels", async () => {
+      const refused = [call("c1", "read_file", "in_progress"), call("c1u", "read_file", "failed"), call("c2", "finish", "in_progress"), call("c2u", "finish", "completed"), text, result];
+      fakeAgy({ script: refused });
+      expect((await drain(input())).at(-1)).toMatchObject({ type: "done", text: "after" });
+      fakeAgy({ script: [call("c1", "run_command", "in_progress"), call("c1u", "run_command", "completed"), text, result] });
+      expect((await drain(input({}, { access: "full" }))).at(-1)).toMatchObject({ type: "done", text: "after" });
+    });
+  });
+
+  it("forwards stderr written just after the final reply, before the terminal event", async () => {
+    fakeAgy({ lateStderr: "late-log-line" });
+    const events = await drain(input({ verbose: true }));
+    const stderr = events.flatMap((e, i) => (e.type === "raw" && e.source === "stderr" && e.data === "late-log-line" ? [i] : []));
+    expect(stderr).toHaveLength(1);
+    expect(stderr[0]).toBeLessThan(events.findIndex((e) => e.type === "done"));
+  });
+
   it("refuses the print-only subagent options and an API key, which run on the print transport", async () => {
     fakeAgy();
     await expect(drain(input({ providerOptions: { antigravity: { forwardSubagentText: true } } }))).rejects.toMatchObject({ code: "unsupported" });
@@ -524,6 +570,24 @@ describe.skipIf(process.platform === "win32")("antigravity over ACP, with a fake
       expect(got.filter((m) => m.method === "session/prompt").map((m) => m.params.prompt[0].text)).toEqual(["one", "two"]);
       expect(got.some((m) => m.method === "session/resume")).toBe(false);
       expect(funnel.sessions().map((s) => s.sessionId)).toEqual([SESSION]);
+    } finally {
+      funnel.close();
+    }
+  });
+
+  it("runs a print-transport turn outside the live-session pool, so it takes no slot and evicts nothing", async () => {
+    const agy = fakeAgy();
+    const funnel = createFunnel({ providers: { antigravity: antigravityProvider }, sessions: { keepAlive: true, max: 1 } });
+    const selection = { provider: "antigravity" as const, model: "gemini-3.8-flash", effort: "low", cwd: tmpdir(), access: "none" as const };
+    try {
+      const live = await funnel.run({ selection, prompt: "one" });
+      expect(funnel.sessions().map((s) => s.sessionId)).toEqual([live.sessionId]);
+      const printed = await funnel.run({ selection: { ...selection, access: "full" }, prompt: "two", providerOptions: { antigravity: { transport: "print" } } });
+      expect(printed.text).toBe("printed");
+      // The ACP session is still there, alive and listed, and still takes a turn on its own process.
+      expect(funnel.sessions().map((s) => s.sessionId)).toEqual([live.sessionId]);
+      await funnel.run({ selection, prompt: "three", sessionId: live.sessionId });
+      expect(agy.received().filter((m) => m.method === "initialize")).toHaveLength(1);
     } finally {
       funnel.close();
     }

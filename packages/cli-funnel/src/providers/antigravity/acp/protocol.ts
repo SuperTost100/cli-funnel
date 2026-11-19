@@ -303,7 +303,10 @@ export interface Failure {
 const RESET_TIMESTAMP = /quotaResetTimeStamp"?\s*[:=]\s*"?([^\s",\]}]+)/;
 const RESET_DELAY = /quotaResetDelay"?\s*[:=]\s*"?([0-9a-zµμ.]+)/;
 const RETRY_DELAY = /retryDelay"?\s*[:=]\s*"?([0-9a-zµμ.]+)/;
+// Found inside a longer failure text, where the wording is the harness's own.
 const API_ERROR = /Error (\d{3}), Message: (.+?), Status: ([A-Z_]+)/s;
+// A whole reply that is nothing but the diagnostic. Prose that quotes it does not match.
+const API_ERROR_REPLY = /^\s*Error (\d{3}), Message: ([^\n]+?), Status: ([A-Z_]+)\s*$/;
 
 /** Go durations may carry µs and ns, which `parseDuration` does not read. They are far below what a limit asks for, so they count as 0. */
 function goDuration(text: string | undefined): number | undefined {
@@ -349,7 +352,9 @@ export function failureFromError(error: { code?: number; message?: string; data?
 /**
  * The failure behind a turn that ended with `end_turn` or `refusal`. agy maps only the quota stop reason to
  * `refusal`. An upstream API failure arrives as a chat message and `end_turn`, in the Go harness's wording
- * `Error 429, Message: ..., Status: RESOURCE_EXHAUSTED`, so a reply that holds that wording is read as the failure.
+ * `Error 429, Message: ..., Status: RESOURCE_EXHAUSTED`. Only a reply that is that line and nothing else is read as the
+ * failure: an answer that quotes the wording in prose, in a code span or after other text is the model's own, and a
+ * successful turn stays successful.
  */
 export function failureFromTurn(stopReason: string, text: string): Failure | undefined {
   if (stopReason === "refusal") {
@@ -357,7 +362,7 @@ export function failureFromTurn(stopReason: string, text: string): Failure | und
     const found = limitFrom(text);
     return { message: quota, code: "cli-failed", limit: { ...found, kind: "quota", detail: found?.detail ?? quota } };
   }
-  const api = API_ERROR.exec(text);
+  const api = API_ERROR_REPLY.exec(text);
   if (!api) return undefined;
   const failure = failureFromError({ message: text });
   return failure.limit ? failure : { message: api[2]!.trim(), code: "cli-failed" };

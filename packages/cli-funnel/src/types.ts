@@ -914,9 +914,10 @@ export interface Provider {
   /**
    * Starts a CLI process that stays alive across turns, for `createFunnel({ sessions: { keepAlive: true } })`. The
    * process is set up from `input`: its selection, system prompt, schema, env, approval handler and `sessionId` to
-   * resume. Run the turns with `turn()`, the first one included.
+   * resume. Run the turns with `turn()`, the first one included. Resolves with `undefined` when this run has no live
+   * session, and the funnel then runs it with `run()` and keeps no process for it.
    */
-  openSession?(input: RunInput): Promise<LiveSession>;
+  openSession?(input: RunInput): Promise<LiveSession | undefined>;
   /** Lists the conversations the CLI saved. Codex only. */
   listThreads?(options?: ListThreadsOptions): Promise<ThreadPage>;
   /** Copies a saved conversation into a new one and returns its session id. The original stays as it was. Codex only. */
