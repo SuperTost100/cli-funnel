@@ -34,6 +34,11 @@ vi.hoisted(() => {
   process.env.XDG_CACHE_HOME = `${home}/cache`;
 });
 
+/** Waits until `check` holds, for up to two seconds. The fake agent logs what the client sent a moment after the run ends. */
+async function until(check: () => boolean): Promise<void> {
+  for (let i = 0; i < 100 && !check(); i++) await new Promise((r) => setTimeout(r, 20));
+}
+
 const dir = (n: string) => new URL(`./fixtures/antigravity-acp/${n}`, import.meta.url);
 const json = (n: string) => JSON.parse(readFileSync(dir(n), "utf8"));
 const lines = (n: string): Record<string, any>[] => readFileSync(dir(n), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
@@ -407,7 +412,7 @@ describe.skipIf(process.platform === "win32")("antigravity over ACP, with a fake
     expect(events.at(-1)).toMatchObject({ type: "done", finishReason: "denied" });
     const result = await collect((async function* () { yield* events; })(), run);
     expect(result.deniedActions).toEqual(["run_command"]);
-    await new Promise((r) => setTimeout(r, 100));
+    await until(() => agy.received().some((m) => m.id === "1" && m.result));
     const answer = agy.received().find((m) => m.id === "1" && m.result);
     expect(answer!.result).toEqual({ outcome: { outcome: "selected", optionId: "deny" } });
     expect(agy.received().find((m) => m.method === "session/set_mode")!.params).toEqual({ sessionId: SESSION, modeId: "accept-edits" });
