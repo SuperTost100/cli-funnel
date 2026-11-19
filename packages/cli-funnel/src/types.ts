@@ -129,7 +129,7 @@ export interface Selection {
  * Token counts of a run. Every provider follows one convention: `inputTokens` is everything the model read, the cached
  * part included, so `totalTokens` is `inputTokens + outputTokens`. `cachedInputTokens`, `cacheCreationInputTokens` and
  * `reasoningTokens` are shares of those two numbers, not additions to them. Fresh input is
- * `inputTokens - cachedInputTokens - cacheCreationInputTokens`.
+ * `inputTokens - (cachedInputTokens ?? 0) - (cacheCreationInputTokens ?? 0)`.
  */
 export interface Usage {
   /** All input tokens, cached ones included. */

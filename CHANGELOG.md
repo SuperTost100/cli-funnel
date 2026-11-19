@@ -15,7 +15,7 @@ Antigravity runs over the Agent Client Protocol by default, and token counts fol
 ### Migrating from 0.9.x
 
 1. Update agy to 1.5.0 or newer, or set `providerOptions.antigravity.transport: "print"` to stay on the old transport. `provider.detect()` says in `detail` when agy is too old.
-2. If you add `cachedInputTokens` to `inputTokens` for Antigravity, stop: it is already in. Fresh input is `inputTokens - cachedInputTokens - (cacheCreationInputTokens ?? 0)`.
+2. If you add `cachedInputTokens` to `inputTokens` for Antigravity, stop: it is already in. Fresh input is `inputTokens - (cachedInputTokens ?? 0) - (cacheCreationInputTokens ?? 0)`.
 3. If you use `forwardSubagentText` or `forwardSubagentTools` on Antigravity, set `transport: "print"`. The ACP transport refuses them with `unsupported`.
 4. A run with `apiKey` on Antigravity uses `print` unless you say otherwise. `transport: "acp"` with `apiKey` fails with `unsupported`.
 5. Antigravity no longer sends `access.reduced` at `full`. A session started with `--dangerously-skip-permissions` still reports mode `default` over ACP, so there is nothing to compare.

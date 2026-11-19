@@ -238,6 +238,17 @@ describe("antigravity ACP failures", () => {
     expect(failureFromError({ code: -32603, message: "failed", data: { status: "RESOURCE_EXHAUSTED", quotaResetDelay: "30s" } }).limit).toMatchObject({ retryAfterMs: 30_000 });
   });
 
+  it("keeps a sign-in or subscription error that mentions a quota project out of the limits", () => {
+    const adc = "Your application is authenticating by using local Application Default Credentials. The API requires a quota project, which is not set by default.";
+    expect(failureFromError({ code: -32603, message: adc })).toEqual({ message: adc, code: "cli-failed" });
+    expect(limitFrom(adc)).toBeUndefined();
+    expect(failureFromError({ code: -32000, message: "401 Request had invalid authentication credentials. Set the quota project and sign in again." })).toEqual({ message: "Run agy in a terminal and sign in.", code: "not-logged-in" });
+    expect(failureFromError({ code: -32603, message: "SUBSCRIPTION_REQUIRED: this account's quota project has no subscription" }).message).toMatch(/no Antigravity subscription/);
+    // The wording of a real exhaustion is still a limit.
+    expect(failureFromError({ code: -32603, message: "Quota exceeded for quota metric 'requests' and limit 'per minute'" }).limit).toMatchObject({ kind: "quota" });
+    expect(failureFromError({ code: -32603, message: "You have exhausted your quota" }).limit).toMatchObject({ kind: "quota" });
+  });
+
   it("reads the refusal stop reason as an exhausted quota", () => {
     expect(failureFromTurn("refusal", "")).toEqual({
       message: "You have reached your Antigravity quota for this period.",
@@ -313,6 +324,8 @@ function handle(m) {
       for (const line of cfg.script) {
         setTimeout(() => out(line.result && line.id !== undefined ? { ...line, id: m.id } : line), (delay += 5));
       }
+      // A notification just after the last reply, as another process's output can be.
+      if (cfg.lateNotification) setTimeout(() => out({ method: "x/late", params: {} }), delay + 1);
       // stderr is its own pipe, so a line written just after the last reply can arrive after it.
       if (cfg.lateStderr) setTimeout(() => process.stderr.write(cfg.lateStderr + "\\n"), delay + 2);
       return;
@@ -533,6 +546,14 @@ describe.skipIf(process.platform === "win32")("antigravity over ACP, with a fake
       fakeAgy({ script: [call("c1", "run_command", "in_progress"), call("c1u", "run_command", "completed"), text, result] });
       expect((await drain(input({}, { access: "full" }))).at(-1)).toMatchObject({ type: "done", text: "after" });
     });
+  });
+
+  it("forwards a stdout line that arrives just after the final reply, before the terminal event", async () => {
+    fakeAgy({ lateNotification: true });
+    const events = await drain(input({ verbose: true }));
+    const late = events.flatMap((e, i) => (e.type === "raw" && e.source === "stdout" && (e.data as { method?: string }).method === "x/late" ? [i] : []));
+    expect(late).toHaveLength(1);
+    expect(late[0]).toBeLessThan(events.findIndex((e) => e.type === "done"));
   });
 
   it("forwards stderr written just after the final reply, before the terminal event", async () => {

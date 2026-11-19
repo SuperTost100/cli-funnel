@@ -66,6 +66,8 @@ interface Turn {
   out: Channel<FunnelEvent>;
   mapper?: ReturnType<typeof createAcpMapper>;
   finished: boolean;
+  /** True until the output channel is closed. A verbose turn waits a moment after `finished`, and what arrives in it is kept. */
+  open: boolean;
   end(): void;
   ended: Promise<void>;
 }
@@ -112,6 +114,7 @@ export async function openAcpSession(first: RunInput, setup: AcpSetup): Promise<
     if (t.finished) return;
     t.finished = true;
     const close = () => {
+      t.open = false;
       for (const e of events) t.out.push(e);
       t.out.end();
       t.end();
@@ -127,7 +130,7 @@ export async function openAcpSession(first: RunInput, setup: AcpSetup): Promise<
   const rpc = new AcpClient(proc, {
     line(raw) {
       const t = current;
-      if (t && !t.finished && t.input.verbose) t.out.push(rawEvent("antigravity", "stdout", raw, t.input));
+      if (t?.open && t.input.verbose) t.out.push(rawEvent("antigravity", "stdout", raw, t.input));
     },
     notification(method, params) {
       const t = current;
@@ -216,10 +219,10 @@ export async function openAcpSession(first: RunInput, setup: AcpSetup): Promise<
     if (current && !current.finished) throw new FunnelError("A turn is already running in this session.", "invalid-selection");
     let end!: () => void;
     const ended = new Promise<void>((resolve) => (end = resolve));
-    const t: Turn = { input, out: new Channel<FunnelEvent>(), finished: false, end, ended };
+    const t: Turn = { input, out: new Channel<FunnelEvent>(), finished: false, open: true, end, ended };
     current = t;
     proc.hold(true);
-    const offStderr = input.verbose ? proc.onStderr((line) => t.out.push(rawEvent("antigravity", "stderr", line, input)), runSecrets(input)) : undefined;
+    const offStderr = input.verbose ? proc.onStderr((line) => t.open && t.out.push(rawEvent("antigravity", "stderr", line, input)), runSecrets(input)) : undefined;
     if (exited || closed) finish(t, [{ type: "error", message: "agy acp is not running.", code: "cli-failed" }]);
 
     const signal = input.signal;
