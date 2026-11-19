@@ -43,9 +43,9 @@ describe.skipIf(!LIVE)("persist: false, live", () => {
       const dir = join(homedir(), ".cursor", "chats", createHash("md5").update(join(root, workspace)).digest("hex"));
       return existsSync(dir) ? readdirSync(dir) : [];
     };
-    const before = chats("agent-none").length;
     const r = await funnel.run({ selection, prompt: "Reply with the single word OK.", workspaceName: "cf-live-test" });
     expect(chats("agent-none.cf-live-test")).toContain(r.sessionId);
-    expect(chats("agent-none")).toHaveLength(before);
+    // Other apps on the machine add chats to the shared folder meanwhile, so the check is that this chat is not in it.
+    expect(chats("agent-none")).not.toContain(r.sessionId);
   }, 180_000);
 });
