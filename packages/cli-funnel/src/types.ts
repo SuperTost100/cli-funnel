@@ -364,7 +364,7 @@ export type FunnelEvent =
   /**
    * The CLI started with less access than `selection.access` asked for, for example when a managed policy allows only a
    * read-only sandbox or switches a permission mode off. It follows `session`, and the run goes on with what the CLI
-   * allowed. Codex, Claude Code and Antigravity (at `full`) report it. Cursor Agent does not state its mode, so it never does.
+   * allowed. Codex, Claude Code and Antigravity on the `print` transport (at `full`) report it. Cursor Agent does not state its mode, so it never does.
    */
   | ({ type: "access.reduced" } & AccessReduced)
   /**
