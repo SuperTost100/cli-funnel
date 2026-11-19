@@ -11,20 +11,24 @@ describe.skipIf(process.platform === "win32")("git variables at access none", ()
   beforeEach(() => {
     process.env.GIT_DIR = "/elsewhere/.git";
     process.env.GIT_WORK_TREE = "/elsewhere";
+    process.env.GIT_COMMON_DIR = "/elsewhere/common";
+    process.env.GIT_CEILING_DIRECTORIES = "/elsewhere";
   });
   afterEach(() => {
     delete process.env.GIT_DIR;
     delete process.env.GIT_WORK_TREE;
+    delete process.env.GIT_COMMON_DIR;
+    delete process.env.GIT_CEILING_DIRECTORIES;
     delete process.env.CLI_FUNNEL_AGY_BIN;
     delete process.env.CLI_FUNNEL_AGENT_BIN;
   });
 
-  /** A CLI that writes the two variables it sees to a file and answers with an empty result. */
+  /** A CLI that writes the four variables it sees to a file and answers with an empty result. */
   const fake = (name: string, answer: string) => {
     const dir = mkdtempSync(join(tmpdir(), "cf-git-env-"));
     const seen = join(dir, "seen");
     const bin = join(dir, name);
-    writeFileSync(bin, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 2026.11.13; exit 0; fi\nprintf '%s|%s' "\${GIT_DIR-unset}" "\${GIT_WORK_TREE-unset}" > ${seen}\ncat <<'EOF2'\n${answer}\nEOF2\n`);
+    writeFileSync(bin, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 2026.11.13; exit 0; fi\nprintf '%s|%s|%s|%s' "\${GIT_DIR-unset}" "\${GIT_WORK_TREE-unset}" "\${GIT_COMMON_DIR-unset}" "\${GIT_CEILING_DIRECTORIES-unset}" > ${seen}\ncat <<'EOF2'\n${answer}\nEOF2\n`);
     chmodSync(bin, 0o755);
     return { dir, bin, seen: () => readFileSync(seen, "utf8") };
   };
@@ -37,9 +41,9 @@ describe.skipIf(process.platform === "win32")("git variables at access none", ()
     process.env.CLI_FUNNEL_AGY_BIN = f.bin;
     const run = (access: "none" | "auto"): RunInput => ({ selection: { provider: "antigravity", model: "m", cwd: f.dir, access }, prompt: "hi", providerOptions: { antigravity: { transport: "print" } } });
     await drain(antigravityProvider.run(run("none")));
-    expect(f.seen()).toBe("unset|unset");
+    expect(f.seen()).toBe("unset|unset|unset|unset");
     await drain(antigravityProvider.run(run("auto")));
-    expect(f.seen()).toBe("/elsewhere/.git|/elsewhere");
+    expect(f.seen()).toBe("/elsewhere/.git|/elsewhere|/elsewhere/common|/elsewhere");
   }, 20_000);
 
   it("are removed for Cursor Agent and kept at auto", async () => {
@@ -47,8 +51,8 @@ describe.skipIf(process.platform === "win32")("git variables at access none", ()
     process.env.CLI_FUNNEL_AGENT_BIN = f.bin;
     const run = (access: "none" | "auto"): RunInput => ({ selection: { provider: "agent", model: "composer-2.5", cwd: f.dir, access }, prompt: "hi" });
     await drain(agentProvider.run(run("none")));
-    expect(f.seen()).toBe("unset|unset");
+    expect(f.seen()).toBe("unset|unset|unset|unset");
     await drain(agentProvider.run(run("auto")));
-    expect(f.seen()).toBe("/elsewhere/.git|/elsewhere");
+    expect(f.seen()).toBe("/elsewhere/.git|/elsewhere|/elsewhere/common|/elsewhere");
   }, 20_000);
 });

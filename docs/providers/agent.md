@@ -84,7 +84,9 @@ Verified on 2026.10.01, with and without `--force` and `--mode ask`:
 
 Cursor Agent reads `AGENTS.md` and `.cursor/rules` from every folder above the working folder, and a git marker in the `none` folder does not stop that. Tested with a rule file above the folder: the folder with a hand-made `.git`, one with a real `git init`, and one with none all showed the rule's text in the reply. So a user's instructions can shape the answer at `none`. They cannot run anything: the deny rules still refuse every tool, and a `.cursor/hooks.json` above the folder did not run. Unlike Antigravity, there is no way to keep this out short of a cache folder with no instructions in any folder above it.
 
-`GIT_DIR` and `GIT_WORK_TREE` are taken out of the environment of a `none` run.
+The table further down shows Cursor Agent running Claude Code hooks from `.claude/settings*.json` at a repository root when it was started in a subfolder of it. So a user whose home folder is a git repository may get those hooks in a `none` run too. That has not been tested at `none`, and the deny rules in the folder do not cover hooks.
+
+`GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR` and `GIT_CEILING_DIRECTORIES` are taken out of the environment of a `none` run.
 
 ### Run options
 
