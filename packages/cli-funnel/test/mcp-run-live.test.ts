@@ -18,7 +18,6 @@ const selections: Record<string, RunInput["selection"]> = {
   claude: { provider: "claude", model: "claude-haiku-5-5", effort: "low", cwd: tmpdir(), access: "none" },
   codex: { provider: "codex", model: "gpt-6-luna", effort: "low", cwd: tmpdir(), access: "none" },
   antigravity: { provider: "antigravity", model: "gemini-3.8-flash", effort: "low", cwd: tmpdir(), access: "none" },
-  agent: { provider: "agent", model: "cursor-grok-4.5", effort: "low", cwd: tmpdir(), access: "none" },
 };
 
 function task() {
@@ -56,7 +55,7 @@ describe.skipIf(!LIVE)("an MCP server at none, live", () => {
     }
   }, 240_000);
 
-  it.each(["claude", "codex", "antigravity", "agent"])("%s: stdio server called, nothing else runs", async (name) => {
+  it.each(["claude", "codex", "antigravity"])("%s: stdio server called, nothing else runs", async (name) => {
     const note = noteScript();
     const { prompt, marker } = task();
     const r = await funnel.run({ selection: selections[name]!, prompt, mcpServers: { notes: { type: "stdio", command: note.command, args: note.args } } });

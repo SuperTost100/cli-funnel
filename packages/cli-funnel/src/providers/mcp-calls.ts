@@ -1,4 +1,4 @@
-import type { FunnelEvent } from "../types.js";
+import type { FunnelEvent, ProviderId } from "../types.js";
 
 /** An MCP tool call of the run, as each CLI names it. See `FunnelEvent` `tool.start`. */
 export interface McpCall {
@@ -7,6 +7,9 @@ export interface McpCall {
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+/** What agy puts in front of the name of a server that the print transport's plugin carries. See `MCP_PLUGIN` in `providers/antigravity`. */
+const PRINT_PLUGIN = "funnel_";
 
 /** Cursor Agent's name for the servers of a `--plugin-dir` plugin, `plugin-<folder>-<server>`. See `providers/agent/mcp.ts`. */
 const CURSOR_PLUGIN_PREFIX = "plugin-funnel-";
@@ -18,7 +21,7 @@ const CURSOR_PLUGIN_PREFIX = "plugin-funnel-";
  * and the tool on Cursor Agent. Only the caller's own servers match, so a call to a server of the user's config is not
  * reported as one. A server name is tried whole, longest first, so `a` never claims a tool of `a_b`.
  */
-export function mcpCall(name: string, input: unknown, servers: readonly string[]): McpCall | undefined {
+export function mcpCall(name: string, input: unknown, servers: readonly string[], provider?: ProviderId): McpCall | undefined {
   const byLength = [...servers].sort((a, b) => b.length - a.length);
   for (const server of byLength) {
     for (const prefix of [`mcp__${server}__`, `mcp_${server}_`]) {
@@ -28,8 +31,10 @@ export function mcpCall(name: string, input: unknown, servers: readonly string[]
     if (name.startsWith(codex) && name.length > codex.length) return { server, tool: name.slice(codex.length) };
   }
   if (!isObj(input)) return undefined;
-  if (name === "call_mcp_tool" && typeof input.ServerName === "string" && typeof input.ToolName === "string" && servers.includes(input.ServerName)) {
-    return { server: input.ServerName, tool: input.ToolName };
+  if (name === "call_mcp_tool" && typeof input.ServerName === "string" && typeof input.ToolName === "string") {
+    // On Antigravity's print transport the servers are one plugin, `funnel`, and agy calls each by `funnel_<name>`.
+    const server = provider === "antigravity" && input.ServerName.startsWith(PRINT_PLUGIN) ? input.ServerName.slice(PRINT_PLUGIN.length) : input.ServerName;
+    if (servers.includes(server)) return { server, tool: input.ToolName };
   }
   const id = input.serverIdentifier;
   if (name === "mcp" && typeof id === "string" && typeof input.toolName === "string" && id.startsWith(CURSOR_PLUGIN_PREFIX)) {
@@ -40,12 +45,12 @@ export function mcpCall(name: string, input: unknown, servers: readonly string[]
 }
 
 /** Adds `mcp` to the `tool.start` event of each call to one of `servers`. Other events pass unchanged. */
-export async function* tagMcpCalls(events: AsyncIterable<FunnelEvent>, servers: readonly string[]): AsyncGenerator<FunnelEvent> {
+export async function* tagMcpCalls(events: AsyncIterable<FunnelEvent>, servers: readonly string[], provider?: ProviderId): AsyncGenerator<FunnelEvent> {
   for await (const e of events) {
     if (e.type === "tool.start" && !e.parentId) {
-      const call = mcpCall(e.name, e.input, servers);
+      const call = e.mcp ?? mcpCall(e.name, e.input, servers, provider);
       if (call) {
-        yield { ...e, mcp: call };
+        yield e.mcp ? e : { ...e, mcp: call };
         continue;
       }
     }

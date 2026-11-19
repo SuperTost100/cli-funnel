@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { manifestModels } from "../../catalog/manifest.js";
 import { exec, spawnStream } from "../../util/process.js";
@@ -9,7 +8,7 @@ import { composePrompt } from "../prompt.js";
 import { bool, dirList, flag, mcpServersFor, oneOf, optionsFor, requireAccess } from "../options.js";
 import { redactErrors } from "../../util/redact.js";
 import { ownedWorkspace, workspaceFor } from "../../util/workspace.js";
-import { attachMcp, PLUGIN_NAME_PREFIX } from "./mcp.js";
+import { attachMcp } from "./mcp.js";
 import { cursorNoneGuard } from "../none-guard.js";
 import { FEEDBACK_CHANNELS } from "../feedback.js";
 import { groupModels, parseModelList, parseStatus, StreamMapper, toCliModel, type MapperOptions } from "./parser.js";
@@ -71,48 +70,17 @@ export const NONE_PERMISSIONS = {
   permissions: { allow: [], deny: ["Shell(*)", "Read(**)", "Write(**)", "WebFetch(*)", "Mcp(*:*)"] },
 };
 
-/**
- * The rules for `none` with the caller's MCP servers. `Mcp(*:*)` goes, since a deny beats every allow and Cursor has no
- * way to deny everything but one server. In its place each MCP server the user has is denied by name, and the caller's
- * servers are allowed. The names come from `agent mcp list`, so a server the CLI does not list there is not covered.
- */
-export function nonePermissionsWithMcp(allow: string[], userServers: string[]) {
-  const deny = NONE_PERMISSIONS.permissions.deny.filter((rule) => rule !== "Mcp(*:*)");
-  return { permissions: { allow, deny: [...deny, ...userServers.map((name) => `Mcp(${name}:*)`)] } };
-}
-
-/** The empty folder `none` runs in. It holds only the deny rules, and with MCP servers the rules from `nonePermissionsWithMcp`. */
-export function noneWorkspace(caller?: string, mcp?: { allow: string[]; userServers: string[] }): Promise<string> {
-  const permissions = mcp ? nonePermissionsWithMcp(mcp.allow, mcp.userServers) : NONE_PERMISSIONS;
-  const json = `${JSON.stringify(permissions, null, 2)}\n`;
-  const suffix = mcp ? `-mcp-${createHash("sha256").update(json).digest("hex").slice(0, 12)}` : "";
-  return ownedWorkspace(workspaceFor("agent-none", caller) + suffix, { ".cursor/cli.json": json });
-}
-
-/** The names `agent mcp list` prints: `name: status`, one server per line. */
-export function parseMcpList(output: string): string[] {
-  return output.split("\n").flatMap((line) => {
-    const m = /^([^\s:]+):\s*\S/.exec(line.trim());
-    return m ? [m[1]!] : [];
-  });
-}
-
-/** The MCP servers the user has, as the CLI lists them. A failed listing fails the run, since `none` must deny each by name. */
-async function userMcpServers(path: string, env: Record<string, string> | undefined): Promise<string[]> {
-  const res = await exec(path, ["mcp", "list"], { env, timeoutMs: 30_000 }).catch((e: unknown) => e as Error);
-  if (res instanceof Error || res.code !== 0) {
-    throw new FunnelError("Cursor Agent could not list the user's MCP servers, so a run at access none cannot keep them out.", "cli-failed");
-  }
-  return parseMcpList(res.stdout);
+/** The empty folder `none` runs in. It holds only the deny rules. */
+export function noneWorkspace(caller?: string): Promise<string> {
+  return ownedWorkspace(workspaceFor("agent-none", caller), { ".cursor/cli.json": `${JSON.stringify(NONE_PERMISSIONS, null, 2)}\n` });
 }
 
 /** Access maps to CLI flags. `accept-edits` has no flag and `supervised` has no approval passthrough, so neither is offered. */
-export function accessFlags(access: RunInput["selection"]["access"], mcpAtNone = false): string[] {
+export function accessFlags(access: RunInput["selection"]["access"]): string[] {
   if (access === "full") return ["--force"];
   if (access === "auto") return ["--auto-review"];
   // The deny rules in the workspace do the enforcing. Ask mode only keeps the model from trying.
-  // Ask mode also blocks the MCP tools of a run with servers at `none`, so there the deny rules stand alone.
-  if (access === "none") return mcpAtNone ? [] : ["--mode", "ask"];
+  if (access === "none") return ["--mode", "ask"];
   throw new FunnelError(`Cursor Agent cannot enforce access "${access}". Supported: none, auto, full.`, "invalid-selection");
 }
 
@@ -163,7 +131,7 @@ export function buildArgs(input: RunInput, model: string, workspace = requireMac
     "--workspace",
     workspace,
     "--trust",
-    ...accessFlags(requireMachine(input.selection).access, pluginDirs.length > 0),
+    ...accessFlags(requireMachine(input.selection).access),
     ...(input.sessionId ? ["--resume", input.sessionId] : []),
     ...pluginDirs.flatMap((d) => ["--plugin-dir", d]),
     ...extra,
@@ -194,15 +162,12 @@ export const mapperOptions = (input: RunInput): MapperOptions => ({
 async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   const path = findBinary(BINARY);
   if (!path) throw new FunnelError("agent is not installed.", "not-installed");
-  const servers = mcpServersFor(input, ["http", "stdio"], "Cursor Agent", ["http", "stdio"]);
+  const servers = mcpServersFor(input, ["http", "stdio"], "Cursor Agent");
   const apiKey = input.apiKey;
   if (apiKey) await requireIsolatedStore(path);
   const model = toCliModel(input.selection, await knownIds(apiKey ? keyEnv(apiKey) : undefined));
-  const none = input.selection.access === "none";
+  const cwd = input.selection.access === "none" ? await noneWorkspace(input.workspaceName) : input.selection.cwd;
   const mcp = servers.length ? await attachMcp(servers) : undefined;
-  const cwd = none
-    ? await noneWorkspace(input.workspaceName, servers.length ? { allow: servers.map(([name]) => `Mcp(${PLUGIN_NAME_PREFIX}${name}:*)`), userServers: await userMcpServers(path, input.env) } : undefined)
-    : input.selection.cwd;
   const args = buildArgs(input, model, cwd, mcp ? [mcp.dir] : []);
   const env = { ...input.env, ...mcp?.env, ...(apiKey ? keyEnv(apiKey) : {}) };
   // agent reads the prompt from stdin when argv has none.
@@ -263,7 +228,6 @@ export const agentProvider: Provider = {
     schema: "prompt",
     apiKey: true,
     mcpServers: ["http", "stdio"],
-    mcpServersAtNone: ["http", "stdio"],
     plan: true,
     fileChanges: true,
     sandbox: true,

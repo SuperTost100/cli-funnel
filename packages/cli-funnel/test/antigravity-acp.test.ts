@@ -437,21 +437,54 @@ describe.skipIf(process.platform === "win32")("antigravity over ACP, with a fake
     expect(agy.received()[0]!.cwd).toMatch(/workspaces[/\\]antigravity-none\.pyxis$/);
   });
 
-  it("hands MCP servers to the session and allows only their calls at none", async () => {
-    const asks = [
-      { jsonrpc: "2.0", id: "p1", method: "session/request_permission", params: { sessionId: SESSION, toolCall: { toolCallId: "a", name: "mcp_notes_add_note", rawInput: { text: "x" } }, options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }, { optionId: "deny", name: "Deny", kind: "reject_once" }] } },
-      { jsonrpc: "2.0", id: "p2", method: "session/request_permission", params: { sessionId: SESSION, toolCall: { toolCallId: "b", name: "mcp_theirs_x", rawInput: {} }, options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }, { optionId: "deny", name: "Deny", kind: "reject_once" }] } },
-      { jsonrpc: "2.0", id: 1, result: { stopReason: "end_turn" } },
-    ];
+  it("hands MCP servers to the session under reserved names and allows only their calls at none", async () => {
+    const options = [{ optionId: "allow", name: "Allow", kind: "allow_once" }, { optionId: "deny", name: "Deny", kind: "reject_once" }];
+    const ask = (id: string, toolCallId: string, name: string, rawInput: object) => ({ jsonrpc: "2.0", id, method: "session/request_permission", params: { sessionId: SESSION, toolCall: { toolCallId, name, rawInput }, options } });
+    const asks = [ask("p1", "a", "mcp_clifunnel0_add_note", { text: "x" }), ask("p2", "b", "mcp_notes_add_note", {}), { jsonrpc: "2.0", id: 1, result: { stopReason: "end_turn" } }];
     const agy = fakeAgy({ script: asks });
     await drain(input({ mcpServers: { notes: { type: "http", url: "http://127.0.0.1:9/mcp", headers: { Authorization: "Bearer t" } } } }));
-    await new Promise((r) => setTimeout(r, 100));
+    await until(() => agy.received().some((m) => m.id === "p2" && m.result));
     const got = agy.received();
-    expect(got.find((m) => m.method === "session/new")!.params.mcpServers).toEqual([{ type: "http", name: "notes", url: "http://127.0.0.1:9/mcp", headers: [{ name: "Authorization", value: "Bearer t" }] }]);
+    expect(got.find((m) => m.method === "session/new")!.params.mcpServers).toEqual([{ type: "http", name: "clifunnel0", url: "http://127.0.0.1:9/mcp", headers: [{ name: "Authorization", value: "Bearer t" }] }]);
     expect(got.find((m) => m.id === "p1" && m.result)!.result).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+    // A user's server called `notes` is not this run's server, whatever the caller named theirs.
     expect(got.find((m) => m.id === "p2" && m.result)!.result).toEqual({ outcome: { outcome: "selected", optionId: "deny" } });
-    // The hook folder for this run lets the server's tools reach the permission check.
-    expect(got[0]!.cwd).toMatch(/antigravity-none-mcp-[0-9a-f]{12}$/);
+    // The run's folder holds the hook script and the hook that runs it.
+    expect(got[0]!.cwd).toMatch(/antigravity-none\.mcp\.1$/);
+  });
+
+  it("reports a tool the client allowed and that then failed as a failure, not as a denial", async () => {
+    const options = [{ optionId: "allow", name: "Allow", kind: "allow_once" }, { optionId: "deny", name: "Deny", kind: "reject_once" }];
+    const call = (sessionUpdate: string, status: string, extra: object = {}) => ({ jsonrpc: "2.0", method: "session/update", params: { sessionId: SESSION, update: { sessionUpdate, toolCallId: "a", name: "mcp_clifunnel0_add_note", status, rawInput: { text: "x" }, ...extra } } });
+    const script = [
+      call("tool_call", "in_progress"),
+      { jsonrpc: "2.0", id: "p1", method: "session/request_permission", params: { sessionId: SESSION, toolCall: { toolCallId: "a", name: "mcp_clifunnel0_add_note", rawInput: { text: "x" } }, options } },
+      call("tool_call_update", "failed", { rawOutput: { output: "server error: disk full" } }),
+      { jsonrpc: "2.0", id: 1, result: { stopReason: "end_turn" } },
+    ];
+    fakeAgy({ script });
+    const run = input({ mcpServers: { notes: { type: "http", url: "http://127.0.0.1:9/mcp" } } });
+    const events = await drain(run);
+    const end = events.find((e) => e.type === "tool.end") as Extract<FunnelEvent, { type: "tool.end" }>;
+    expect(end.error).toBe("server error: disk full");
+    expect((await collect((async function* () { yield* events; })(), run)).deniedActions).toEqual([]);
+  });
+
+  it("stops a run at none when a tool that is not the run's finishes, and lets this run's server finish", async () => {
+    const call = (sessionUpdate: string, name: string, status: string, rawInput: object = {}) => ({ jsonrpc: "2.0", method: "session/update", params: { sessionId: SESSION, update: { sessionUpdate, toolCallId: name, name, status, rawInput } } });
+    const done = { jsonrpc: "2.0", id: 1, result: { stopReason: "end_turn" } };
+    const mcpServers = { notes: { type: "http" as const, url: "http://127.0.0.1:9/mcp" } };
+    fakeAgy({ script: [call("tool_call", "mcp_clifunnel0_add_note", "in_progress"), call("tool_call_update", "mcp_clifunnel0_add_note", "completed"), done] });
+    expect((await drain(input({ mcpServers }))).at(-1)).toMatchObject({ type: "done" });
+    fakeAgy({ script: [call("tool_call", "mcp_notes_add_note", "in_progress"), call("tool_call_update", "mcp_notes_add_note", "completed"), done] });
+    expect((await drain(input({ mcpServers }))).at(-1)).toMatchObject({ type: "error", message: expect.stringContaining('"mcp_notes_add_note" ran at access "none"') });
+  });
+
+  it("refuses a caller server named like a reserved one, and a tool timeout, before any process starts", async () => {
+    const agy = fakeAgy();
+    await expect(drain(input({ mcpServers: { clifunnel0: { type: "http", url: "http://127.0.0.1:9/mcp" } } }))).rejects.toMatchObject({ code: "invalid-selection" });
+    await expect(drain(input({ mcpServers: { notes: { type: "http", url: "http://127.0.0.1:9/mcp", toolTimeoutSec: 30 } } }))).rejects.toMatchObject({ code: "unsupported" });
+    expect(() => agy.received()).toThrow();
   });
 
   it("sends the servers again when a session is resumed, and refuses them at accept-edits and on print at none", async () => {

@@ -246,7 +246,7 @@ export function createFunnel(options: FunnelOptions = {}) {
       }
     })();
     const servers = Object.keys(input.mcpServers ?? {});
-    const masked = redactSecrets(servers.length ? tagMcpCalls(source, servers) : source, runSecrets(input));
+    const masked = redactSecrets(servers.length ? tagMcpCalls(source, servers, input.selection.provider) : source, runSecrets(input));
     const events = options.onEvent ? observeRun(options.onEvent, input, masked) : masked;
     // Fold events as they pass, so `.result` works next to `for await` without keeping them.
     const folder = createRunFolder(input);

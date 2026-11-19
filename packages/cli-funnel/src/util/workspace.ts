@@ -23,12 +23,15 @@ export function workspaceFor(name: string, caller: string | undefined): string {
   return `${name}.${caller}`;
 }
 
+/** Where `ownedWorkspace(name, …)` puts its folder, without creating it. */
+export const workspacePath = (name: string): string => join(funnelCacheDir(), "workspaces", name);
+
 /**
  * Returns a private folder that holds only `files`, for runs that must not see the user's project.
  * Files are rewritten when their content differs, through a rename so a concurrent run never reads half a file.
  */
 export async function ownedWorkspace(name: string, files: Record<string, string>): Promise<string> {
-  const dir = join(funnelCacheDir(), "workspaces", name);
+  const dir = workspacePath(name);
   await mkdir(dir, { recursive: true, mode: 0o700 });
   for (const [rel, content] of Object.entries(files)) {
     const path = join(dir, rel);

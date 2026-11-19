@@ -15,6 +15,7 @@ import {
   createAcpMapper,
   currentModel,
   currentThought,
+  allows,
   decidePermission,
   denyPermission,
   failureFromError,
@@ -45,10 +46,10 @@ export interface AcpSetup {
   createdInRun(startedAt: number): ((path: string) => boolean | undefined) | undefined;
   /** The caller's MCP servers in the shape `session/new` takes, sent again on every activation. */
   mcpServers: unknown[];
-  /** At `none`: the names of the servers whose tool calls are allowed. Every other permission request is denied. */
+  /** Each reserved name the servers were given to agy under, and the caller's own name for it. */
+  mcpCallers?: ReadonlyMap<string, string>;
+  /** At `none`: the reserved names whose tool calls are allowed. Every other permission request is denied. */
   allowMcp?: ReadonlySet<string>;
-  /** At `none`: whether a tool of the run may finish, besides `finish`. Anything else that finishes stops the run. */
-  allowTool?: (name: string, input: unknown) => boolean;
   /** The default thinking level of a model from the model list, for a run that names none. */
   defaultEffort(model: string): string | undefined;
   /** Gets the models the account's session listed. */
@@ -112,8 +113,9 @@ export async function openAcpSession(first: RunInput, setup: AcpSetup): Promise<
     closed = true;
     proc.kill();
   };
-  // Only `finish` may complete at `none`, which ends a turn and carries nothing out. `allowTool` adds the caller's own tools.
-  const guard = access === "none" ? createNoneGuard((name, input) => name !== "finish" && !setup.allowTool?.(name, input)) : undefined;
+  // Only `finish` may complete at `none`, which ends a turn and carries nothing out, and the calls the mapper tagged as
+  // the run's own MCP servers. A call to a user's server is neither.
+  const guard = access === "none" ? createNoneGuard((start) => start.name !== "finish" && !start.mcp) : undefined;
 
   const finish = (t: Turn, events: FunnelEvent[]) => {
     if (t.finished) return;
@@ -153,9 +155,11 @@ export async function openAcpSession(first: RunInput, setup: AcpSetup): Promise<
     request(id, method, params) {
       const t = current;
       if (method === "session/request_permission") {
+        const answer = setup.allowMcp ? decidePermission(params, setup.allowMcp) : denyPermission(params);
+        // Only a rejection makes the call's later failure a denial. A call that was allowed and then failed is a failure.
         const toolCallId = params?.toolCall?.toolCallId;
-        if (typeof toolCallId === "string") t?.mapper?.refuse(toolCallId);
-        rpc.respond(id, setup.allowMcp ? decidePermission(params, setup.allowMcp) : denyPermission(params));
+        if (typeof toolCallId === "string" && !allows(answer, params)) t?.mapper?.refuse(toolCallId);
+        rpc.respond(id, answer);
         return;
       }
       // Nothing was offered at `initialize`, so a request for a file or a terminal is the agent's mistake.
@@ -259,7 +263,7 @@ export async function openAcpSession(first: RunInput, setup: AcpSetup): Promise<
         if (t.finished) return;
         if (aborted) return finish(t, [{ type: "done", text: "", finishReason: "cancelled" }]);
         const startedAt = Date.now();
-        t.mapper = createAcpMapper(id, { access, cwd: setup.cwd, brainDir: setup.brainDir, readText: setup.readText, createdInRun: setup.createdInRun(startedAt) });
+        t.mapper = createAcpMapper(id, { access, mcp: setup.mcpCallers, cwd: setup.cwd, brainDir: setup.brainDir, readText: setup.readText, createdInRun: setup.createdInRun(startedAt) });
         t.out.push({ type: "session", sessionId: id, ...(model ? { model } : {}) });
         // The system prompt went in with the session when agy takes one there, and goes in front of the prompt when not.
         const text = composePrompt(input, { system: !facts || sessionMeta(first.system, facts) === undefined, schema: true });

@@ -121,15 +121,38 @@ export function modelsFromSession(models: Json | undefined): ModelInfo[] {
 }
 
 /**
- * The caller's servers as `session/new` and `session/resume` take them. A stdio server is `command`, `args` and `env`
- * as name and value pairs. An HTTP server is `type: "http"`, `url` and `headers` as pairs. They go over the pipe to
- * agy, so a header token is on no disk.
+ * The name a caller's server has inside agy. The caller's own name could equal a server in the user's agy config, and
+ * agy names tools by server (`mcp_<server>_<tool>`), so the run could not tell its server's calls from the user's.
+ * `clifunnel<n>` is a name no caller may choose (`checkAcpServers`), so a call to it is a call to this run's server.
  */
-export function acpMcpServers(servers: [string, McpServer][]): Json[] {
+export const reservedName = (index: number): string => `clifunnel${index}`;
+
+const RESERVED_FORM = /^clifunnel\d+$/;
+
+/** Fails when a caller's server has a name in the reserved form, or a tool timeout, which ACP has no field for. */
+export function checkAcpServers(servers: [string, McpServer][]): void {
+  for (const [name, s] of servers) {
+    if (RESERVED_FORM.test(name)) throw new FunnelError(`MCP server name "${name}" is reserved on Antigravity over ACP: names like clifunnel0 stand for the run's own servers. Use another name.`, "invalid-selection");
+    if (s.toolTimeoutSec !== undefined) {
+      throw new FunnelError(`Antigravity over ACP cannot set a tool timeout for MCP server "${name}": its MCP server has no such field. Use providerOptions.antigravity.transport "print", or leave toolTimeoutSec out.`, "unsupported");
+    }
+  }
+}
+
+/**
+ * The caller's servers as `session/new` and `session/resume` take them, each under its reserved name. A stdio server is
+ * `command`, `args` and `env` as name and value pairs. An HTTP server is `type: "http"`, `url` and `headers` as pairs.
+ * They go over the pipe to agy, so a header token is on no disk. `callers` maps each reserved name back to the caller's.
+ */
+export function reserveServers(servers: [string, McpServer][]): { reserved: string[]; callers: Map<string, string>; acp: Json[] } {
   const pairs = (o: Record<string, string> | undefined) => Object.entries(o ?? {}).map(([name, value]) => ({ name, value }));
-  return servers.map(([name, s]) =>
-    s.type === "http" ? { type: "http", name, url: s.url, headers: pairs(s.headers) } : { name, command: s.command, args: s.args ?? [], env: pairs(s.env) },
-  );
+  const callers = new Map<string, string>();
+  const acp = servers.map(([name, s], i): Json => {
+    const reserved = reservedName(i);
+    callers.set(reserved, name);
+    return s.type === "http" ? { type: "http", name: reserved, url: s.url, headers: pairs(s.headers) } : { name: reserved, command: s.command, args: s.args ?? [], env: pairs(s.env) };
+  });
+  return { reserved: [...callers.keys()], callers, acp };
 }
 
 /** The generic tool agy calls an MCP tool through. The server and the tool are in its arguments. */
@@ -139,21 +162,42 @@ export const MCP_TOOL = "call_mcp_tool";
 export const mcpToolPrefix = (server: string): string => `mcp_${server}_`;
 
 /**
- * The answer to a `session/request_permission` at access `none` with the caller's MCP servers: allow the call to a
- * tool of one of `servers`, as `call_mcp_tool` or as that server's own `mcp_<server>_<tool>`, deny everything else. `none` runs with no flag, so agy asks before each MCP call, the
- * user's own servers' included, and this is the check that keeps those out.
+ * The reserved server a tool call is for, with the tool's own name, or undefined. The call is either the server's own
+ * tool, `mcp_<reserved>_<tool>`, or `call_mcp_tool` with the reserved name in `ServerName`. Exact names only.
  */
-export function decidePermission(params: Json | undefined, servers: ReadonlySet<string>): Json {
+export function reservedCall(name: string, input: unknown, reserved: Iterable<string>): { server: string; tool: string; generic: boolean } | undefined {
+  const args = input as Json | undefined;
+  if (name === MCP_TOOL && typeof args?.ServerName === "string") {
+    for (const r of reserved) if (r === args.ServerName) return { server: r, tool: String(args.ToolName ?? ""), generic: true };
+    return undefined;
+  }
+  for (const r of reserved) {
+    const prefix = mcpToolPrefix(r);
+    if (name.startsWith(prefix) && name.length > prefix.length) return { server: r, tool: name.slice(prefix.length), generic: false };
+  }
+  return undefined;
+}
+
+/**
+ * The answer to a `session/request_permission` at access `none` with the caller's MCP servers: allow the call to a tool of
+ * one of this run's `reserved` servers, deny everything else, the user's own servers included. The hook in the run's folder
+ * already refuses every other tool, and this is the check behind it.
+ */
+export function decidePermission(params: Json | undefined, reserved: ReadonlySet<string>): Json {
   const call = params?.toolCall;
-  const server = call?.rawInput?.ServerName ?? call?.args?.ServerName;
-  const generic = call?.name === MCP_TOOL && typeof server === "string" && servers.has(server);
-  const direct = typeof call?.name === "string" && [...servers].some((s) => call.name.startsWith(mcpToolPrefix(s)));
-  if (generic || direct) {
+  if (typeof call?.name === "string" && reservedCall(call.name, call.rawInput ?? call.args, reserved)) {
     const options: Json[] = Array.isArray(params?.options) ? params.options : [];
     const allow = options.find((o) => o?.kind === "allow_once");
     if (allow && typeof allow.optionId === "string") return { outcome: { outcome: "selected", optionId: allow.optionId } };
   }
   return denyPermission(params);
+}
+
+/** True when an answer to `session/request_permission` selected an option that allows the call. */
+export function allows(answer: Json, params: Json | undefined): boolean {
+  if (answer?.outcome?.outcome !== "selected") return false;
+  const options: Json[] = Array.isArray(params?.options) ? params.options : [];
+  return String(options.find((o) => o?.optionId === answer.outcome.optionId)?.kind ?? "").startsWith("allow");
 }
 
 /** `session/prompt` content blocks for the run: the text, then the images. */
@@ -223,6 +267,8 @@ export interface AcpMapperOptions {
   createdInRun?: (path: string) => boolean | undefined;
   brainDir?: string;
   readText?: (path: string) => string | undefined;
+  /** The run's MCP servers: each reserved name agy knows them by, and the caller's own name for it. */
+  mcp?: ReadonlyMap<string, string>;
 }
 
 /** What `none`'s hook says when it refuses a tool call. The tool then ends as `failed` with no text. */
@@ -260,19 +306,31 @@ export function createAcpMapper(sessionId: string, options: AcpMapperOptions) {
       const text = refused.has(id) ? PERMISSION_DENIED : given || (options.access === "none" ? HOOK_MESSAGE : "tool failed");
       error = { message: text };
     }
+    // A call to one of the run's servers shows under the caller's own name for it, and carries `mcp`.
+    let shownName = name;
+    let shownInput = update.rawInput ?? update.args;
+    let mcp: { server: string; tool: string } | undefined;
+    const found = options.mcp ? reservedCall(name, shownInput, options.mcp.keys()) : undefined;
+    if (found) {
+      const caller = options.mcp!.get(found.server)!;
+      mcp = { server: caller, tool: found.tool };
+      if (found.generic) shownInput = { ...(shownInput as Json), ServerName: caller };
+      else shownName = `${mcpToolPrefix(caller)}${found.tool}`;
+    }
     const events = tools.map({
       event: "step_update",
       step_update: {
         step_type: "tool",
         conversation_id: sessionId,
         step_index: id,
-        tool_name: name,
+        tool_name: shownName,
         state,
-        tool_info: { name, parameters: update.rawInput ?? update.args, ...(error ? { error } : {}), ...(state === "DONE" && output !== undefined ? { output } : {}) },
+        tool_info: { name: shownName, parameters: shownInput, ...(error ? { error } : {}), ...(state === "DONE" && output !== undefined ? { output } : {}) },
       },
     });
     if (state !== "RUNNING") ended.add(id);
     return events.map((e) => {
+      if (e.type === "tool.start" && mcp) return { ...e, mcp };
       if (e.type === "tool.end" && !e.error && output !== undefined) return { ...e, output };
       if (e.type === "tool.end" && e.error?.startsWith("denied:")) denied++;
       return e;

@@ -9,7 +9,7 @@ export type ProviderId = CliProviderId | ApiProviderId | ServerProviderId;
 /**
  * How much the agent may do on the machine. Providers list the levels they can really enforce.
  * `none` is text in, text out: no file writes, no commands, no approvals, and no MCP servers except the ones the caller
- * attaches with `RunInput.mcpServers`, where a provider lists `capabilities.mcpServersAtNone`.
+ * attaches with `RunInput.mcpServers` on a provider that lists `capabilities.mcpServersAtNone` (not Cursor Agent).
  */
 export type AccessLevel = "none" | "supervised" | "accept-edits" | "auto" | "full";
 
@@ -79,8 +79,10 @@ export interface Capabilities {
   /** The kinds of `RunInput.mcpServers` the provider can attach. Absent or empty means none. */
   mcpServers?: McpServer["type"][];
   /**
-   * The kinds of `RunInput.mcpServers` the provider also takes at access `none`. There the caller's servers are the
-   * only tools the model has: every built-in tool stays off, and so do the servers of the user's own CLI config. Absent
+   * The kinds of `RunInput.mcpServers` the provider also takes at access `none`. A provider lists a kind only when its CLI
+   * is made to keep every built-in tool and every MCP server of the user's own config off for the run, so that the
+   * caller's servers are the only tools the model can use, and a run stops with an error if a tool that should have been
+   * refused finishes. Claude Code, Codex and Antigravity over ACP do that. Cursor Agent cannot and lists nothing. Absent
    * or empty means `none` refuses `mcpServers`.
    */
   mcpServersAtNone?: McpServer["type"][];

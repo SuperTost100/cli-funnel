@@ -11,7 +11,7 @@ const start = (id: string, name: string, extra: object = {}): FunnelEvent => ({ 
 const end = (id: string, extra: object = {}): FunnelEvent => ({ type: "tool.end", id, ...extra });
 
 describe("the none guard", () => {
-  const guard = () => createNoneGuard((name) => name !== "finish");
+  const guard = () => createNoneGuard((start) => start.name !== "finish");
 
   it("stays quiet while every forbidden tool ends with an error, as the rules make it", () => {
     const g = guard();
