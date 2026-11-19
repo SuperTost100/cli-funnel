@@ -163,8 +163,19 @@ export function noneWorkspace(caller?: string): Promise<string> {
  * Nothing is removed recursively here. A link is replaced by `unlink`, an old real data folder in the private folder is
  * moved aside, and the user's data folder is made when there is none, so no conversation is ever kept where a later
  * run would delete it.
+ *
+ * Calls in one process go one after another: on Windows a junction shows up as an empty folder for a moment while it is
+ * made, and a second call that finds it then would try to move it aside. Another process can still meet that moment, so
+ * a failed move is forgiven when the link points where ours would.
  */
-export async function noneGeminiDir(home: string = homedir()): Promise<string> {
+let linking: Promise<unknown> = Promise.resolve();
+export function noneGeminiDir(home: string = homedir()): Promise<string> {
+  const made = linking.then(() => makeGeminiDir(home));
+  linking = made.catch(() => undefined);
+  return made;
+}
+
+async function makeGeminiDir(home: string): Promise<string> {
   const dir = await ownedWorkspace("antigravity-gemini-none", { "config/.migrated": "", "config/mcp_config.json": `${JSON.stringify({ mcpServers: {} })}\n`, "config/skills/": "" });
   // `config/skills` is a link when an earlier agy re-pointed it. Replace the link, never what it points at.
   const skills = join(dir, "config", "skills");
@@ -183,7 +194,11 @@ export async function noneGeminiDir(home: string = homedir()): Promise<string> {
     await unlink(link);
   } else if (info) {
     // A real data folder left here by an earlier run holds conversations. Move it aside, never delete it.
-    await rename(link, `${link}.kept-${Date.now()}`);
+    await rename(link, `${link}.kept-${Date.now()}`).catch(async (e: unknown) => {
+      // A junction another process is making: fine once it resolves to the data folder.
+      if ((await realpath(link).catch(() => undefined)) !== (await realpath(target))) throw e;
+    });
+    if ((await lstat(link).catch(() => undefined))?.isSymbolicLink()) return dir;
   }
   try {
     // A junction needs no privilege on Windows, where a symbolic link to a folder does.
