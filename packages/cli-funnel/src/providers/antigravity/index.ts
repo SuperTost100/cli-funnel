@@ -199,7 +199,7 @@ export function noneHooks(platform: NodeJS.Platform = process.platform, run?: st
 export async function hookDenies(command: string, platform: NodeJS.Platform = process.platform): Promise<boolean> {
   const call = JSON.stringify({ hookEventName: "PreToolUse", toolCall: { id: "self-test", name: "run_command", args: { CommandLine: "true" } } });
   const [file, args] = platform === "win32" ? [process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", `"${command}"`]] : ["sh", ["-c", command]];
-  const res = await exec(file, args, { input: call, timeoutMs: 10_000 }).catch(() => undefined);
+  const res = await exec(file, args, { input: call, timeoutMs: 10_000, verbatim: platform === "win32" }).catch(() => undefined);
   if (!res || res.code !== 0) return false;
   try {
     return JSON.parse(res.stdout.trim().split("\n").at(-1) ?? "").decision === "deny";
