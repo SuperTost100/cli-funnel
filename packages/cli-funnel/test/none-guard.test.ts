@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createNoneGuard, cursorNoneGuard } from "../src/providers/none-guard.js";
+import { AGY_REFUSAL, createNoneGuard, cursorNoneGuard } from "../src/providers/none-guard.js";
 import { agentProvider } from "../src/providers/agent/index.js";
 import { antigravityProvider } from "../src/providers/antigravity/index.js";
 import type { FunnelEvent, RunInput } from "../src/types.js";
@@ -18,6 +18,30 @@ describe("the none guard", () => {
     expect(g.check(start("1", "run_command"))).toBeUndefined();
     expect(g.check(end("1", { error: "denied: denied by pre-tool hook" }))).toBeUndefined();
     expect(g.check({ type: "text.delta", text: "hi" })).toBeUndefined();
+  });
+
+  it("counts a failure as a refusal only when the text says the rules or the permission answer refused it", () => {
+    const g = guard();
+    g.check(start("1", "run_command"));
+    expect(g.check(end("1", { error: "exit status 1" }))).toMatch(/"run_command" failed without being refused/);
+    const h = createNoneGuard((s) => s.name !== "finish", AGY_REFUSAL);
+    for (const [i, error] of ["denied: denied by pre-tool hook: Tools are disabled.", "denied: denied permission: cli-funnel does not approve tool calls on this transport."].entries()) {
+      h.check(start(String(i), "run_command"));
+      expect(h.check(end(String(i), { error })), error).toBeUndefined();
+    }
+    // A failure that merely looks like a denial, or one the mapper did not mark as denied, is not a refusal.
+    h.check(start("x", "run_command"));
+    expect(h.check(end("x", { error: "denied: permission check failed" }))).toMatch(/failed without being refused/);
+    h.check(start("y", "run_command"));
+    expect(h.check(end("y", { error: "denied by pre-tool hook" }))).toMatch(/failed without being refused/);
+  });
+
+  it("reports a forbidden call that started and never ended, and not one that is allowed", () => {
+    const g = guard();
+    g.check(start("1", "finish"));
+    expect(g.unfinished()).toBeUndefined();
+    g.check(start("2", "write_to_file"));
+    expect(g.unfinished()).toMatch(/"write_to_file" started and never ended/);
   });
 
   it("names the tool that finished without an error", () => {
@@ -69,7 +93,7 @@ describe("the none guard", () => {
     expect(unknown.check(end("1"))).toMatch(/"somethingNew" ran at access "none"/);
     const refused = cursorNoneGuard();
     refused.check(start("1", "read"));
-    expect(refused.check(end("1", { error: "Permission denied" }))).toBeUndefined();
+    expect(refused.check(end("1", { error: "denied: Permission denied" }))).toBeUndefined();
   });
 });
 
@@ -131,6 +155,21 @@ describe.skipIf(process.platform === "win32")("Antigravity print at none, with a
     const run: RunInput = { selection: { provider: "antigravity", model: "m", cwd: dir, access: "none" }, prompt: "hi", providerOptions: { antigravity: { transport: "print" } } };
     for await (const e of antigravityProvider.run(run)) events.push(e);
     expect(events.at(-1)).toMatchObject({ type: "error", code: "cli-failed", message: expect.stringContaining('"run_command" ran at access "none"') });
+    expect(events.some((e) => e.type === "done")).toBe(false);
+  }, 20_000);
+
+  it("stops a run that ends while a forbidden call is still open", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cf-agy-guard-"));
+    const out = [JSON.stringify({ event: "init", conversation_id: "c1", init: { model: "m", cwd: "/w" } }), step(1, "RUNNING"), JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "after" } })];
+    writeFileSync(join(dir, "out.ndjson"), `${out.join("\n")}\n`);
+    const bin = join(dir, "agy");
+    writeFileSync(bin, `#!/bin/sh\ncat ${join(dir, "out.ndjson")}\nsleep 5\n`);
+    chmodSync(bin, 0o755);
+    process.env.CLI_FUNNEL_AGY_BIN = bin;
+    const events: FunnelEvent[] = [];
+    const run: RunInput = { selection: { provider: "antigravity", model: "m", cwd: dir, access: "none" }, prompt: "hi", providerOptions: { antigravity: { transport: "print" } } };
+    for await (const e of antigravityProvider.run(run)) events.push(e);
+    expect(events.at(-1)).toMatchObject({ type: "error", message: expect.stringContaining("started and never ended") });
     expect(events.some((e) => e.type === "done")).toBe(false);
   }, 20_000);
 

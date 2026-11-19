@@ -7,7 +7,7 @@ import { requireMachine } from "../../selection.js";
 import { composePrompt } from "../prompt.js";
 import { bool, dirList, flag, mcpServersFor, oneOf, optionsFor, requireAccess } from "../options.js";
 import { redactErrors } from "../../util/redact.js";
-import { ownedWorkspace } from "../../util/workspace.js";
+import { NO_GIT_ENV, ownedWorkspace } from "../../util/workspace.js";
 import { attachMcp } from "./mcp.js";
 import { cursorNoneGuard } from "../none-guard.js";
 import { FEEDBACK_CHANNELS } from "../feedback.js";
@@ -169,7 +169,7 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   const cwd = input.selection.access === "none" ? await noneWorkspace() : input.selection.cwd;
   const mcp = servers.length ? await attachMcp(servers) : undefined;
   const args = buildArgs(input, model, cwd, mcp ? [mcp.dir] : []);
-  const env = { ...input.env, ...mcp?.env, ...(apiKey ? keyEnv(apiKey) : {}) };
+  const env = { ...input.env, ...mcp?.env, ...(apiKey ? keyEnv(apiKey) : {}), ...(input.selection.access === "none" ? NO_GIT_ENV : {}) };
   // agent reads the prompt from stdin when argv has none.
   const proc = spawnStream(path, args, { cwd, env, signal: input.signal, input: buildPrompt(input) });
   const mapper = new StreamMapper(mapperOptions(input));
@@ -180,7 +180,7 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   try {
     for await (const line of proc.lines) {
       let events = mapper.map(line);
-      const stop = guard && events.map((e) => guard.check(e)).find((reason) => reason !== undefined);
+      const stop = guard && (events.map((e) => guard.check(e)).find((reason) => reason !== undefined) ?? (events.some(isTerminal) ? guard.unfinished() : undefined));
       if (stop) {
         proc.kill();
         events = [{ type: "error", message: stop, code: "cli-failed" }];

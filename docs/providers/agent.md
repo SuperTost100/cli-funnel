@@ -82,6 +82,10 @@ Verified on 2026.10.01, with and without `--force` and `--mode ask`:
 
 `--mode ask` stays on so the model rarely tries a tool at all. Resume works, because every `none` run uses the same folder.
 
+Cursor Agent reads `AGENTS.md` and `.cursor/rules` from every folder above the working folder, and a git marker in the `none` folder does not stop that. Tested with a rule file above the folder: the folder with a hand-made `.git`, one with a real `git init`, and one with none all showed the rule's text in the reply. So a user's instructions can shape the answer at `none`. They cannot run anything: the deny rules still refuse every tool, and a `.cursor/hooks.json` above the folder did not run. Unlike Antigravity, there is no way to keep this out short of a cache folder with no instructions in any folder above it.
+
+`GIT_DIR` and `GIT_WORK_TREE` are taken out of the environment of a `none` run.
+
 ### Run options
 
 The CLI has no system prompt or schema flag. `system` goes in front of the prompt inside `<instructions>`, and `responseSchema` is asked for at the end of the prompt. The result is parsed into `structured` like any other. Images are refused.
