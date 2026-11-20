@@ -153,6 +153,7 @@ export const httpCapabilities = (over: Partial<Capabilities> = {}): Capabilities
   contextWindow: false,
   fast: false,
   resume: true,
+  ephemeral: true,
   approvals: false,
   images: true,
   messages: true,

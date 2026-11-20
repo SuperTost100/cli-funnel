@@ -17,7 +17,7 @@ import {
   type Usage,
 } from "../../types.js";
 import { askApproval, askQuestion, detectInstallation, exitedEarly, findBinary, rawTap, runLogout, runUpdate, spawnLogin, stderrTail } from "../base.js";
-import { bool, dirList, flag, invalidOption, mcpServersFor, object, optionsFor, positive, requireAccess, str, stringList } from "../options.js";
+import { bool, dirList, flag, invalidOption, mcpServersFor, object, optionsFor, positive, requireAccess, str, stringList, unsaved } from "../options.js";
 import { runSecrets } from "../../util/redact.js";
 import { manifestModels } from "../../catalog/manifest.js";
 import { needsArgFile, writeArgFile, type ArgFile } from "../../util/argfile.js";
@@ -47,6 +47,7 @@ const capabilities: Capabilities = {
   contextWindow: true,
   fast: false,
   resume: true,
+  ephemeral: true,
   approvals: true,
   approvalInput: true,
   images: true,
@@ -257,10 +258,7 @@ function optionArgs(input: RunInput, mcpFile?: string): string[] {
   // Claude Code sends subagent tool calls without a flag. Checked here so a bad value fails like the other options.
   bool(o.forwardSubagentTools, "forwardSubagentTools");
   for (const b of stringList(o.betas, "betas") ?? []) args.push(flag("--betas", b));
-  if (bool(o.ephemeral, "ephemeral") !== undefined) {
-    if (input.sessionId) invalidOption("ephemeral applies to new sessions only. Leave it out when you pass sessionId.");
-    if (o.ephemeral) args.push("--no-session-persistence");
-  }
+  if (unsaved(input, bool(o.ephemeral, "ephemeral"))) args.push("--no-session-persistence");
   return args;
 }
 

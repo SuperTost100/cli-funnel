@@ -18,6 +18,11 @@ Antigravity runs over the Agent Client Protocol by default, and token counts fol
 - **`none` runs of Antigravity and Cursor Agent drop `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR` and `GIT_CEILING_DIRECTORIES`** from the child's environment.
 - **A refusal at `none` is told by text agy or cli-funnel writes, not by a tool's output.** Over ACP a tool's own output is never read as the hook's refusal: only the hook's exact text, our permission answer, or a failure with nothing in it counts.
 
+### Added
+
+- **`persist: false`** keeps a one-shot run out of the tool's saved history. It works on Claude Code (`--no-session-persistence`), Codex (an ephemeral thread) and the providers that keep history in cli-funnel's store, and `capabilities.ephemeral` says which. Cursor Agent and Antigravity have no way to skip saving and refuse the run with `unsupported`. It cannot be resumed, so it takes no `sessionId`. See [Runs that are not saved](docs/run-options.md#runs-that-are-not-saved).
+- **`workspaceName`** (lowercase letters, digits, `_` and `-`, up to 40) gives an app its own folder for the access `none` runs of Cursor Agent and Antigravity, so its chats do not pile up in one folder shared by every app.
+
 ### Migrating from 0.9.x
 
 1. Update agy to 1.5.0 or newer, or set `providerOptions.antigravity.transport: "print"` to stay on the old transport. `provider.detect()` says in `detail` when agy is too old.
@@ -25,4 +30,5 @@ Antigravity runs over the Agent Client Protocol by default, and token counts fol
 3. If you use `forwardSubagentText` or `forwardSubagentTools` on Antigravity, set `transport: "print"`. The ACP transport refuses them with `unsupported`.
 4. A run with `apiKey` on Antigravity uses `print` unless you say otherwise. `transport: "acp"` with `apiKey` fails with `unsupported`.
 5. Antigravity no longer sends `access.reduced` at `full`. A session started with `--dangerously-skip-permissions` still reports mode `default` over ACP, so there is nothing to compare.
-6. Check code that reads `capabilities.schema === "native"` or `capabilities.images === false` for Antigravity.
+6. `providerOptions.claude.ephemeral` and `providerOptions.codex.ephemeral` still work. `persist: false` is the same thing for every provider.
+7. Check code that reads `capabilities.schema === "native"` or `capabilities.images === false` for Antigravity.

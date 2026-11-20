@@ -2,10 +2,25 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { FunnelError } from "../types.js";
 
 /** Root for folders cli-funnel owns. Lives under the user's cache dir, never in a shared temp dir. */
 function funnelCacheDir(): string {
   return join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "cli-funnel");
+}
+
+/** Lowercase letters, digits, `_` and `-`, up to 40: a name that is safe in a folder name. Lowercase only, since macOS and Windows treat `Notes` and `notes` as one folder. */
+export const WORKSPACE_NAME = /^[a-z0-9_-]{1,40}$/;
+
+/**
+ * `name` for the shared folder, `name.<caller>` for a caller's own. A caller's name cannot hold a dot, so what follows
+ * the first dot is always a whole name and never the start of another suffix. The name is checked here too, since a
+ * folder name is built from it, whoever calls this.
+ */
+export function workspaceFor(name: string, caller: string | undefined): string {
+  if (caller === undefined) return name;
+  if (typeof caller !== "string" || !WORKSPACE_NAME.test(caller)) throw new FunnelError("workspaceName must be 1 to 40 lowercase letters, digits, _ or -.", "invalid-selection");
+  return `${name}.${caller}`;
 }
 
 /**

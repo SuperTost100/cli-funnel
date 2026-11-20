@@ -436,6 +436,12 @@ describe.skipIf(process.platform === "win32")("antigravity over ACP, with a fake
     expect(agy.received().find((m) => m.method === "session/set_mode")!.params).toEqual({ sessionId: SESSION, modeId: "accept-edits" });
   });
 
+  it("runs at none in the caller's own folder when the run has a workspaceName", async () => {
+    const agy = fakeAgy();
+    await drain(input({ workspaceName: "pyxis" }));
+    expect(agy.received()[0]!.cwd).toMatch(/workspaces[/\\]antigravity-none\.pyxis$/);
+  });
+
   describe("at none, keeping the user's own agy setup out", () => {
     const real = () => join(process.env.HOME!, ".gemini", "antigravity-cli");
     const dirOf = (argv: string[]) => argv.find((a) => a.startsWith("--gemini-dir="))?.slice("--gemini-dir=".length);

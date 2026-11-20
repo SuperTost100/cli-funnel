@@ -187,7 +187,7 @@ The CLI sends the request at every level with tools: it was checked live at `byp
 | `betas: string[]` | `--betas=<header>` | all |
 | `ephemeral: boolean` | `--no-session-persistence`. Refused with `sessionId` | all |
 
-`ephemeral` runs without saving the session to disk, so it cannot be resumed. It works in live sessions too, checked on 2.1.319: one process with the flag answered two turns, and the second turn remembered a word from the first, because the process keeps the conversation in memory. Pass the same `ephemeral` on every turn of a live session, since a turn with other options starts a new process (see [Live sessions](../sessions.md)). That new process would have to resume a session that was never saved, and `ephemeral` with a `sessionId` is refused.
+`ephemeral` is what `persist: false` does on Claude Code (see [Runs that are not saved](../run-options.md#runs-that-are-not-saved)). It runs without saving the session to disk, so it cannot be resumed. It works in live sessions too, checked on 2.1.319: one process with the flag answered two turns, and the second turn remembered a word from the first, because the process keeps the conversation in memory. Pass the same `ephemeral` on every turn of a live session, since a turn with other options starts a new process (see [Live sessions](../sessions.md)). That new process would have to resume a session that was never saved, and `ephemeral` with a `sessionId` is refused.
 
 `forkSession` works on live sessions: the fork gets its own process and the parent's stays up. See [Live sessions](../sessions.md#fork-a-session).
 

@@ -7,7 +7,7 @@ import { requireMachine } from "../../selection.js";
 import { composePrompt } from "../prompt.js";
 import { bool, dirList, flag, mcpServersFor, oneOf, optionsFor, requireAccess } from "../options.js";
 import { redactErrors } from "../../util/redact.js";
-import { NO_GIT_ENV, ownedWorkspace } from "../../util/workspace.js";
+import { NO_GIT_ENV, ownedWorkspace, workspaceFor } from "../../util/workspace.js";
 import { attachMcp } from "./mcp.js";
 import { cursorNoneGuard } from "../none-guard.js";
 import { FEEDBACK_CHANNELS } from "../feedback.js";
@@ -71,8 +71,8 @@ export const NONE_PERMISSIONS = {
 };
 
 /** The empty folder `none` runs in. It holds only the deny rules. */
-export function noneWorkspace(): Promise<string> {
-  return ownedWorkspace("agent-none", { ".cursor/cli.json": `${JSON.stringify(NONE_PERMISSIONS, null, 2)}\n` });
+export function noneWorkspace(caller?: string): Promise<string> {
+  return ownedWorkspace(workspaceFor("agent-none", caller), { ".cursor/cli.json": `${JSON.stringify(NONE_PERMISSIONS, null, 2)}\n` });
 }
 
 /** Access maps to CLI flags. `accept-edits` has no flag and `supervised` has no approval passthrough, so neither is offered. */
@@ -166,7 +166,7 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
   const apiKey = input.apiKey;
   if (apiKey) await requireIsolatedStore(path);
   const model = toCliModel(input.selection, await knownIds(apiKey ? keyEnv(apiKey) : undefined));
-  const cwd = input.selection.access === "none" ? await noneWorkspace() : input.selection.cwd;
+  const cwd = input.selection.access === "none" ? await noneWorkspace(input.workspaceName) : input.selection.cwd;
   const mcp = servers.length ? await attachMcp(servers) : undefined;
   const args = buildArgs(input, model, cwd, mcp ? [mcp.dir] : []);
   const env = { ...input.env, ...mcp?.env, ...(apiKey ? keyEnv(apiKey) : {}), ...(input.selection.access === "none" ? NO_GIT_ENV : {}) };
