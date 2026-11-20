@@ -9,7 +9,7 @@ import { denyNote, effectiveReply, isQuestion, toApprovalRequest, toQuestionRepl
 import { authKind } from "./auth.js";
 import { isOwnFeatureWarning, Translator, warningText } from "./events.js";
 import { BINARY, INITIALIZE_PARAMS } from "./index.js";
-import { agentConfig, codexForward, threadOptions } from "./options.js";
+import { agentConfig, codexForward, noneServers, threadOptions } from "./options.js";
 import { RpcClient } from "./rpc.js";
 import { configServers, noToolsConfig } from "./tools.js";
 import { ignoreFolderConfig, repoSkillPaths, userSkillRules } from "./folder.js";
@@ -29,7 +29,7 @@ function threadSettings(input: RunInput, agent: Record<string, unknown>, servers
     ...extra.config,
     ...agent,
     ...folder,
-    ...(sel.access === "none" ? noToolsConfig(servers) : {}),
+    ...(sel.access === "none" ? noToolsConfig(servers, noneServers(input)) : {}),
     ...(roots ? { "sandbox_workspace_write.writable_roots": roots } : {}),
   };
   return {

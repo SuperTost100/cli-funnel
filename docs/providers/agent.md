@@ -189,7 +189,11 @@ The provider writes such a folder to `~/.cache/cli-funnel/workspaces/agent-mcp/<
 
 - Plugin servers need no approval, so `--approve-mcps` is not passed. It would also approve every unapproved server in the user's own config, and the approvals live in a file under `~/.cursor`, which this provider must not write.
 - At `auto` the classifier lets the calls through. At `full` `--force` does. Both were run live with a local server that checks the `Authorization` header (`test/agent-mcp-live.test.ts`, `CLI_FUNNEL_LIVE=1`).
-- `none` is refused by the contract, and its deny rules block `Mcp(*:*)` anyway. `supervised` does not exist here.
+- **`none` refuses `mcpServers`** (`invalid-selection`), and `capabilities.mcpServersAtNone` is empty. Cursor Agent cannot keep the user's own MCP servers out of a run while it allows yours, and cli-funnel does not claim it. What was tried and why it was dropped:
+  - A deny rule beats every allow rule, so `Mcp(*:*)` cannot stay and one server be allowed. The only other way is to deny the user's servers by name, from `agent mcp list`. That list misses servers that marketplace plugins ship under `~/.cursor/plugins/cache`, and a list that fails to parse or whose format changes comes back empty, which denies nothing.
+  - Ask mode, which keeps the model off most tools, also blocks MCP calls ("Blocked by Ask mode"). Without it `glob`, `getMcpTools` and `task` (a subagent, whose own tools were never checked) stay available.
+  - The caller's header and env values travel in `CLI_FUNNEL_MCP_*` variables, which every process Cursor starts inherits, a shell command included.
+  `supervised` does not exist here. Use Claude Code, Codex or Antigravity over ACP when the model has to call your tools and nothing else.
 - `toolTimeoutSec` fails the run with `unsupported`: the MCP config has no timeout field.
 - `autoApprove` has no effect. There is no approval step to skip.
 - The model sees the tools as `plugin-funnel-<server>-<tool>`. The stream reports them as `mcp` tool calls whose input holds the server and tool name.

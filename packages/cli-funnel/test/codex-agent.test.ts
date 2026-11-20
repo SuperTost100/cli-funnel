@@ -337,8 +337,8 @@ describe("codex MCP servers and feature config", () => {
     });
   });
 
-  it("refuses servers at none and stdio below full", () => {
-    expect(() => mcpConfig(input("none", { mcpServers: { a: http() } }))).toThrow(/not allowed/);
+  it("leaves servers at none to the table that switches the user's servers off, and refuses stdio below full", () => {
+    expect(mcpConfig(input("none", { mcpServers: { a: http() } }))).toEqual({});
     expect(() => mcpConfig(input("supervised", { mcpServers: { a: { type: "stdio", command: "x" } } }))).toThrow(/not allowed/);
     expect(mcpConfig(input("supervised", { mcpServers: { a: http() } }))).toEqual({ "mcp_servers.a.url": "http://127.0.0.1:7777/mcp" });
   });
@@ -742,6 +742,15 @@ describe("codex agent features through the app-server", () => {
     await expect(run("plain", { mcpServers: { app: http() } })).rejects.toMatchObject({ code: "invalid-selection" });
     // Only the first run started a thread.
     expect(entries().filter((e) => e.method === "thread/start")).toHaveLength(1);
+  });
+
+  it("refuses a caller's server named like one in the user's config at every level and on resume, before a thread starts", async () => {
+    process.env.FAKE_MCP = JSON.stringify({ app: { url: "http://x" } });
+    for (const access of ["none", "auto", "full"] as const) {
+      await expect(run("plain", { selection: { provider: "codex", model: "m", cwd, access }, mcpServers: { app: http() } }), access).rejects.toMatchObject({ code: "invalid-selection" });
+    }
+    await expect(run("plain", { selection: { provider: "codex", model: "m", cwd, access: "none" }, sessionId: "thread-1", mcpServers: { app: http() } })).rejects.toMatchObject({ code: "invalid-selection" });
+    expect(entries().some((e) => e.method === "thread/start" || e.method === "thread/resume")).toBe(false);
   });
 
   it("at none switches off every MCP server the app-server's config/read reports, dotted names too", async () => {

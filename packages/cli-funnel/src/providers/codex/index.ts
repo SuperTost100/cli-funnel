@@ -75,6 +75,7 @@ export const codexProvider: Provider = {
     system: "native",
     schema: "native",
     mcpServers: ["http", "stdio"],
+    mcpServersAtNone: ["http", "stdio"],
     apiKey: true,
     plan: true,
     fileChanges: true,

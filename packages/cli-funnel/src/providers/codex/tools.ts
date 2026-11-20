@@ -1,3 +1,5 @@
+import { FunnelError } from "../../types.js";
+
 /**
  * Feature flags that add tools or side effects. `none` turns them off. Checked against
  * `codex features list` on 0.166. Unknown keys are ignored by Codex, so a renamed flag fails open:
@@ -43,7 +45,11 @@ export function configServers(res: unknown): string[] {
  * since an empty table does not replace them. The names go in a nested table, because a dotted key cannot spell a
  * name with a dot: `mcp_servers.a.b.enabled` is server `a`. Codex merges the table into the config, checked on 0.166.
  */
-export function noToolsConfig(servers: string[]): Record<string, unknown> {
+export function noToolsConfig(servers: string[], callers: Record<string, Record<string, unknown>> = {}): Record<string, unknown> {
+  // The run refuses such a name before it gets here. This keeps a caller's server from taking the place of one that is switched off.
+  const taken = Object.keys(callers).filter((name) => servers.includes(name));
+  if (taken.length) throw new FunnelError(`MCP server ${taken.join(", ")} is already in the user's Codex config. Give the server another name.`, "invalid-selection");
+  const table = { ...Object.fromEntries(servers.map((name) => [name, { enabled: false }])), ...callers };
   return Object.fromEntries([
     ...TOOL_FEATURES.map((f) => [`features.${f}`, false]),
     ["web_search", "disabled"],
@@ -51,6 +57,6 @@ export function noToolsConfig(servers: string[]): Record<string, unknown> {
     // `apply_patch` has no switch any more: at `none` the sandbox is read-only and every approval is denied, so it
     // cannot change a file.
     ["features.view_image", false],
-    ...(servers.length ? [["mcp_servers", Object.fromEntries(servers.map((name) => [name, { enabled: false }]))]] : []),
+    ...(Object.keys(table).length ? [["mcp_servers", table]] : []),
   ]);
 }

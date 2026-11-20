@@ -67,7 +67,8 @@ function runCli(args: string[], opts: { stdin?: string; env?: Record<string, str
     // Readline refuses a question once stdin has ended, so the answer goes in after the prompt appears.
     child.stderr.on("data", (d) => {
       stderr += d;
-      if (opts.stdin && stderr.includes("[y/N]")) child.stdin.end(opts.stdin);
+      // Once: a later chunk still holds the prompt, and writing to an ended stdin is an unhandled error.
+      if (opts.stdin && stderr.includes("[y/N]") && !child.stdin.writableEnded) child.stdin.end(opts.stdin);
     });
     child.on("error", reject);
     child.on("close", (code) => resolve({ code, stdout, stderr }));

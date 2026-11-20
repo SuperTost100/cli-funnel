@@ -204,6 +204,8 @@ export interface ExecOptions {
   input?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** Windows: pass the arguments to the program as they are, with no quoting. For `cmd.exe /s /c "<line>"`, which reads the line itself. */
+  verbatim?: boolean;
 }
 
 /**
@@ -213,11 +215,11 @@ export interface ExecOptions {
 export function start(
   file: string,
   args: string[],
-  opts: Pick<ExecOptions, "cwd" | "env" | "signal"> = {},
+  opts: Pick<ExecOptions, "cwd" | "env" | "signal" | "verbatim"> = {},
 ): { child: ChildProcessWithoutNullStreams; release(): void } {
   const command = cliCommand(file, args);
   const child = spawn(command.file, command.args, {
-    windowsVerbatimArguments: command.windowsVerbatimArguments,
+    windowsVerbatimArguments: opts.verbatim || command.windowsVerbatimArguments,
     cwd: opts.cwd,
     env: childEnv(opts.env),
     stdio: ["pipe", "pipe", "pipe"],

@@ -61,7 +61,9 @@ export function threadOptions(input: RunInput): CodexThreadOptions {
  */
 export function mcpConfig(input: RunInput): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  for (const [name, s] of mcpServersFor(input, ["http", "stdio"])) {
+  // At `none` the servers go in the `mcp_servers` table of `noToolsConfig`, which also switches the user's servers off.
+  if (input.selection.access === "none") return out;
+  for (const [name, s] of mcpServersFor(input, ["http", "stdio"], undefined, ["http", "stdio"])) {
     const key = `mcp_servers.${name}`;
     if (s.type === "http") {
       out[`${key}.url`] = s.url;
@@ -84,7 +86,7 @@ export function mcpConfig(input: RunInput): Record<string, unknown> {
  * - The model offers `request_user_input` outside plan mode only with the `default_mode_request_user_input` feature.
  *   It is switched on when the caller passes `onQuestion`. Asking the user touches nothing on the machine, so every
  *   level takes it.
- * - The caller's MCP servers. `mcpServersFor` refuses them at `none`, and stdio servers below `full`.
+ * - The caller's MCP servers, below `none`: `mcpServersFor` refuses stdio servers below `full`. At `none` they come from `noneServers`.
  */
 export function agentConfig(input: RunInput): Record<string, unknown> {
   const { access } = requireMachine(input.selection);
@@ -93,6 +95,25 @@ export function agentConfig(input: RunInput): Record<string, unknown> {
     ...(input.onQuestion ? { "features.default_mode_request_user_input": true } : {}),
     ...mcpConfig(input),
   };
+}
+
+/**
+ * The caller's servers for `none`, as the nested `mcp_servers` table that `noToolsConfig` merges with the user's servers
+ * it switches off. Every tool of these servers is approved ahead of time: at `none` nothing asks, and they are the only
+ * tools the model has. Codex has no per-run list of servers to allow, so the user's own are disabled by name.
+ */
+export function noneServers(input: RunInput): Record<string, Record<string, unknown>> {
+  const out: Record<string, Record<string, unknown>> = {};
+  for (const [name, s] of mcpServersFor(input, ["http", "stdio"], undefined, ["http", "stdio"])) {
+    out[name] =
+      s.type === "http"
+        ? { url: s.url, ...(s.headers && Object.keys(s.headers).length ? { http_headers: s.headers } : {}) }
+        : { command: s.command, ...(s.args ? { args: s.args } : {}), ...(s.env && Object.keys(s.env).length ? { env: s.env } : {}) };
+    out[name]!.default_tools_approval_mode = "approve";
+    out[name]!.required = true;
+    if (s.toolTimeoutSec !== undefined) out[name]!.tool_timeout_sec = s.toolTimeoutSec;
+  }
+  return out;
 }
 
 /** The subagent work a Codex run turns into events, from `providerOptions.codex`. */

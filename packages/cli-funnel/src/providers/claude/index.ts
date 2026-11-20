@@ -54,6 +54,7 @@ const capabilities: Capabilities = {
   system: "native",
   schema: "native",
   mcpServers: ["http", "stdio"],
+  mcpServersAtNone: ["http", "stdio"],
   apiKey: true,
   plan: true,
   fileChanges: true,
@@ -114,7 +115,7 @@ function asksCaller(input: RunInput): boolean {
 
 /** Names of the caller's HTTP MCP servers whose tool calls run without `onApproval`. */
 function autoApproved(input: RunInput): Set<string> {
-  return new Set(mcpServersFor(input, MCP_KINDS).flatMap(([name, s]) => (s.type === "http" && s.autoApprove ? [name] : [])));
+  return new Set(mcpServersFor(input, MCP_KINDS, undefined, MCP_KINDS).flatMap(([name, s]) => (s.type === "http" && s.autoApprove ? [name] : [])));
 }
 
 /**
@@ -145,7 +146,7 @@ function mcpConfig(input: RunInput): Record<string, unknown> | undefined {
   const own = object(optionsFor(input, "claude", OPTION_KEYS).mcpConfig, "mcpConfig");
   // A stdio MCP server is a command that starts before any permission check.
   if (own) requireAccess(requireMachine(input.selection).access, ["full"], "mcpConfig");
-  const servers = mcpServersFor(input, MCP_KINDS);
+  const servers = mcpServersFor(input, MCP_KINDS, undefined, MCP_KINDS);
   if (!servers.length) return own;
   const merged: Record<string, unknown> = { ...object(own?.mcpServers, "mcpConfig.mcpServers") };
   for (const [name, server] of servers) {
@@ -240,6 +241,8 @@ function optionArgs(input: RunInput, mcpFile?: string): string[] {
   }
   const mcp = mcpConfig(input);
   if (mcp) args.push(flag("--mcp-config", mcpFile ?? JSON.stringify(mcp)));
+  // `none` has no built-in tools and no prompts, so the caller's servers are allowed by name, all of their tools. `--strict-mcp-config` keeps the user's own servers out.
+  if (access === "none") for (const [name] of mcpServersFor(input, MCP_KINDS, undefined, MCP_KINDS)) args.push(flag("--allowed-tools", `mcp__${name}`));
   const agents = object(o.agents, "agents");
   if (agents) {
     requireAccess(access, NOT_NONE, "agents");

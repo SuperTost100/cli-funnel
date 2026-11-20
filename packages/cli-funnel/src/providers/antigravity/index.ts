@@ -1,7 +1,8 @@
+import { randomBytes } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
-import { lstat, mkdir, mkdtemp, realpath, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, realpath, rename, rm, stat, symlink, unlink, utimes, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { manifestModels, mergeModels } from "../../catalog/manifest.js";
 import { Channel } from "../../util/channel.js";
 import { needsArgFile, writeArgFile } from "../../util/argfile.js";
@@ -27,15 +28,15 @@ import { detectInstallation, exitedEarly, findBinary, isTerminal, LOGIN_TIMEOUT_
 import { redactErrors, runSecrets } from "../../util/redact.js";
 import { createMapper, parseModels, parseRateLimits, parseWarning } from "./parser.js";
 import { openAcpSession, type AcpSetup } from "./acp/session.js";
-import { ACP_MIN_VERSION } from "./acp/protocol.js";
+import { ACP_MIN_VERSION, checkAcpServers, reserveServers } from "./acp/protocol.js";
 import { SubagentTranscripts, type ForwardSubagents } from "./transcript.js";
 import { composePrompt } from "../prompt.js";
 import { createNoneGuard } from "../none-guard.js";
-import { AGY_REFUSAL, DENY_REASON } from "./deny.js";
+import { AGY_REFUSAL, DENY_REASON, DENY_REASON_WITH_MCP } from "./deny.js";
 import { FEEDBACK_CHANNELS } from "../feedback.js";
 import { bool, dirList, flag, mcpServersFor, oneOf, optionsFor, positive, requireAccess } from "../options.js";
 import { requireMachine } from "../../selection.js";
-import { NO_GIT_ENV, ownedWorkspace, workspaceFor } from "../../util/workspace.js";
+import { NO_GIT_ENV, ownedWorkspace, workspaceFor, workspacePath } from "../../util/workspace.js";
 
 const TESTED = { min: "1.2.0" };
 
@@ -123,14 +124,102 @@ const DENY = { decision: "deny", reason: DENY_REASON };
 export const NONE_MATCHER = "(?s)^(?:[^f].*|f[^i].*|fi[^n].*|fin[^i].*|fini[^s].*|finis[^h].*|finish.+|.{0,5})$";
 
 /**
- * Hook file for `none`. agy loads `.agents/hooks.json` from the cwd, and a `deny` from a PreToolUse hook blocks the
- * call before any permission check. Allow decisions from other hooks do not override it, and a failing hook also blocks.
+ * A regular expression that matches every string except `names`, and every string that starts with one of `prefixes`
+ * left out as well. Go regexp has no lookahead, so the complement is spelled out as a trie: at each step a character that
+ * continues no name matches the rest, a character that continues a name goes on with that name, and a string that ends
+ * early or runs past a whole name matches. `NONE_MATCHER` is this for `finish`. This is what a hook matcher can say: it
+ * tests the tool's name and nothing in its arguments.
  */
-export function noneHooks(platform: NodeJS.Platform = process.platform): Record<string, unknown> {
-  const json = JSON.stringify(DENY);
-  // The hook runs through `sh -c`, or `cmd /c` on Windows. It drains stdin so agy never writes to a closed pipe.
-  const command = platform === "win32" ? `echo ${json}` : `cat >/dev/null; printf '%s\\n' '${json}'`;
-  return { "cli-funnel-none": { PreToolUse: [{ matcher: NONE_MATCHER, hooks: [{ type: "command", command, timeout: 10 }] }] } };
+export function exceptNames(names: readonly string[], prefixes: readonly string[] = []): string {
+  type Node = { children: Map<string, Node>; end: boolean; prefix: boolean };
+  const root: Node = { children: new Map(), end: false, prefix: false };
+  const add = (word: string, flag: "end" | "prefix") => {
+    let node = root;
+    for (const ch of word) {
+      if (!node.children.has(ch)) node.children.set(ch, { children: new Map(), end: false, prefix: false });
+      node = node.children.get(ch)!;
+    }
+    node[flag] = true;
+  };
+  for (const name of names) add(name, "end");
+  for (const prefix of prefixes) add(prefix, "prefix");
+  const esc = (c: string) => c.replace(/[\\^$.|?*+()[\]{}-]/g, "\\$&");
+  const alternatives = (node: Node): string[] => {
+    // Everything from here on starts with an excluded prefix.
+    if (node.prefix) return [];
+    const chars = [...node.children.keys()].map(esc).join("");
+    const out = [chars ? `[^${chars}].*` : ".+"];
+    for (const [ch, child] of node.children) out.push(...alternatives(child).map((a) => esc(ch) + a));
+    // A string that ends here is a proper prefix of a name, or is empty, and is not a name. One that runs on is longer.
+    if (node.end) out.push(".+");
+    else out.push("");
+    return out;
+  };
+  // `(?s)` lets `.` match a line break, so a name with one in it is still refused.
+  return `(?s)^(?:${alternatives(root).join("|")})$`;
+}
+
+const DENY_WITH_MCP = { decision: "deny", reason: DENY_REASON_WITH_MCP };
+
+/** The tool names that start with a run's prefix are the run's own servers' tools. */
+export const mcpPrefix = (run: string): string => `mcp_clifunnel${run}_`;
+
+/**
+ * The command of a deny hook: it drains stdin so agy never writes to a closed pipe, then prints the deny answer. It runs
+ * through `sh -c`, or `cmd /c` on Windows, and needs nothing but those, no Node and no copy of the host app.
+ */
+export function denyCommand(platform: NodeJS.Platform, answer: object = DENY): string {
+  const json = JSON.stringify(answer);
+  return platform === "win32" ? `echo ${json}` : `cat >/dev/null; printf '%s\\n' '${json}'`;
+}
+
+/**
+ * Hook file for `none`. agy loads `.agents/hooks.json` from the cwd, and a `deny` from a PreToolUse hook blocks the call
+ * before any permission check. Allow decisions from other hooks do not override it, and a failing hook also blocks. The
+ * matcher decides which calls reach the hook: every tool name but `finish`, which ends the turn and carries the
+ * `--json-schema` answer, and, for a run with MCP servers, the names that start with this run's prefix, so the hook is a
+ * fixed deny and needs no script. `call_mcp_tool` is not left out: it names its server in its arguments, which a matcher
+ * cannot see, so the model reaches the run's servers by the tool names agy gives them.
+ */
+export function noneHooks(platform: NodeJS.Platform = process.platform, run?: string): Record<string, unknown> {
+  const matcher = run === undefined ? NONE_MATCHER : exceptNames(["finish"], [mcpPrefix(run)]);
+  const command = denyCommand(platform, run === undefined ? DENY : DENY_WITH_MCP);
+  return { "cli-funnel-none": { PreToolUse: [{ matcher, hooks: [{ type: "command", command, timeout: 10 }] }] } };
+}
+
+/**
+ * Runs a hook command once, the way agy will, with a call that must be refused on stdin, and answers whether it printed the
+ * deny answer. agy reads a hook that exits 0 and prints nothing as "allow", so a command that starts something else, or
+ * does nothing, would leave every tool open. Nothing is trusted that this has not seen work.
+ */
+export async function hookDenies(command: string, platform: NodeJS.Platform = process.platform): Promise<boolean> {
+  const call = JSON.stringify({ hookEventName: "PreToolUse", toolCall: { id: "self-test", name: "run_command", args: { CommandLine: "true" } } });
+  const [file, args] = platform === "win32" ? [process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", `"${command}"`]] : ["sh", ["-c", command]];
+  const res = await exec(file, args, { input: call, timeoutMs: 10_000, verbatim: platform === "win32" }).catch(() => undefined);
+  if (!res || res.code !== 0) return false;
+  try {
+    return JSON.parse(res.stdout.trim().split("\n").at(-1) ?? "").decision === "deny";
+  } catch {
+    return false;
+  }
+}
+
+/** The commands already shown to deny, so a process checks each once. */
+const verified = new Map<string, Promise<boolean>>();
+
+/** Forgets which hook commands were shown to deny, so the next run checks again. For tests. */
+export const forgetVerifiedHooks = (): void => verified.clear();
+
+/** Fails the run with `unsupported` unless the hook of a `none` run, as agy will run it, prints the deny answer. */
+export async function requireWorkingHook(run?: string): Promise<void> {
+  const hooks = noneHooks(process.platform, run) as { "cli-funnel-none": { PreToolUse: { hooks: { command: string }[] }[] } };
+  const command = hooks["cli-funnel-none"].PreToolUse[0]!.hooks[0]!.command;
+  let ok = verified.get(command);
+  if (!ok) verified.set(command, (ok = hookDenies(command)));
+  if (!(await ok)) {
+    verified.delete(command);
+    throw new FunnelError("The deny hook that keeps tools off at access none does not print its answer when run through the shell, so agy would read it as allow. The run was not started.", "unsupported");
+  }
 }
 
 /**
@@ -142,9 +231,86 @@ export function noneHooks(platform: NodeJS.Platform = process.platform): Record<
  */
 export const GIT_MARKER: Record<string, string> = { ".git/HEAD": "ref: refs/heads/main\n", ".git/objects/": "", ".git/refs/": "" };
 
-/** The empty folder `none` runs in. It holds only the deny hook, and the marker that makes it the root of its own repository. */
-export function noneWorkspace(caller?: string): Promise<string> {
-  return ownedWorkspace(workspaceFor("antigravity-none", caller), { ...GIT_MARKER, ".agents/hooks.json": `${JSON.stringify(noneHooks(), null, 2)}\n` });
+/**
+ * The empty folder `none` runs in. It holds only the deny hook and the marker that makes it the root of its own
+ * repository. A run with MCP servers has a folder of its own, `.run.<id>`, since its hook names the run's random prefix.
+ * Every suffix starts with a dot, which a caller's name cannot hold, so no name gives one run the folder of another.
+ */
+export function noneWorkspace(caller?: string, run?: string): Promise<string> {
+  const name = workspaceFor("antigravity-none", caller) + (run === undefined ? "" : `.run.${run}`);
+  return ownedWorkspace(name, { ...GIT_MARKER, ".agents/hooks.json": `${JSON.stringify(noneHooks(process.platform, run), null, 2)}\n` });
+}
+
+/** Removes the folder of a run with MCP servers once the run is over. */
+export const removeRunWorkspace = (dir: string): Promise<void> => rm(dir, { recursive: true, force: true });
+
+/**
+ * Refuses the caller's MCP servers at `none` on Windows. They are the only tools the model may use there, and the hook
+ * that refuses every other one is a shell command run through `cmd.exe`, which has not been shown to deny on Windows. A
+ * tool that gets past it would be a tool the caller did not list. Lift this once a live run on Windows shows the deny.
+ */
+export function requireMcpAtNoneHere(servers: readonly unknown[], platform: NodeJS.Platform = process.platform): void {
+  if (platform === "win32" && servers.length) {
+    throw new FunnelError('Antigravity takes MCP servers at access "none" only off Windows. The hook that keeps every other tool off has not been shown to deny there. Use another access level, or leave the servers out.', "unsupported");
+  }
+}
+
+/**
+ * Runs `fn` while holding the lock of a run's folder, a folder `<dir>.lock` that only one process can make. The sweep takes
+ * it to check a folder's age and remove it, and a turn takes it to put the folder back and mark it as in use, so a turn
+ * never runs between the sweep's check and its removal and loses the hook file that is the only restriction at `none`.
+ * A lock older than `LOCK_STALE_MS` belongs to a process that died, and is taken over.
+ */
+export async function withFolderLock<T>(dir: string, fn: () => Promise<T>): Promise<T> {
+  const lock = `${dir}.lock`;
+  for (let tries = 0; ; tries++) {
+    try {
+      await mkdir(lock, { mode: 0o700 });
+      break;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      const info = await stat(lock).catch(() => undefined);
+      if (info && Date.now() - info.mtimeMs > LOCK_STALE_MS) await rm(lock, { recursive: true, force: true }).catch(() => undefined);
+      else if (tries >= LOCK_TRIES) throw new FunnelError("The folder of this run is locked by another process.", "cli-failed");
+      else await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    await rm(lock, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+/** A folder lock this old was left by a process that died. */
+const LOCK_STALE_MS = 30_000;
+/** How many 10 ms waits a lock gets before the call fails. */
+const LOCK_TRIES = 1_000;
+
+/**
+ * Removes the folders of runs that ended without cleaning up, such as a host that exited before agy did. Only folders
+ * named like a run's, and only those not touched for `maxAgeMs`, a day by default: a kept-alive session may hold its own
+ * for hours. Failures are ignored, since this is housekeeping.
+ */
+export async function sweepRunWorkspaces(maxAgeMs = 24 * 3_600_000): Promise<void> {
+  const root = dirname(workspacePath("x"));
+  const names = await readdir(root).catch(() => [] as string[]);
+  await Promise.all(
+    names
+      .filter((n) => /^antigravity-none(\.[a-z0-9_-]+)?\.run\.[0-9a-f]{8}$/.test(n))
+      .map(async (n) => {
+        const dir = join(root, n);
+        const old = async () => {
+          const info = await stat(dir).catch(() => undefined);
+          return info !== undefined && Date.now() - info.mtimeMs > maxAgeMs;
+        };
+        if (!(await old())) return;
+        // Look again under the lock a turn takes, so a turn that marked the folder as in use in between keeps it.
+        await withFolderLock(dir, async () => {
+          if (await old()) await rm(dir, { recursive: true, force: true });
+        }).catch(() => undefined);
+      }),
+  );
 }
 
 /**
@@ -409,10 +575,13 @@ async function* runPrint(input: RunInput): AsyncGenerator<FunnelEvent> {
   if (!path) throw new FunnelError("agy is not installed.", "not-installed");
   if (input.attachments?.length) throw new FunnelError('Antigravity takes image attachments only over ACP. Use providerOptions.antigravity.transport "acp".', "unsupported");
   const models = listed?.some((m) => m.id === input.selection.model) ? listed : await manifestModels("antigravity");
-  const servers = mcpServersFor(input, ["http", "stdio"], "Antigravity");
+  const servers = mcpServersFor(input, ["http", "stdio"], "Antigravity", ["http", "stdio"]);
   // At accept-edits agy denies every MCP tool call, because headless mode cannot ask. Attaching servers there would only fail.
+  // At none the print transport has no way to let the servers through its deny hook and refuse the rest.
+  if (servers.length && input.selection.access === "none") throw new FunnelError('MCP servers at access "none" need the ACP transport.', "unsupported");
   if (servers.length) requireAccess(requireMachine(input.selection).access, ["full"], "Antigravity MCP servers");
   const cwd = input.selection.access === "none" ? await noneWorkspace(input.workspaceName) : input.selection.cwd;
+  if (input.selection.access === "none") await requireWorkingHook();
   const home = input.apiKey ? await apiKeyHome() : undefined;
   const mcp = servers.length ? await mcpWorkspace(servers) : undefined;
   // A long schema would count against the command-line limit, so it goes through a private temp file removed after the run.
@@ -559,17 +728,34 @@ async function acpSetup(input: RunInput): Promise<AcpSetup> {
   if (input.apiKey !== undefined) throw new FunnelError('Antigravity runs on an API key only with transport "print".', "unsupported");
   if (forward) throw new FunnelError('forwardSubagentText and forwardSubagentTools read the print transport\'s output. Use transport "print" for them.', "unsupported");
   const access = requireMachine(input.selection).access;
-  const servers = mcpServersFor(input, ["http", "stdio"], "Antigravity");
-  if (servers.length) requireAccess(access, ["full"], "Antigravity MCP servers");
-  const cwd = access === "none" ? await noneWorkspace(input.workspaceName) : input.selection.cwd!;
-  const mcp = servers.length ? await mcpWorkspace(servers) : undefined;
-  const args = [
-    ...(dirs ?? []).map((d) => flag("--add-dir", d)),
-    ...(mcp ? [flag("--add-dir", mcp.dir)] : []),
-    ...(access === "full" ? ["--dangerously-skip-permissions"] : []),
-    // At `none` the user's own agy setup stays out: see `noneGeminiDir`.
-    ...(access === "none" ? [flag("--gemini-dir", await noneGeminiDir())] : []),
-  ];
+  const servers = mcpServersFor(input, ["http", "stdio"], "Antigravity", ["http", "stdio"]);
+  // At accept-edits agy asks about every MCP call, and nobody can answer there.
+  if (servers.length) requireAccess(access, ["none", "full"], "Antigravity MCP servers");
+  if (access === "none") requireMcpAtNoneHere(servers);
+  checkAcpServers(servers);
+  // The names the servers have inside agy carry a random part of this run, so nothing that exists beforehand can share them.
+  const run = randomBytes(4).toString("hex");
+  const mcp = reserveServers(servers, run);
+  // A run at `none` with servers has a folder of its own, removed when the process ends. The hook that runs there is
+  // shown to deny before anything starts.
+  if (access === "none" && servers.length) await sweepRunWorkspaces();
+  const ownsFolder = access === "none" && servers.length > 0;
+  const folderRun = ownsFolder ? run : undefined;
+  const cwd = access === "none" ? await noneWorkspace(input.workspaceName, folderRun) : input.selection.cwd!;
+  // Up to the moment agy starts, a failure takes the run's own folder with it.
+  let args: string[];
+  try {
+    if (access === "none") await requireWorkingHook(folderRun);
+    args = [
+      ...(dirs ?? []).map((d) => flag("--add-dir", d)),
+      ...(access === "full" ? ["--dangerously-skip-permissions"] : []),
+      // At `none` the user's own agy setup stays out: see `noneGeminiDir`.
+      ...(access === "none" ? [flag("--gemini-dir", await noneGeminiDir())] : []),
+    ];
+  } catch (err) {
+    if (ownsFolder) await removeRunWorkspace(cwd).catch(() => undefined);
+    throw err;
+  }
   return {
     path,
     cwd,
@@ -582,23 +768,54 @@ async function acpSetup(input: RunInput): Promise<AcpSetup> {
     onModels: (live) => {
       listed = mergeModels(live, listed ?? []);
     },
+    mcpServers: mcp.acp,
+    mcpCallers: mcp.callers,
+    ...(access === "none" && servers.length ? { allowMcp: new Set(mcp.reserved) } : {}),
+    // Before every turn at `none`: the folder and the hook in it are put back as they should be, and a folder of a run is
+    // marked as in use, so the sweep of another process, which goes by the time of its last change, leaves it alone.
+    ...(access === "none"
+      ? {
+          refresh: async () => {
+            if (!ownsFolder) {
+              await noneWorkspace(input.workspaceName, folderRun);
+              return;
+            }
+            // Under the lock the sweep takes, so the sweep cannot remove the folder between the two steps.
+            await withFolderLock(cwd, async () => {
+              await noneWorkspace(input.workspaceName, folderRun);
+              await utimes(cwd, new Date(), new Date());
+            });
+          },
+        }
+      : {}),
     cleanup: async () => {
-      await mcp?.remove();
+      if (ownsFolder) await removeRunWorkspace(cwd);
     },
   };
 }
 
 const transportOf = (input: RunInput) => checkOptions(input).transport;
 
+/** Opens the session. When that fails, the run's own folder goes with it, since nothing else would remove it. */
+async function openAcp(input: RunInput): Promise<LiveSession> {
+  const setup = await acpSetup(input);
+  try {
+    return await openAcpSession(input, setup);
+  } catch (err) {
+    await setup.cleanup().catch(() => undefined);
+    throw err;
+  }
+}
+
 async function openSession(input: RunInput): Promise<LiveSession | undefined> {
   // The print transport starts a process per turn and keeps nothing alive, so it has no live session. The funnel runs it directly.
   if (transportOf(input) === "print") return undefined;
-  return openAcpSession(input, await acpSetup(input));
+  return openAcp(input);
 }
 
 async function* runRaw(input: RunInput): AsyncGenerator<FunnelEvent> {
   if (transportOf(input) === "print") return yield* runPrint(input);
-  const session = await openAcpSession(input, await acpSetup(input));
+  const session = await openAcp(input);
   try {
     yield* session.turn(input);
   } finally {
@@ -667,6 +884,8 @@ export const antigravityProvider: Provider = {
     // ACP has no schema field. The `print` transport passes `--json-schema`, but the default does not.
     schema: "prompt",
     mcpServers: ["http", "stdio"],
+    // Not on Windows: the run refuses servers at `none` there with `unsupported`, see `requireMcpAtNoneHere`.
+    mcpServersAtNone: ["http", "stdio"],
     apiKey: true,
     plan: true,
     fileChanges: true,

@@ -1,10 +1,10 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { collect } from "./helpers.js";
 import { createFunnel } from "../src/funnel.js";
-import { antigravityProvider } from "../src/providers/antigravity/index.js";
+import { antigravityProvider, forgetVerifiedHooks } from "../src/providers/antigravity/index.js";
 import {
   agentFacts,
   checkThought,
@@ -20,6 +20,7 @@ import {
   thoughtLevels,
   toUsage,
 } from "../src/providers/antigravity/acp/protocol.js";
+import { openAcpSession } from "../src/providers/antigravity/acp/session.js";
 import { createRunFolder } from "../src/providers/base.js";
 import type { FunnelEvent, RunInput } from "../src/types.js";
 
@@ -298,6 +299,7 @@ const out = (m) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...m })
 const options = JSON.parse(JSON.stringify(cfg.newResult.configOptions));
 let buf = "";
 let promptId;
+let reserved = "";
 process.stdin.on("data", (d) => {
   buf += d;
   let i;
@@ -308,8 +310,9 @@ function handle(m) {
   log(m);
   switch (m.method) {
     case "initialize": return result(m, cfg.initialize);
-    case "session/new": return result(m, { ...cfg.newResult, sessionId: cfg.sessionId });
+    case "session/new": reserved = (m.params.mcpServers && m.params.mcpServers[0] && m.params.mcpServers[0].name) || ""; return result(m, { ...cfg.newResult, sessionId: cfg.sessionId });
     case "session/resume":
+      reserved = (m.params.mcpServers && m.params.mcpServers[0] && m.params.mcpServers[0].name) || "";
       if (cfg.resumeError) return out({ id: m.id, error: { code: -32603, message: cfg.resumeError } });
       return result(m, { configOptions: options });
     case "session/set_config_option": {
@@ -326,7 +329,9 @@ function handle(m) {
       if (cfg.hang) return;
       if (cfg.promptError) return out({ id: m.id, error: cfg.promptError });
       let delay = 0;
-      for (const line of cfg.script) {
+      for (const raw of cfg.script) {
+        // @@R@@ stands for the name the client gave its first MCP server, which is random per run.
+        const line = JSON.parse(JSON.stringify(raw).split("@@R@@").join(reserved));
         setTimeout(() => out(line.result && line.id !== undefined ? { ...line, id: m.id } : line), (delay += 5));
       }
       // A notification just after the last reply, as another process's output can be.
@@ -440,6 +445,167 @@ describe.skipIf(process.platform === "win32")("antigravity over ACP, with a fake
     const agy = fakeAgy();
     await drain(input({ workspaceName: "pyxis" }));
     expect(agy.received()[0]!.cwd).toMatch(/workspaces[/\\]antigravity-none\.pyxis$/);
+  });
+
+  it("hands MCP servers to the session under reserved names and allows only their calls at none", async () => {
+    const options = [{ optionId: "allow", name: "Allow", kind: "allow_once" }, { optionId: "deny", name: "Deny", kind: "reject_once" }];
+    const ask = (id: string, toolCallId: string, name: string, rawInput: object) => ({ jsonrpc: "2.0", id, method: "session/request_permission", params: { sessionId: SESSION, toolCall: { toolCallId, name, rawInput }, options } });
+    const asks = [ask("p1", "a", "mcp_@@R@@_add_note", { text: "x" }), ask("p2", "b", "mcp_notes_add_note", {}), { jsonrpc: "2.0", id: 1, result: { stopReason: "end_turn" } }];
+    const agy = fakeAgy({ script: asks });
+    await drain(input({ mcpServers: { notes: { type: "http", url: "http://127.0.0.1:9/mcp", headers: { Authorization: "Bearer t" } } } }));
+    await until(() => ["p1", "p2"].every((id) => agy.received().some((m) => m.id === id && m.result)));
+    const got = agy.received();
+    const sent = got.find((m) => m.method === "session/new")!.params.mcpServers;
+    expect(sent).toEqual([{ type: "http", name: expect.stringMatching(/^clifunnel[0-9a-f]{8}_0$/), url: "http://127.0.0.1:9/mcp", headers: [{ name: "Authorization", value: "Bearer t" }] }]);
+    expect(got.find((m) => m.id === "p1" && m.result)!.result).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+    // A user's server called `notes` is not this run's server, whatever the caller named theirs.
+    expect(got.find((m) => m.id === "p2" && m.result)!.result).toEqual({ outcome: { outcome: "selected", optionId: "deny" } });
+    // The run's folder is its own, and is gone when the run is over.
+    expect(got[0]!.cwd).toMatch(/antigravity-none\.run\.[0-9a-f]{8}$/);
+    await until(() => !existsSync(got[0]!.cwd));
+    expect(existsSync(got[0]!.cwd)).toBe(false);
+  });
+
+  it("reports a tool the client allowed and that then failed as a failure, not as a denial", async () => {
+    const options = [{ optionId: "allow", name: "Allow", kind: "allow_once" }, { optionId: "deny", name: "Deny", kind: "reject_once" }];
+    const call = (sessionUpdate: string, status: string, extra: object = {}) => ({ jsonrpc: "2.0", method: "session/update", params: { sessionId: SESSION, update: { sessionUpdate, toolCallId: "a", name: "mcp_@@R@@_add_note", status, rawInput: { text: "x" }, ...extra } } });
+    const script = [
+      call("tool_call", "in_progress"),
+      { jsonrpc: "2.0", id: "p1", method: "session/request_permission", params: { sessionId: SESSION, toolCall: { toolCallId: "a", name: "mcp_@@R@@_add_note", rawInput: { text: "x" } }, options } },
+      call("tool_call_update", "failed", { rawOutput: { output: "server error: disk full" } }),
+      { jsonrpc: "2.0", id: 1, result: { stopReason: "end_turn" } },
+    ];
+    fakeAgy({ script });
+    const run = input({ mcpServers: { notes: { type: "http", url: "http://127.0.0.1:9/mcp" } } });
+    const events = await drain(run);
+    const end = events.find((e) => e.type === "tool.end") as Extract<FunnelEvent, { type: "tool.end" }>;
+    expect(end.error).toBe("server error: disk full");
+    expect((await collect((async function* () { yield* events; })(), run)).deniedActions).toEqual([]);
+  });
+
+  it("stops a run at none when a tool that is not the run's finishes, and lets this run's server finish", async () => {
+    const call = (sessionUpdate: string, name: string, status: string, rawInput: object = {}) => ({ jsonrpc: "2.0", method: "session/update", params: { sessionId: SESSION, update: { sessionUpdate, toolCallId: name, name, status, rawInput } } });
+    const done = { jsonrpc: "2.0", id: 1, result: { stopReason: "end_turn" } };
+    const mcpServers = { notes: { type: "http" as const, url: "http://127.0.0.1:9/mcp" } };
+    fakeAgy({ script: [call("tool_call", "mcp_@@R@@_add_note", "in_progress"), call("tool_call_update", "mcp_@@R@@_add_note", "completed"), done] });
+    expect((await drain(input({ mcpServers }))).at(-1)).toMatchObject({ type: "done" });
+    fakeAgy({ script: [call("tool_call", "mcp_notes_add_note", "in_progress"), call("tool_call_update", "mcp_notes_add_note", "completed"), done] });
+    expect((await drain(input({ mcpServers }))).at(-1)).toMatchObject({ type: "error", message: expect.stringContaining('"mcp_notes_add_note" ran at access "none"') });
+  });
+
+  describe("the folder of a run with servers at none", () => {
+    const mcpServers = { notes: { type: "http" as const, url: "http://127.0.0.1:9/mcp" } };
+    const workspaces = () => join(process.env.XDG_CACHE_HOME!, "cli-funnel", "workspaces");
+    const runFolders = () => (existsSync(workspaces()) ? readdirSync(workspaces()).filter((n) => /\.run\.[0-9a-f]{8}$/.test(n)) : []);
+
+    it("is removed when the run fails before agy starts, here when the hook is not shown to deny", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "cf-fake-sh-"));
+      writeFileSync(join(dir, "sh"), "#!/bin/sh\nexit 0\n");
+      chmodSync(join(dir, "sh"), 0o755);
+      const old = process.env.PATH;
+      process.env.PATH = `${dir}:${old}`;
+      forgetVerifiedHooks();
+      const agy = fakeAgy();
+      try {
+        await expect(drain(input({ mcpServers }))).rejects.toMatchObject({ code: "unsupported" });
+      } finally {
+        process.env.PATH = old;
+        forgetVerifiedHooks();
+      }
+      expect(runFolders()).toEqual([]);
+      expect(() => agy.received()).toThrow();
+    });
+
+    it("is marked as in use and given its hook back at the start of every turn, so a sweep keeps it", async () => {
+      fakeAgy();
+      const funnel = createFunnel({ providers: { antigravity: antigravityProvider }, sessions: { keepAlive: true } });
+      const selection = { provider: "antigravity" as const, model: "gemini-3.8-flash", effort: "low", cwd: tmpdir(), access: "none" as const };
+      try {
+        const first = await funnel.run({ selection, prompt: "one", mcpServers });
+        const [name] = runFolders();
+        expect(name).toBeDefined();
+        const folder = join(workspaces(), name!);
+        // Three days without a turn, and the hook file gone, as after a sweep that took the folder's files.
+        const old = new Date(Date.now() - 3 * 24 * 3_600_000);
+        rmSync(join(folder, ".agents", "hooks.json"));
+        utimesSync(folder, old, old);
+        await funnel.run({ selection, prompt: "two", mcpServers, sessionId: first.sessionId });
+        expect(Date.now() - statSync(folder).mtimeMs).toBeLessThan(60_000);
+        expect(JSON.parse(readFileSync(join(folder, ".agents", "hooks.json"), "utf8"))["cli-funnel-none"].PreToolUse).toHaveLength(1);
+      } finally {
+        funnel.close();
+      }
+    });
+
+    it("is refused on Windows, where the hook has not been shown to deny, before anything is made", async () => {
+      const agy = fakeAgy();
+      const before = runFolders();
+      const real = process.platform;
+      Object.defineProperty(process, "platform", { value: "win32" });
+      try {
+        await expect(drain(input({ mcpServers }))).rejects.toMatchObject({ code: "unsupported", message: expect.stringContaining("only off Windows") });
+        expect(() => agy.received()).toThrow();
+      } finally {
+        Object.defineProperty(process, "platform", { value: real });
+      }
+      expect(runFolders()).toEqual(before);
+    });
+  });
+
+  it("ends a turn as cancelled, without sending the prompt, when the signal aborts while the folder is being put right", async () => {
+    const agy = fakeAgy();
+    const controller = new AbortController();
+    const run = input({ signal: controller.signal });
+    const session = await openAcpSession(run, {
+      path: process.env.CLI_FUNNEL_AGY_BIN!,
+      cwd: tmpdir(),
+      args: [],
+      brainDir: tmpdir(),
+      readText: () => undefined,
+      createdInRun: () => undefined,
+      mcpServers: [],
+      defaultEffort: () => undefined,
+      onModels: () => undefined,
+      cleanup: async () => undefined,
+      // The abort comes while this runs, before any prompt exists to cancel.
+      refresh: async () => {
+        controller.abort();
+        await new Promise((r) => setTimeout(r, 100));
+      },
+    });
+    const events: FunnelEvent[] = [];
+    try {
+      for await (const e of session.turn(run)) events.push(e);
+    } finally {
+      session.close();
+    }
+    expect(events.at(-1)).toMatchObject({ type: "done", finishReason: "cancelled" });
+    expect(agy.received().some((m) => m.method === "session/prompt")).toBe(false);
+  });
+
+  it("stops a turn that ends while a generic MCP call has still not said whose it is", async () => {
+    const call = (sessionUpdate: string, status: string) => ({ jsonrpc: "2.0", method: "session/update", params: { sessionId: SESSION, update: { sessionUpdate, toolCallId: "g", name: "call_mcp_tool", status, rawInput: {} } } });
+    const done = { jsonrpc: "2.0", id: 1, result: { stopReason: "end_turn" } };
+    fakeAgy({ script: [call("tool_call", "in_progress"), done] });
+    const events = await drain(input({ mcpServers: { notes: { type: "http", url: "http://127.0.0.1:9/mcp" } } }));
+    expect(events.some((e) => e.type === "tool.start" && e.name === "call_mcp_tool")).toBe(true);
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "cli-failed", message: expect.stringContaining('"call_mcp_tool" started and never ended') });
+  });
+
+  it("refuses a caller server named like a reserved one, and a tool timeout, before any process starts", async () => {
+    const agy = fakeAgy();
+    await expect(drain(input({ mcpServers: { clifunnelx: { type: "http", url: "http://127.0.0.1:9/mcp" } } }))).rejects.toMatchObject({ code: "invalid-selection" });
+    await expect(drain(input({ mcpServers: { notes: { type: "http", url: "http://127.0.0.1:9/mcp", toolTimeoutSec: 30 } } }))).rejects.toMatchObject({ code: "unsupported" });
+    expect(() => agy.received()).toThrow();
+  });
+
+  it("sends the servers again when a session is resumed, and refuses them at accept-edits and on print at none", async () => {
+    const agy = fakeAgy({}, "resume-turn.ndjson");
+    const mcpServers = { notes: { type: "http" as const, url: "http://127.0.0.1:9/mcp" } };
+    await drain(input({ sessionId: SESSION, mcpServers }));
+    expect(agy.received().find((m) => m.method === "session/resume")!.params.mcpServers).toHaveLength(1);
+    await expect(drain(input({ mcpServers: { local: { type: "stdio", command: "node" } } }, { access: "accept-edits" }))).rejects.toMatchObject({ code: "invalid-selection" });
+    await expect(drain(input({ mcpServers, providerOptions: { antigravity: { transport: "print" } } }))).rejects.toMatchObject({ code: "unsupported" });
   });
 
   describe("at none, keeping the user's own agy setup out", () => {
@@ -650,6 +816,29 @@ describe.skipIf(process.platform === "win32")("antigravity over ACP, with a fake
     const late = events.flatMap((e, i) => (e.type === "raw" && e.source === "stdout" && (e.data as { method?: string }).method === "x/late" ? [i] : []));
     expect(late).toHaveLength(1);
     expect(late[0]).toBeLessThan(events.findIndex((e) => e.type === "done"));
+  });
+
+  it("refuses a none run, and starts no process, when the hook command does not print its answer through the shell", async () => {
+    const agy = fakeAgy();
+    // A shell that does nothing and exits 0, as a hook that starts a second copy of the host app does: agy reads it as allow.
+    const bin = mkdtempSync(join(tmpdir(), "cf-fake-sh-"));
+    writeFileSync(join(bin, "sh"), "#!/bin/sh\nexit 0\n");
+    chmodSync(join(bin, "sh"), 0o755);
+    const oldPath = process.env.PATH;
+    forgetVerifiedHooks();
+    process.env.PATH = `${bin}:${oldPath}`;
+    try {
+      const events = await drain(input());
+      expect(events).toEqual([]);
+    } catch (e) {
+      expect(e).toMatchObject({ code: "unsupported", message: expect.stringContaining("would read it as allow") });
+      expect(() => agy.received()).toThrow();
+    } finally {
+      process.env.PATH = oldPath;
+      forgetVerifiedHooks();
+    }
+    // Other levels need no hook, so they run as before.
+    expect((await drain(input({}, { access: "full" }))).at(-1)).toMatchObject({ type: "done" });
   });
 
   it("forwards stderr written just after the final reply, before the terminal event", async () => {

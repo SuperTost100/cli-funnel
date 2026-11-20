@@ -17,6 +17,8 @@ import {
   createAcpMapper,
   currentModel,
   currentThought,
+  allows,
+  decidePermission,
   denyPermission,
   failureFromError,
   failureFromTurn,
@@ -38,14 +40,20 @@ export interface AcpSetup {
   /** The arguments after `acp`: `--add-dir`, `--dangerously-skip-permissions`. */
   args: string[];
   env?: Record<string, string | undefined>;
+  /** Runs before every turn: puts the run's folder and its hook back as they should be. A failure ends the turn. */
+  refresh?: () => Promise<void>;
   /** Ends the turn after this many seconds, as `providerOptions.antigravity.printTimeoutSec`. */
   timeoutSec?: number;
   /** Where agy keeps conversation files, for the task list that becomes a `plan` event. */
   brainDir: string;
   readText(path: string): string | undefined;
   createdInRun(startedAt: number): ((path: string) => boolean | undefined) | undefined;
-  /** At `none`: whether a tool of the run may finish, besides `finish`. Anything else that finishes stops the run. */
-  allowTool?: (name: string, input: unknown) => boolean;
+  /** The caller's MCP servers in the shape `session/new` takes, sent again on every activation. */
+  mcpServers: unknown[];
+  /** Each reserved name the servers were given to agy under, and the caller's own name for it. */
+  mcpCallers?: ReadonlyMap<string, string>;
+  /** At `none`: the reserved names whose tool calls are allowed. Every other permission request is denied. */
+  allowMcp?: ReadonlySet<string>;
   /** The default thinking level of a model from the model list, for a run that names none. */
   defaultEffort(model: string): string | undefined;
   /** Gets the models the account's session listed. */
@@ -114,9 +122,12 @@ export async function openAcpSession(first: RunInput, setup: AcpSetup): Promise<
     closed = true;
     proc.kill();
   };
-  // Only `finish` may complete at `none`, which ends a turn and carries nothing out. `allowTool` adds the caller's own tools.
-  // One guard per turn, so a live session does not keep the arguments of every call it ever made.
-  const newGuard = () => (access === "none" ? createNoneGuard((start) => start.name !== "finish" && !setup.allowTool?.(start.name, start.input), AGY_REFUSAL) : undefined);
+  // Only `finish` may complete at `none`, which ends a turn and carries nothing out, and the calls the mapper knows are
+  // the run's own MCP servers. A call to a user's server is neither. The mapper decides at the end of the call, with the
+  // arguments of its last update, because a call can name its server in a later update than the first. One guard per
+  // turn, so a live session does not keep the arguments of every call it ever made.
+  const newGuard = (mapper: () => ReturnType<typeof createAcpMapper> | undefined) =>
+    access === "none" ? createNoneGuard((start) => start.name !== "finish" && !mapper()?.isMcp(start.id), AGY_REFUSAL) : undefined;
 
   const finish = (t: Turn, events: FunnelEvent[]) => {
     if (t.finished) return;
@@ -156,9 +167,11 @@ export async function openAcpSession(first: RunInput, setup: AcpSetup): Promise<
     request(id, method, params) {
       const t = current;
       if (method === "session/request_permission") {
+        const answer = setup.allowMcp ? decidePermission(params, setup.allowMcp) : denyPermission(params);
+        // Only a rejection makes the call's later failure a denial. A call that was allowed and then failed is a failure.
         const toolCallId = params?.toolCall?.toolCallId;
-        if (typeof toolCallId === "string") t?.mapper?.refuse(toolCallId);
-        rpc.respond(id, denyPermission(params));
+        if (typeof toolCallId === "string" && !allows(answer, params)) t?.mapper?.refuse(toolCallId);
+        rpc.respond(id, answer);
         return;
       }
       // Nothing was offered at `initialize`, so a request for a file or a terminal is the agent's mistake.
@@ -180,7 +193,7 @@ export async function openAcpSession(first: RunInput, setup: AcpSetup): Promise<
     facts = agentFacts(init);
     if (!facts.version || compareVersions(facts.version, ACP_MIN_VERSION) < 0) throw new FunnelError(TOO_OLD(facts.version), "unsupported");
     if (first.attachments?.length && !facts.images) throw new FunnelError("This agy cannot take image attachments over ACP.", "unsupported");
-    const params = { cwd: setup.cwd, mcpServers: [] as unknown[], ...(sessionMeta(first.system, facts) ? { _meta: sessionMeta(first.system, facts) } : {}) };
+    const params = { cwd: setup.cwd, mcpServers: setup.mcpServers, ...(sessionMeta(first.system, facts) ? { _meta: sessionMeta(first.system, facts) } : {}) };
     let started: Record<string, any>;
     try {
       if (first.sessionId) {
@@ -227,7 +240,7 @@ export async function openAcpSession(first: RunInput, setup: AcpSetup): Promise<
     if (current && !current.finished) throw new FunnelError("A turn is already running in this session.", "invalid-selection");
     let end!: () => void;
     const ended = new Promise<void>((resolve) => (end = resolve));
-    const t: Turn = { input, out: new Channel<FunnelEvent>(), guard: newGuard(), finished: false, open: true, end, ended };
+    const t: Turn = { input, out: new Channel<FunnelEvent>(), guard: newGuard(() => t.mapper), finished: false, open: true, end, ended };
     current = t;
     proc.hold(true);
     const offStderr = input.verbose ? proc.onStderr((line) => t.open && t.out.push(rawEvent("antigravity", "stderr", line, input)), runSecrets(input)) : undefined;
@@ -263,8 +276,12 @@ export async function openAcpSession(first: RunInput, setup: AcpSetup): Promise<
         const id = await ready;
         if (t.finished) return;
         if (aborted) return finish(t, [{ type: "done", text: "", finishReason: "cancelled" }]);
+        await setup.refresh?.();
+        if (t.finished) return;
+        // An abort that came while the folder was put right found no prompt to cancel, and none may go out now.
+        if (aborted) return finish(t, [{ type: "done", text: "", finishReason: "cancelled" }]);
         const startedAt = Date.now();
-        t.mapper = createAcpMapper(id, { access, cwd: setup.cwd, brainDir: setup.brainDir, readText: setup.readText, createdInRun: setup.createdInRun(startedAt) });
+        t.mapper = createAcpMapper(id, { access, mcp: setup.mcpCallers, cwd: setup.cwd, brainDir: setup.brainDir, readText: setup.readText, createdInRun: setup.createdInRun(startedAt) });
         t.out.push({ type: "session", sessionId: id, ...(model ? { model } : {}) });
         // The system prompt went in with the session when agy takes one there, and goes in front of the prompt when not.
         const text = composePrompt(input, { system: !facts || sessionMeta(first.system, facts) === undefined, schema: true });
@@ -275,6 +292,11 @@ export async function openAcpSession(first: RunInput, setup: AcpSetup): Promise<
         if (failure) {
           fail(t, failure);
           return;
+        }
+        // A generic MCP call that never said whose it was is let out now, so the guard sees that it began and never ended.
+        for (const e of t.mapper.flush()) {
+          t.guard?.check(e);
+          t.out.push(e);
         }
         // A forbidden call that never ended may have run, so the turn does not end as done.
         const unfinished = t.guard?.unfinished();

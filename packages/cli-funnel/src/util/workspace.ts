@@ -23,6 +23,9 @@ export function workspaceFor(name: string, caller: string | undefined): string {
   return `${name}.${caller}`;
 }
 
+/** Where `ownedWorkspace(name, …)` puts its folder, without creating it. */
+export const workspacePath = (name: string): string => join(funnelCacheDir(), "workspaces", name);
+
 /**
  * Variables that point git at another repository or change where it stops looking for one. A CLI at access `none` runs
  * in a folder with a git marker of its own so it reads no instructions from above, and these would send it to someone
@@ -37,7 +40,7 @@ export const NO_GIT_ENV: Record<string, undefined> = { GIT_DIR: undefined, GIT_W
  * Files are rewritten when their content differs, through a rename so a concurrent run never reads half a file.
  */
 export async function ownedWorkspace(name: string, files: Record<string, string>): Promise<string> {
-  const dir = join(funnelCacheDir(), "workspaces", name);
+  const dir = workspacePath(name);
   await mkdir(dir, { recursive: true, mode: 0o700 });
   for (const [rel, content] of Object.entries(files)) {
     // A name that ends in a slash is an empty folder.

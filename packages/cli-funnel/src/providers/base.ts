@@ -334,7 +334,7 @@ export function createRunFolder(input: RunInput): RunFolder {
         case "tool.start": {
           // A subagent's tool call is not one of the run's own.
           if (e.parentId) break;
-          const call = { id: e.id, name: e.name, input: e.input };
+          const call = { id: e.id, name: e.name, input: e.input, ...(e.mcp ? { mcp: e.mcp } : {}) };
           tools.set(e.id, call);
           result.toolCalls.push(call);
           break;

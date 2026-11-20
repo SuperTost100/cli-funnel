@@ -87,12 +87,25 @@ function stringRecord(value: unknown, name: string): Record<string, string> | un
 /**
  * Checks `RunInput.mcpServers` and returns the servers as `[name, server]` pairs, empty when there are none. `kinds`
  * are the types the provider can attach. HTTP servers start no process, so every level but `none` takes them. A stdio
- * server runs a command before any permission check, so only `full` takes it.
+ * server runs a command before any permission check, so only `full` takes it. `atNone` are the types the provider
+ * also takes at `none`, where the caller's servers are the only tools the model has (`capabilities.mcpServersAtNone`).
  */
-export function mcpServersFor(input: RunInput, kinds: readonly McpServer["type"][], provider: string = input.selection.provider): [string, McpServer][] {
+export function mcpServersFor(
+  input: RunInput,
+  kinds: readonly McpServer["type"][],
+  provider: string = input.selection.provider,
+  atNone: readonly McpServer["type"][] = [],
+): [string, McpServer][] {
   const servers = object(input.mcpServers, "mcpServers");
   if (!servers || !Object.keys(servers).length) return [];
   const access = input.selection.access;
+  // Claude Code names a tool `mcp__<server>__<tool>`, so with servers `a` and `a__b` the name `mcp__a__b__c` is a tool of
+  // either. cli-funnel refuses such a pair on every provider rather than tag the wrong server.
+  const names = Object.keys(servers);
+  for (const outer of names) {
+    const inner = names.find((n) => n !== outer && outer.startsWith(`${n}__`));
+    if (inner) bad(`MCP server names "${inner}" and "${outer}": one is the other followed by "__", so a tool name could belong to either. Rename one.`);
+  }
   return Object.entries(servers).map(([name, raw]) => {
     const where = `mcpServers.${name}`;
     if (!MCP_NAME.test(name)) bad(`MCP server name "${name}" must be 1 to 64 letters, digits, _ or -.`);
@@ -112,12 +125,12 @@ export function mcpServersFor(input: RunInput, kinds: readonly McpServer["type"]
       if (!url || !/^https?:\/\//i.test(url)) bad(`${where}.url must be an http or https URL.`);
       stringRecord(def.headers, `${where}.headers`);
       bool(def.autoApprove, `${where}.autoApprove`);
-      requireAccess(access ?? "none", ["supervised", "accept-edits", "auto", "full"], "An HTTP MCP server");
+      if (!(access === "none" && atNone.includes("http"))) requireAccess(access ?? "none", ["supervised", "accept-edits", "auto", "full"], "An HTTP MCP server");
     } else {
       if (!str(def.command, `${where}.command`)) bad(`${where}.command is required.`);
       if (def.args !== undefined && (!Array.isArray(def.args) || !def.args.every((a) => typeof a === "string"))) bad(`${where}.args must be a list of strings.`);
       stringRecord(def.env, `${where}.env`);
-      requireAccess(access ?? "none", ["full"], "A stdio MCP server");
+      if (!(access === "none" && atNone.includes("stdio"))) requireAccess(access ?? "none", ["full"], "A stdio MCP server");
     }
     return [name, def as unknown as McpServer];
   });

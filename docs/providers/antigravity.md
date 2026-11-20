@@ -63,7 +63,7 @@ Stderr is a separate pipe from the stream, so a warning can be read before or af
 | JSON schema | asked for in the prompt over ACP, `--json-schema` on `print` |
 | File changes | yes, from the file tools and a plain `rm` |
 | Plans | yes, when the agent keeps a `task.md` |
-| MCP servers | `http` and `stdio`, at `full` only |
+| MCP servers | `http` and `stdio`, at `full` on both transports and at `none` over ACP off Windows, where they are the model's only tools |
 | API key | yes, on `print` only |
 | Questions | no |
 | Sandbox | no |
@@ -172,6 +172,46 @@ Antigravity keeps its plan as artifacts in the conversation folder: `task.md`, a
 - cli-funnel reads only `<home>/.gemini/antigravity-cli/brain/<conversation id>/task.md`, and only up to 256 KiB.
 
 ## MCP servers
+
+### Over ACP
+
+The default transport hands the servers to `session/new` and `session/resume`: `{type: "http", name, url, headers: [{name, value}]}` for HTTP and `{name, command, args, env: [{name, value}]}` for stdio. They go over the pipe, so a token is on no disk. Access is `none` and `full`. `accept-edits` is refused, because agy asks about every MCP call there and nobody can answer.
+
+**Reserved names.** agy names tools by server, `mcp_<server>_<tool>`, and a plugin's server `<plugin>_<server>`, and the user's own servers have names too. A caller's `notes` could equal a user's `notes`, and any fixed name could be taken beforehand by a user's server or plugin. So each server goes to agy as `clifunnel<run>_<n>`, where `<run>` is 8 random hex digits made for this one run and `<n>` is the server's position in `mcpServers`. Nothing that exists beforehand can have such a name, every comparison is exact, and the events map the name back: `tool.start` shows `mcp_<your name>_<tool>` and carries `mcp: { server, tool }`. A caller server whose name starts with `clifunnel` is refused with `invalid-selection`. Only the mapper tags a call on this transport: the funnel's reading by display name is off, so a user's server that has your name is not reported as yours. A resumed conversation gets new names with its new process, and re-sends the servers under them.
+
+**The hook is a fixed deny and runs no script.** At `none` the run's folder, `antigravity-none[.<name>].run.<id>` (removed when the process ends), holds `.agents/hooks.json` and the git marker. The hook command is the same shell line the `none` hook of a run with no servers uses, `cat >/dev/null; printf` of the deny answer (`echo` on Windows), so it needs no Node and no copy of the host app. A first design ran a Node script. Under a packaged Electron app with the RunAsNode fuse off that command starts a second copy of the app, which exits 0 with nothing on stdout, and agy reads that as allow, so every tool would have been open. A script that needs a Node binary is the wrong shape for that host.
+
+What a hook matcher can say: it is a Go regular expression (no lookahead) tested against the tool's name, and nothing in the tool's arguments. "Everything except these" has to be spelled out, and `exceptNames` does it as a trie over names and prefixes: the matcher matches every name but `finish` and every name that starts with `mcp_clifunnel<run>_`, so the hook denies those it matches. `call_mcp_tool` is not left out, since it names its server in its arguments, which the matcher cannot see: it is denied for every server, the run's own included, and the model reaches the run's servers by their tool names. The deny answer says so (`Call those by their own names, which start with mcp_, not through call_mcp_tool`). It holds no `<`, `>`, `&`, `|`, `^` or `%`: on Windows the hook is an `echo` of it, and the hook self-test on a Windows runner refused it when it said `mcp_<server>_<tool>`. The client then answers each `session/request_permission` the same way, allowing only a tool of this run's names, and a run is stopped with an error if any other tool finishes at `none`. The guard decides at the end of a call, with the arguments of its last update, because a call can name its server in a later update than its first.
+
+**The hook is tested before the run starts.** When the folder is ready, cli-funnel runs the exact hook command through the shell the way agy will, with a refused call on stdin, and starts nothing unless the output is the deny answer (`unsupported`, "would read it as allow"). It does this for the fixed hook of a run with no servers too, once per process per command. A test puts a `sh` that exits 0 with no output first on the PATH, the packaged-app case, and sees the run refused with no process started. The Windows form of the command (`cmd /d /s /c`) has not been run on Windows.
+
+Verified live on 1.5.12, with `agy acp` driven by a raw client that **allowed every permission request**, so that the hook was the only thing between the model and the other servers (`gemini-3.8-flash`, low effort, access `none`, the run's own folder and a private `--gemini-dir`):
+
+- **Generic route.** A plugin `usersim` in the run's folder gave agy a second server, set up the way a user's would be, next to the caller's server under `clifunnel5ec0de01_0`. The prompt asked for a note on each, the second through `call_mcp_tool` with `ServerName: "usersim_other"`. The caller's note was recorded, the `call_mcp_tool` call ended `failed`, and the other server recorded nothing. agy asked for permission only for the caller's tool, so the hook refused the other call before the permission check. That the plugin server can be called when nothing stops it was shown earlier at `full` on the same agy (it recorded the note).
+- **Direct route.** A second server `usersim2` given to the session next to the caller's. The prompt asked for a note on each, the second by the tool name `mcp_usersim2_add_note`. The caller's note was recorded, the call to `mcp_usersim2_add_note` ended `failed`, and that server recorded nothing.
+- `test/antigravity-mcp-live.test.ts` repeats both.
+
+**How the model reaches the caller's tool** (funnel runs at `none`, one caller HTTP server with `add_note`, three prompts each):
+
+| Prompt | `gemini-3.8-flash` | `gemini-4-neon` |
+| --- | --- | --- |
+| "Save a note that says hello-from-the-model" | called `mcp_notes_add_note`, note saved | the same |
+| "Call the add_note tool of the MCP server named notes" | the same | the same |
+| "Use the generic call_mcp_tool tool to call add_note" | tried a shell command (denied), then called the tool by its own name, note saved | answered that `call_mcp_tool` is not available, called nothing, saved no note, and the run finished normally |
+
+So a prompt written the natural way reaches the tool directly on both models, and one that demands the generic route is not honored by the second. Do not tell the model to use `call_mcp_tool`. Where cli-funnel's own wording is not enough, name the server's tool in the prompt.
+
+Caveats seen on 1.5.12:
+
+- agy sends `server/discover` before `initialize`. A server must answer an unknown method with a JSON-RPC error (`-32601`). A server that answers `202` with no body fails to load (`unsupported content type`), and a stdio server that ignores the request makes the call hang.
+- Over HTTP the `Authorization` header is on every `POST`, but not on the `GET` that opens the event stream.
+- The model discovers servers by looking, for example `ls ~/.gemini/antigravity-cli/mcp`, which `none` refuses, so name the server in the prompt.
+- `toolTimeoutSec` is refused with `unsupported`: the ACP server has no such field. The `print` transport has one.
+- **A server at `none` should not read or write files in the run's folder.** A stdio server starts in that folder, because the ACP server entry has no `cwd` field (and no timeout), and the folder holds the hook file `.agents/hooks.json`. A server that rewrote it could take the hook away for the rest of the turn. cli-funnel puts the folder and the hook back before every turn, and marks the folder as in use so another process's sweep leaves it, but it cannot stop a server inside a turn. If your server needs a working folder of its own, have its command change into it first.
+- **Not on Windows.** MCP servers at `none` are refused there with `unsupported`, until a live run on Windows shows the hook denying other tools. The hook's command is a `cmd.exe` line that has not been run on Windows. `capabilities.mcpServersAtNone` still lists both types, since it does not vary by platform: check the platform too.
+- The `print` transport refuses `none` with servers. It reports a server as `funnel_<name>` in `call_mcp_tool`, and the events map that back too.
+
+### Over `print`
 
 `mcpServers` attaches the caller's servers for one run without writing into the project or into agy's config. agy has no flag or environment variable for MCP servers, but it loads plugins from `.agents/plugins/<name>/` in every workspace folder, and `--add-dir` makes a folder a workspace folder. So each run:
 

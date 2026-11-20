@@ -4,7 +4,7 @@ Access says how much the agent may do on the machine. cli-funnel has four levels
 
 | Level | Meaning |
 |---|---|
-| `none` | Text in, text out. No writes, no commands, no MCP servers, no approvals. See [Run options](run-options.md). |
+| `none` | Text in, text out. No writes, no commands, no approvals, and no MCP servers but the ones you attach for the run. See [Run options](run-options.md). |
 | `supervised` | Every risky action waits for a human. Your `onApproval` callback gets the request. |
 | `accept-edits` | File edits go through. Other actions ask, or are refused when nobody can answer. |
 | `auto` | The CLI decides which actions are safe. The rest ask or are refused. |
@@ -21,6 +21,10 @@ Access says how much the agent may do on the machine. cli-funnel has four levels
 | `full` | yes | yes | yes | yes |
 
 The picker shows only the levels a provider offers. `funnel.providers.claude.capabilities.access` gives the same list in code. Asking for a level the provider lacks throws `invalid-selection` and names the levels that exist.
+
+### Antigravity's `none` on Windows is unverified
+
+Antigravity's `none` is a hook that agy runs through the shell, and every check of it was made on Linux. Nobody has run that hook on Windows, so whether it denies every tool there is not shown. cli-funnel's own checks still apply (the hook is run once before the first run and a tool that finishes stops the run), but treat `none` on Windows as unverified. Because the caller's MCP servers are the only tools a `none` run may use, a run that passes `mcpServers` at `none` on Windows is refused with `unsupported` until a live Windows run shows the hook denying other tools.
 
 ## Why some are missing
 
