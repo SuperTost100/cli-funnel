@@ -278,6 +278,8 @@ export async function openAcpSession(first: RunInput, setup: AcpSetup): Promise<
         if (aborted) return finish(t, [{ type: "done", text: "", finishReason: "cancelled" }]);
         await setup.refresh?.();
         if (t.finished) return;
+        // An abort that came while the folder was put right found no prompt to cancel, and none may go out now.
+        if (aborted) return finish(t, [{ type: "done", text: "", finishReason: "cancelled" }]);
         const startedAt = Date.now();
         t.mapper = createAcpMapper(id, { access, mcp: setup.mcpCallers, cwd: setup.cwd, brainDir: setup.brainDir, readText: setup.readText, createdInRun: setup.createdInRun(startedAt) });
         t.out.push({ type: "session", sessionId: id, ...(model ? { model } : {}) });
@@ -290,6 +292,11 @@ export async function openAcpSession(first: RunInput, setup: AcpSetup): Promise<
         if (failure) {
           fail(t, failure);
           return;
+        }
+        // A generic MCP call that never said whose it was is let out now, so the guard sees that it began and never ended.
+        for (const e of t.mapper.flush()) {
+          t.guard?.check(e);
+          t.out.push(e);
         }
         // A forbidden call that never ended may have run, so the turn does not end as done.
         const unfinished = t.guard?.unfinished();

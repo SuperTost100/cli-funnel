@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -6,7 +6,7 @@ import { accessFlags, agentProvider, NONE_PERMISSIONS, noneWorkspace as agentNon
 import { createFunnel } from "../src/funnel.js";
 import { checkAcpServers, createAcpMapper, decidePermission, reserveServers } from "../src/providers/antigravity/acp/protocol.js";
 import { AGY_REFUSAL, DENY_REASON_WITH_MCP } from "../src/providers/antigravity/deny.js";
-import { denyCommand, exceptNames, hookDenies, NONE_MATCHER, noneHooks, noneWorkspace as agyNone, removeRunWorkspace, requireWorkingHook, sweepRunWorkspaces } from "../src/providers/antigravity/index.js";
+import { denyCommand, exceptNames, hookDenies, NONE_MATCHER, noneHooks, noneWorkspace as agyNone, removeRunWorkspace, requireWorkingHook, sweepRunWorkspaces, withFolderLock } from "../src/providers/antigravity/index.js";
 import { buildArgs as claudeArgs } from "../src/providers/claude/index.js";
 import { agentConfig, noneServers } from "../src/providers/codex/options.js";
 import { noToolsConfig } from "../src/providers/codex/tools.js";
@@ -47,6 +47,17 @@ describe("MCP servers at access none", () => {
     expect(at({ "bad name": servers!.notes })).toBe("invalid-selection");
     expect(at({ a: { type: "http", url: "ftp://x" } })).toBe("invalid-selection");
     expect(at({ a: { type: "http", url: "http://x", extra: 1 } })).toBe("invalid-selection");
+  });
+
+  it("refuses two server names where one is the other followed by __, since Claude Code's mcp__<server>__<tool> would not say whose tool it is", () => {
+    const at = (names: string[]) => code(() => mcpServersFor(run("claude", { mcpServers: Object.fromEntries(names.map((n) => [n, servers!.notes!])) as never }), ["http", "stdio"], undefined, ["http", "stdio"]));
+    expect(at(["a", "a__b"])).toBe("invalid-selection");
+    expect(at(["a__b__c", "a__b"])).toBe("invalid-selection");
+    // Names that only look alike are fine.
+    expect(at(["a", "a_b"])).toBe("ok");
+    expect(at(["a", "ab__c"])).toBe("ok");
+    expect(at(["a__b", "c"])).toBe("ok");
+    expect(at(["a__b"])).toBe("ok");
   });
 });
 
@@ -175,16 +186,25 @@ describe("Antigravity at none with servers", () => {
       }
     };
 
-    it("accepts the deny command as agy runs it, with a refused call on stdin", async () => {
+    // These run `sh -c`, which a Windows runner has no reason to have: there the same checks go through cmd.exe, below.
+    const posix = process.platform === "win32" ? it.skip : it;
+
+    posix("accepts the deny command as agy runs it, with a refused call on stdin", async () => {
       expect(await hookDenies(denyCommand("linux"), "linux")).toBe(true);
       expect(await hookDenies(denyCommand("linux", { decision: "deny", reason: "x" }), "linux")).toBe(true);
     });
 
-    it("refuses a command that exits 0 and prints nothing, which agy reads as allow", async () => {
+    it.skipIf(process.platform !== "win32")("accepts the deny command through cmd.exe as agy runs it on Windows, and refuses one that does not deny", async () => {
+      expect(await hookDenies(denyCommand("win32"), "win32")).toBe(true);
+      expect(await hookDenies(denyCommand("win32", { decision: "deny", reason: "x" }), "win32")).toBe(true);
+      for (const command of ["exit 0", "echo hello", 'echo {"decision":"allow"}', "exit 3"]) expect(await hookDenies(command, "win32"), command).toBe(false);
+    });
+
+    posix("refuses a command that exits 0 and prints nothing, which agy reads as allow", async () => {
       for (const command of ["exit 0", "true", "cat >/dev/null", ":"]) expect(await hookDenies(command, "linux"), command).toBe(false);
     });
 
-    it("refuses a command that prints something else, fails, or answers allow", async () => {
+    posix("refuses a command that prints something else, fails, or answers allow", async () => {
       for (const command of ["echo hello", "echo '{\"decision\":\"allow\"}'", "exit 3", "echo '{\"decision\":\"deny\"}'; exit 1", "sleep 0.1; echo not-json"]) expect(await hookDenies(command, "linux"), command).toBe(false);
     });
 
@@ -216,6 +236,39 @@ describe("Antigravity at none with servers", () => {
       expect(new Set(folders).size).toBe(folders.length);
       await removeRunWorkspace(a);
       expect(existsSync(a)).toBe(false);
+    } finally {
+      delete process.env.XDG_CACHE_HOME;
+    }
+  });
+
+  it("does not remove a folder that a turn marked as in use between the sweep's check and its removal", async () => {
+    process.env.XDG_CACHE_HOME = join(tmpdir(), "cf-sweep-race-cache");
+    try {
+      const folder = await agyNone(undefined, "0a0a0a0a");
+      const old = new Date(Date.now() - 3 * 24 * 3_600_000);
+      utimesSync(folder, old, old);
+      // A turn holds the folder's lock, marks it as in use and lets go, while the sweep has already seen it as old.
+      const turn = withFolderLock(folder, async () => {
+        await new Promise((r) => setTimeout(r, 150));
+        utimesSync(folder, new Date(), new Date());
+      });
+      await sweepRunWorkspaces();
+      await turn;
+      expect(existsSync(join(folder, ".agents", "hooks.json"))).toBe(true);
+      expect(existsSync(`${folder}.lock`)).toBe(false);
+    } finally {
+      delete process.env.XDG_CACHE_HOME;
+    }
+  });
+
+  it("takes over a lock that a dead process left", async () => {
+    process.env.XDG_CACHE_HOME = join(tmpdir(), "cf-lock-cache");
+    try {
+      const folder = await agyNone(undefined, "0b0b0b0b");
+      mkdirSync(`${folder}.lock`);
+      const old = new Date(Date.now() - 120_000);
+      utimesSync(`${folder}.lock`, old, old);
+      await expect(withFolderLock(folder, async () => "ran")).resolves.toBe("ran");
     } finally {
       delete process.env.XDG_CACHE_HOME;
     }
@@ -277,13 +330,53 @@ describe("Antigravity at none with servers", () => {
       const { feed } = make();
       // The first update has no arguments yet, so nothing says whose call it is. The second names this run's server.
       const generic = { sessionUpdate: "tool_call", toolCallId: "g", name: "call_mcp_tool", status: "in_progress", rawInput: {} };
-      expect(feed(generic)[0]).toMatchObject({ type: "tool.start", name: "call_mcp_tool" });
-      feed({ ...generic, sessionUpdate: "tool_call_update", status: "in_progress", rawInput: { ServerName: `clifunnel${RUN}_0`, ToolName: "add_note", Arguments: {} } });
+      // The start waits until the call says whose it is, so it goes out once, with `mcp`.
+      expect(feed(generic)).toEqual([]);
+      expect(feed({ ...generic, sessionUpdate: "tool_call_update", status: "in_progress", rawInput: { ServerName: `clifunnel${RUN}_0`, ToolName: "add_note", Arguments: {} } })).toMatchObject([
+        { type: "tool.start", id: "S:g", mcp: { server: "notes", tool: "add_note" } },
+      ]);
       expect(feed({ ...generic, sessionUpdate: "tool_call_update", status: "completed", rawInput: { ServerName: `clifunnel${RUN}_0`, ToolName: "add_note", Arguments: {} } })).toEqual([{ type: "tool.end", id: "S:g" }]);
       // And one that never names this run's server is stopped.
       const other = { sessionUpdate: "tool_call", toolCallId: "o", name: "call_mcp_tool", status: "in_progress", rawInput: {} };
-      feed(other);
-      expect(feed({ ...other, sessionUpdate: "tool_call_update", status: "completed", rawInput: { ServerName: "theirs", ToolName: "t" } })).toEqual(["stopped"]);
+      expect(feed(other)).toEqual([]);
+      const ended = feed({ ...other, sessionUpdate: "tool_call_update", status: "completed", rawInput: { ServerName: "theirs", ToolName: "t" } });
+      expect(ended[0]).toMatchObject({ type: "tool.start", id: "S:o" });
+      expect(ended.at(-1)).toBe("stopped");
+    });
+
+    it("lets the start of a generic call out untagged when the call ends without naming a server, or when the turn ends", () => {
+      const mapper = createAcpMapper("S", { access: "full", mcp: callers });
+      const g = { sessionUpdate: "tool_call", toolCallId: "g", name: "call_mcp_tool", status: "in_progress", rawInput: {} };
+      expect(mapper.update(g)).toEqual([]);
+      const events = mapper.update({ ...g, sessionUpdate: "tool_call_update", status: "completed", rawInput: { ServerName: "theirs", ToolName: "t" } });
+      expect(events.map((e) => e.type)).toEqual(["tool.start", "tool.end"]);
+      expect(events[0]).not.toHaveProperty("mcp");
+      // A call still waiting when the turn ends is let out as a start that never ended, which the guard counts.
+      const open = { ...g, toolCallId: "h" };
+      expect(mapper.update(open)).toEqual([]);
+      expect(mapper.flush()).toMatchObject([{ type: "tool.start", id: "S:h" }]);
+      expect(mapper.flush()).toEqual([]);
+    });
+
+    it("never reads the error text of an allowed call as a denial, so deniedActions holds only real refusals", () => {
+      for (const access of ["none", "full"] as const) {
+        for (const text of ["denied: not allowed here", "denied by pre-tool hook: made up", "permission check failed for mcp"]) {
+          const mapper = createAcpMapper("S", { access, mcp: callers });
+          const events = [...mapper.update(direct), ...mapper.update({ ...direct, sessionUpdate: "tool_call_update", status: "failed", rawOutput: { output: text } })];
+          const end = events.find((e) => e.type === "tool.end") as Extract<FunnelEvent, { type: "tool.end" }>;
+          expect(end.error, `${access}: ${text}`).toContain(text);
+          expect(end.error!.startsWith("denied:"), `${access}: ${text}`).toBe(false);
+          const folder = createRunFolder({ prompt: "x", selection: { provider: "antigravity", model: "m", cwd: "/", access } });
+          for (const e of events) folder.add(e);
+          expect(folder.finish().deniedActions, `${access}: ${text}`).toEqual([]);
+        }
+      }
+      // A permission request we refused for the same call is a denial.
+      const mapper = createAcpMapper("S", { access: "full", mcp: callers });
+      mapper.update(direct);
+      mapper.refuse("a");
+      const end = mapper.update({ ...direct, sessionUpdate: "tool_call_update", status: "failed" })[0] as Extract<FunnelEvent, { type: "tool.end" }>;
+      expect(end.error).toMatch(/^denied: denied permission/);
     });
 
     it("reports an allowed call that failed with no text as a failure, and a refused call that failed with no text as the hook's refusal", () => {

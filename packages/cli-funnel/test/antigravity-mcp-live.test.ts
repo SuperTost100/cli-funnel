@@ -30,11 +30,28 @@ async function rawAcp(opts: { cwd: string; servers: object[]; prompt: string; mo
   const asked: string[] = [];
   let text = "";
   let id = 0;
-  const waiting = new Map<number, (m: any) => void>();
+  const waiting = new Map<number, { resolve: (m: any) => void; reject: (e: Error) => void }>();
+  let gone: Error | undefined;
+  // When agy is not there any more, nothing will answer: every request that waits fails, and so does the next one.
+  const lost = (e: Error) => {
+    gone ??= e;
+    for (const w of waiting.values()) w.reject(e);
+    waiting.clear();
+  };
+  child.on("error", lost);
+  child.on("close", (code) => lost(new Error(`agy acp exited (${code}) before it answered`)));
+  child.stdin.on("error", lost);
   const send = (m: object) => child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", ...m })}\n`);
-  const call = (method: string, params: object) => new Promise<any>((resolve) => {
-    waiting.set(++id, resolve);
-    send({ id, method, params });
+  /** A request with an answer awaited for at most `ms`: the setup requests answer in seconds, the prompt may take minutes. */
+  const call = (method: string, params: object, ms = 60_000) => new Promise<any>((resolve, reject) => {
+    if (gone) return reject(gone);
+    const n = ++id;
+    const timer = setTimeout(() => {
+      waiting.delete(n);
+      reject(new Error(`no answer to ${method} in ${ms / 1000}s`));
+    }, ms);
+    waiting.set(n, { resolve: (m) => (clearTimeout(timer), resolve(m)), reject: (e) => (clearTimeout(timer), reject(e)) });
+    send({ id: n, method, params });
   });
   let buf = "";
   child.stdout.on("data", (d) => {
@@ -53,7 +70,7 @@ async function rawAcp(opts: { cwd: string; servers: object[]; prompt: string; mo
         if (u.sessionUpdate === "tool_call" || u.sessionUpdate === "tool_call_update") calls.set(u.toolCallId, { name: u.name, status: u.status, input: u.rawInput });
         if (u.sessionUpdate === "agent_message_chunk" && u.content?.type === "text") text += u.content.text;
       } else if (m.id !== undefined && waiting.has(m.id)) {
-        waiting.get(m.id)!(m);
+        waiting.get(m.id)!.resolve(m);
         waiting.delete(m.id);
       }
     }
@@ -63,7 +80,10 @@ async function rawAcp(opts: { cwd: string; servers: object[]; prompt: string; mo
     const session = (await call("session/new", { cwd: opts.cwd, mcpServers: opts.servers })).result;
     await call("session/set_config_option", { sessionId: session.sessionId, configId: "model", value: opts.model ?? MODEL });
     await call("session/set_config_option", { sessionId: session.sessionId, configId: "thought_level", value: "low" });
-    await Promise.race([call("session/prompt", { sessionId: session.sessionId, prompt: [{ type: "text", text: opts.prompt }] }), new Promise((r) => setTimeout(r, 110_000))]);
+    // A prompt that does not finish in time returns what came so far. An agy that went away is an error.
+    await call("session/prompt", { sessionId: session.sessionId, prompt: [{ type: "text", text: opts.prompt }] }, 110_000).catch((e: Error) => {
+      if (!/^no answer to session\/prompt/.test(e.message)) throw e;
+    });
   } finally {
     child.kill();
   }

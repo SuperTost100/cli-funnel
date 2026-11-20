@@ -226,7 +226,7 @@ Providers with `capabilities.fileChanges` emit one `file.change` event per file 
 
 ### MCP servers
 
-`mcpServers` attaches MCP servers to the agent, keyed by a name of letters, digits, `_` and `-`. Servers from the user's own CLI config stay as they are.
+`mcpServers` attaches MCP servers to the agent, keyed by a name of letters, digits, `_` and `-`. Two names where one is the other followed by `__` (`a` and `a__b`) are refused on every provider: Claude Code names a tool `mcp__<server>__<tool>`, so `mcp__a__b__c` could be a tool of either, and cli-funnel refuses the pair instead of tagging the wrong server. Servers from the user's own CLI config stay as they are.
 
 ```ts
 mcpServers: {

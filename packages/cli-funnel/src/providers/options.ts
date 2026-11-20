@@ -99,6 +99,13 @@ export function mcpServersFor(
   const servers = object(input.mcpServers, "mcpServers");
   if (!servers || !Object.keys(servers).length) return [];
   const access = input.selection.access;
+  // Claude Code names a tool `mcp__<server>__<tool>`, so with servers `a` and `a__b` the name `mcp__a__b__c` is a tool of
+  // either. cli-funnel refuses such a pair on every provider rather than tag the wrong server.
+  const names = Object.keys(servers);
+  for (const outer of names) {
+    const inner = names.find((n) => n !== outer && outer.startsWith(`${n}__`));
+    if (inner) bad(`MCP server names "${inner}" and "${outer}": one is the other followed by "__", so a tool name could belong to either. Rename one.`);
+  }
   return Object.entries(servers).map(([name, raw]) => {
     const where = `mcpServers.${name}`;
     if (!MCP_NAME.test(name)) bad(`MCP server name "${name}" must be 1 to 64 letters, digits, _ or -.`);

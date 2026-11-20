@@ -20,6 +20,7 @@ import {
   thoughtLevels,
   toUsage,
 } from "../src/providers/antigravity/acp/protocol.js";
+import { openAcpSession } from "../src/providers/antigravity/acp/session.js";
 import { createRunFolder } from "../src/providers/base.js";
 import type { FunnelEvent, RunInput } from "../src/types.js";
 
@@ -549,6 +550,46 @@ describe.skipIf(process.platform === "win32")("antigravity over ACP, with a fake
       }
       expect(runFolders()).toEqual(before);
     });
+  });
+
+  it("ends a turn as cancelled, without sending the prompt, when the signal aborts while the folder is being put right", async () => {
+    const agy = fakeAgy();
+    const controller = new AbortController();
+    const run = input({ signal: controller.signal });
+    const session = await openAcpSession(run, {
+      path: process.env.CLI_FUNNEL_AGY_BIN!,
+      cwd: tmpdir(),
+      args: [],
+      brainDir: tmpdir(),
+      readText: () => undefined,
+      createdInRun: () => undefined,
+      mcpServers: [],
+      defaultEffort: () => undefined,
+      onModels: () => undefined,
+      cleanup: async () => undefined,
+      // The abort comes while this runs, before any prompt exists to cancel.
+      refresh: async () => {
+        controller.abort();
+        await new Promise((r) => setTimeout(r, 100));
+      },
+    });
+    const events: FunnelEvent[] = [];
+    try {
+      for await (const e of session.turn(run)) events.push(e);
+    } finally {
+      session.close();
+    }
+    expect(events.at(-1)).toMatchObject({ type: "done", finishReason: "cancelled" });
+    expect(agy.received().some((m) => m.method === "session/prompt")).toBe(false);
+  });
+
+  it("stops a turn that ends while a generic MCP call has still not said whose it is", async () => {
+    const call = (sessionUpdate: string, status: string) => ({ jsonrpc: "2.0", method: "session/update", params: { sessionId: SESSION, update: { sessionUpdate, toolCallId: "g", name: "call_mcp_tool", status, rawInput: {} } } });
+    const done = { jsonrpc: "2.0", id: 1, result: { stopReason: "end_turn" } };
+    fakeAgy({ script: [call("tool_call", "in_progress"), done] });
+    const events = await drain(input({ mcpServers: { notes: { type: "http", url: "http://127.0.0.1:9/mcp" } } }));
+    expect(events.some((e) => e.type === "tool.start" && e.name === "call_mcp_tool")).toBe(true);
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "cli-failed", message: expect.stringContaining('"call_mcp_tool" started and never ended') });
   });
 
   it("refuses a caller server named like a reserved one, and a tool timeout, before any process starts", async () => {

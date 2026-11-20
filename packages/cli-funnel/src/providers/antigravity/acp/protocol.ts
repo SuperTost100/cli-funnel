@@ -311,9 +311,35 @@ export function createAcpMapper(sessionId: string, options: AcpMapperOptions) {
   let denied = 0;
   let plan = "";
 
+  // The calls of `call_mcp_tool` that have not said which server they are for, by tool call id, with what is known of them.
+  // Their `tool.start` waits: it goes out once, with `mcp` when the server turns out to be the run's.
+  const held = new Map<string, Json>();
+
   function tool(update: Json): FunnelEvent[] {
     const id = String(update.toolCallId ?? "");
     if (!id) return [];
+    const status = String(update.status ?? "");
+    const state = status === "completed" ? "DONE" : status === "failed" ? "ERROR" : "RUNNING";
+    if (state !== "RUNNING" && ended.has(id)) return [];
+    if (options.mcp && update.name === MCP_TOOL && typeof (update.rawInput ?? update.args)?.ServerName !== "string") {
+      // No server named yet: while the call is still running, keep waiting. A call that ends here never names one.
+      if (state === "RUNNING") {
+        held.set(id, { ...held.get(id), ...update });
+        return [];
+      }
+    }
+    const before = held.get(id);
+    if (before) {
+      held.delete(id);
+      // The start goes first, from what was held and what is known now, then this update if it is more than the start.
+      const start = emit({ ...before, ...update, status: "in_progress" });
+      return state === "RUNNING" ? start : [...start, ...emit(update)];
+    }
+    return emit(update);
+  }
+
+  function emit(update: Json): FunnelEvent[] {
+    const id = String(update.toolCallId ?? "");
     const status = String(update.status ?? "");
     const state = status === "completed" ? "DONE" : status === "failed" ? "ERROR" : "RUNNING";
     if (state !== "RUNNING" && ended.has(id)) return [];
@@ -337,13 +363,13 @@ export function createAcpMapper(sessionId: string, options: AcpMapperOptions) {
     let untrusted: string | undefined;
     if (state === "ERROR") {
       const given = output?.split("\n")[0];
-      // The run's own servers' calls were allowed, so a failure of one is the tool's own, whatever it says or leaves out.
+      // The run's own servers' calls were allowed, so a failure of one is the tool's own, whatever it says or leaves out,
+      // and at any level: only our refusal of its permission request is a denial. The text is kept, but never as `denied:`.
       if (refused.has(id)) error = { message: PERMISSION_DENIED };
-      else if (options.access !== "none") error = { message: given || "tool failed" };
       else if (mcpCalls.has(`${sessionId}:${id}`)) {
-        untrusted = given || "tool failed";
+        untrusted = /^\s*denied:/i.test(given ?? "") ? `tool failed: ${given}` : given || "tool failed";
         error = { message: "tool failed" };
-      }
+      } else if (options.access !== "none") error = { message: given || "tool failed" };
       // Anything else at `none` counts as a refusal only by a text we know: the hook's own, or the shape agy gives a refusal.
       else if (output !== undefined && HOOK_REFUSAL_TEXTS.includes(output.trim())) error = { message: HOOK_MESSAGE };
       else if (output === undefined && silent(update)) error = { message: HOOK_MESSAGE };
@@ -377,6 +403,15 @@ export function createAcpMapper(sessionId: string, options: AcpMapperOptions) {
     /** True when the call with this event id was, in any of its updates, a call to one of the run's own MCP servers. */
     isMcp(eventId: string): boolean {
       return mcpCalls.has(eventId);
+    },
+    /**
+     * The starts still waiting for a server name, let out untagged: for the end of a turn, where a call that began and
+     * never ended must still be seen.
+     */
+    flush(): FunnelEvent[] {
+      const waiting = [...held.values()];
+      held.clear();
+      return waiting.flatMap((u) => emit({ ...u, status: "in_progress" }));
     },
     /** Marks a tool call whose permission request was refused, so its failure reads as a denial. */
     refuse(toolCallId: string): void {

@@ -256,6 +256,38 @@ export function requireMcpAtNoneHere(servers: readonly unknown[], platform: Node
 }
 
 /**
+ * Runs `fn` while holding the lock of a run's folder, a folder `<dir>.lock` that only one process can make. The sweep takes
+ * it to check a folder's age and remove it, and a turn takes it to put the folder back and mark it as in use, so a turn
+ * never runs between the sweep's check and its removal and loses the hook file that is the only restriction at `none`.
+ * A lock older than `LOCK_STALE_MS` belongs to a process that died, and is taken over.
+ */
+export async function withFolderLock<T>(dir: string, fn: () => Promise<T>): Promise<T> {
+  const lock = `${dir}.lock`;
+  for (let tries = 0; ; tries++) {
+    try {
+      await mkdir(lock, { mode: 0o700 });
+      break;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      const info = await stat(lock).catch(() => undefined);
+      if (info && Date.now() - info.mtimeMs > LOCK_STALE_MS) await rm(lock, { recursive: true, force: true }).catch(() => undefined);
+      else if (tries >= LOCK_TRIES) throw new FunnelError("The folder of this run is locked by another process.", "cli-failed");
+      else await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    await rm(lock, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+/** A folder lock this old was left by a process that died. */
+const LOCK_STALE_MS = 30_000;
+/** How many 10 ms waits a lock gets before the call fails. */
+const LOCK_TRIES = 1_000;
+
+/**
  * Removes the folders of runs that ended without cleaning up, such as a host that exited before agy did. Only folders
  * named like a run's, and only those not touched for `maxAgeMs`, a day by default: a kept-alive session may hold its own
  * for hours. Failures are ignored, since this is housekeeping.
@@ -267,8 +299,16 @@ export async function sweepRunWorkspaces(maxAgeMs = 24 * 3_600_000): Promise<voi
     names
       .filter((n) => /^antigravity-none(\.[a-z0-9_-]+)?\.run\.[0-9a-f]{8}$/.test(n))
       .map(async (n) => {
-        const info = await stat(join(root, n)).catch(() => undefined);
-        if (info && Date.now() - info.mtimeMs > maxAgeMs) await rm(join(root, n), { recursive: true, force: true }).catch(() => undefined);
+        const dir = join(root, n);
+        const old = async () => {
+          const info = await stat(dir).catch(() => undefined);
+          return info !== undefined && Date.now() - info.mtimeMs > maxAgeMs;
+        };
+        if (!(await old())) return;
+        // Look again under the lock a turn takes, so a turn that marked the folder as in use in between keeps it.
+        await withFolderLock(dir, async () => {
+          if (await old()) await rm(dir, { recursive: true, force: true });
+        }).catch(() => undefined);
       }),
   );
 }
@@ -736,8 +776,15 @@ async function acpSetup(input: RunInput): Promise<AcpSetup> {
     ...(access === "none"
       ? {
           refresh: async () => {
-            await noneWorkspace(input.workspaceName, folderRun);
-            if (ownsFolder) await utimes(cwd, new Date(), new Date());
+            if (!ownsFolder) {
+              await noneWorkspace(input.workspaceName, folderRun);
+              return;
+            }
+            // Under the lock the sweep takes, so the sweep cannot remove the folder between the two steps.
+            await withFolderLock(cwd, async () => {
+              await noneWorkspace(input.workspaceName, folderRun);
+              await utimes(cwd, new Date(), new Date());
+            });
           },
         }
       : {}),
