@@ -322,31 +322,31 @@ export async function makeGeminiDir(home: string): Promise<string> {
   await mkdir(target, { recursive: true, mode: 0o700 });
   const link = join(dir, "antigravity-cli");
   // Other processes fix the same link at the same time. Each pass looks at what is there now, and a step that another
-  // process already took (`ENOENT` on a removal, `EEXIST` on the link) sends it round again. A few passes are enough:
-  // a process that removes a link it read before another fixed it only makes the next pass of the others make it again.
+  // process already took (`ENOENT` on a removal, `EEXIST` on the link) sends it round again, as does a path that
+  // Windows holds for a moment (`EBUSY`, `EPERM`) while another process removes or makes it. A few passes are enough: a
+  // process that removes a link it read before another fixed it only makes the next pass of the others make it again.
+  const again = new Set(["ENOENT", "EEXIST", "EBUSY", "EPERM"]);
   let last: unknown;
   for (let pass = 0; pass < 10; pass++) {
-    const info = await lstat(link).catch(() => undefined);
-    if (info?.isSymbolicLink()) {
-      // By what it resolves to: the home may be reached through a link, and a dangling link resolves to nothing.
-      const [now, want] = await Promise.all([realpath(link).catch(() => undefined), realpath(target)]);
-      if (now === want) return dir;
-      await unlinkIfThere(link);
-    } else if (info) {
-      // A real data folder left here by an earlier run holds conversations. Move it aside, never delete it.
-      await rename(link, `${link}.kept-${Date.now()}`).catch((e: NodeJS.ErrnoException) => {
-        // Gone already, or a junction another process is making: the next pass looks again.
-        if (e.code !== "ENOENT" && e.code !== "EBUSY" && e.code !== "EPERM") throw e;
-        last = e;
-      });
-      continue;
-    }
     try {
+      const info = await lstat(link).catch(() => undefined);
+      if (info?.isSymbolicLink()) {
+        // By what it resolves to: the home may be reached through a link, and a dangling link resolves to nothing.
+        const [now, want] = await Promise.all([realpath(link).catch(() => undefined), realpath(target)]);
+        if (now === want) return dir;
+        await unlinkIfThere(link);
+      } else if (info) {
+        // A real data folder left here by an earlier run holds conversations. Move it aside, never delete it.
+        await rename(link, `${link}.kept-${Date.now()}`);
+        continue;
+      }
       // A junction needs no privilege on Windows, where a symbolic link to a folder does.
       await symlink(target, link, process.platform === "win32" ? "junction" : "dir");
       return dir;
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      if (!again.has((e as NodeJS.ErrnoException).code ?? "")) throw e;
+      last = e;
+      await new Promise((resolve) => setTimeout(resolve, 5 * (pass + 1)));
     }
   }
   throw last ?? new FunnelError("The link to agy's data folder could not be made: other processes kept changing it.", "cli-failed");
