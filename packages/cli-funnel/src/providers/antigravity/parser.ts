@@ -1,8 +1,8 @@
 import { isAbsolute, posix, win32 } from "node:path";
 import type { AccessLevel, EffortOption, FunnelEvent, Limit, ModelInfo, PlanStep, RateLimits, Usage, UsageWindow } from "../../types.js";
 
-const EFFORTS = ["low", "medium", "high", "max"];
-const EFFORT_RE = /^(.+)-(low|medium|high|max)$/;
+const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+const EFFORT_RE = /^(.+)-(low|medium|high|xhigh|max)$/;
 
 /** Parses `agy models` output (`id<TAB>Name` lines). Ids that differ only by an effort suffix become one model. */
 export function parseModels(text: string): ModelInfo[] {
@@ -30,7 +30,7 @@ export function parseModels(text: string): ModelInfo[] {
       ...base0,
       id: base,
       name: first.name.replace(/\s*\([^)]*\)\s*$/, ""),
-      efforts: efforts.map((id): EffortOption => ({ id, label: id.charAt(0).toUpperCase() + id.slice(1) })),
+      efforts: efforts.map((id): EffortOption => ({ id, label: id === "xhigh" ? "XHigh" : id.charAt(0).toUpperCase() + id.slice(1) })),
       defaultEffort: efforts.includes("high") ? "high" : efforts[0],
     });
   }
@@ -48,16 +48,21 @@ export function parseWarning(line: string): string | undefined {
 
 type Json = Record<string, any>;
 
-function toUsage(u: Json | undefined): Usage | undefined {
+/**
+ * agy reports `input_tokens` without the part read from the prompt cache, so `inputTokens` adds `cache_read_tokens` to it
+ * and `cachedInputTokens` is that part, as the other providers report them. Thinking tokens are in `output_tokens` already.
+ */
+export function toUsage(u: Json | undefined): Usage | undefined {
   if (!u) return undefined;
-  const input = u.input_tokens ?? 0;
-  const output = u.output_tokens ?? 0;
+  const cached = Number(u.cache_read_tokens ?? 0) || 0;
+  const input = (Number(u.input_tokens ?? 0) || 0) + cached;
+  const output = Number(u.output_tokens ?? 0) || 0;
   return {
     inputTokens: input,
     outputTokens: output,
-    cachedInputTokens: u.cache_read_tokens || undefined,
+    cachedInputTokens: cached || undefined,
     reasoningTokens: u.thinking_tokens || undefined,
-    totalTokens: u.total_tokens ?? input + output,
+    totalTokens: input + output,
   };
 }
 

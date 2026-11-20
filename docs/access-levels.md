@@ -28,11 +28,11 @@ The picker shows only the levels a provider offers. `funnel.providers.claude.cap
 
 Claude Code has a stdio permission channel. The CLI pauses and asks the host, and the provider answers. Codex does the same through its app-server protocol. Both are tested live: an allowed write lands on disk, a denied write does not.
 
-Cursor Agent runs unrestricted in print mode when the user's Cursor config says so, and its ACP server never asked for permission in testing. Antigravity refuses gated tools in headless mode and lists them as denied. Neither has a channel to answer through, so `supervised` is not offered. When one of them adds one, the provider will list it.
+Cursor Agent runs unrestricted in print mode when the user's Cursor config says so, and its ACP server never asked for permission in testing. Antigravity refuses gated tools in print mode and lists them as denied. Over ACP it does send a permission request, but cli-funnel has no way yet to pass it to `onApproval`, so it denies each one. Neither has a channel to answer through, so `supervised` is not offered. When one of them adds one, the provider will list it.
 
 Antigravity's `accept-edits` writes only inside workspaces the user has already trusted in `agy`.
 
-`none` needs a mode the CLI enforces, not one the model is asked to respect. Claude Code can remove every tool. Codex runs in a read-only sandbox with its tool features off and every approval denied. Cursor Agent and Antigravity have no such flag. Their read-only modes still ran shell commands in testing. Both do read config from the folder they run in, so cli-funnel runs them in an empty folder of its own that holds a rule refusing every tool call. The CLI applies the rule, not the model. See [Run options](run-options.md#text-only-access-none).
+`none` needs a mode the CLI enforces, not one the model is asked to respect. Claude Code can remove every tool. Codex runs in a read-only sandbox with its tool features off and every approval denied. Cursor Agent and Antigravity have no such flag. Their read-only modes still ran shell commands in testing. Both do read config from the folder they run in, so cli-funnel runs them in an empty folder of its own that holds a rule refusing every tool call. The CLI applies the rule, not the model. Antigravity over ACP also grants the agent no file or terminal access on the client side and denies every permission request, and a live run showed that without the rule a read outside the folder is not even asked about. See [Run options](run-options.md#text-only-access-none).
 
 ## When the CLI starts with less access
 
@@ -44,7 +44,7 @@ When the CLI says it started narrower, the run gets an `access.reduced` event ri
 |---|---|
 | Codex | The sandbox in the `thread/start` or `thread/resume` answer against the one that was sent. `reason` is the `configWarning` text about the sandbox. |
 | Claude Code | `permissionMode` in `init` against the mode the level maps to, at `accept-edits`, `auto` and `full`. |
-| Antigravity | `permission_mode` in `init` at `full`: anything but `always-proceed` is reported. The other levels start in the same mode whatever their flags, so they are not checked. |
+| Antigravity | On the `print` transport only: `permission_mode` in `init` at `full`, where anything but `always-proceed` is reported. The other levels start in the same mode whatever their flags, so they are not checked. The default ACP transport reports nothing, because a session started with `--dangerously-skip-permissions` still says mode `default`: do not wait for `access.reduced` there. |
 | Cursor Agent | Nothing. Its `init` says `default` whatever the flags, so the funnel cannot tell. |
 
 Codex also checks the approval policy. If it started with a policy that asks less often than the level needs, the run fails with code `cli-failed` and a message that names both policies, because at `supervised` a forced `never` would run commands without asking `onApproval`. A policy that asks more often is not reported.
@@ -55,7 +55,7 @@ When a CLI refuses an action because nobody could approve it, the run reports it
 
 ## When the folder carries its own settings
 
-A level is enforced with the CLI's own permission settings, and the working folder can add to them. A `.claude/settings.local.json` with an allow rule lets Claude Code run commands at `supervised` without asking `onApproval`, and a Codex project's `.codex/rules/` can do the same. Set `folderConfig: "ignore"` on Claude Code 2.1.325 or newer and Codex 0.150.0 or newer so only the caller's settings and the user's own apply. Cursor Agent and Antigravity cannot turn folder config off. See [Folder config](run-options.md#folder-config).
+A level is enforced with the CLI's own permission settings, and the working folder can add to them. A `.claude/settings.local.json` with an allow rule lets Claude Code run commands at `supervised` without asking `onApproval`, and a Codex project's `.codex/rules/` can do the same. Set `folderConfig: "ignore"` on Claude Code 2.1.325 or newer and Codex 0.150.0 or newer so only the caller's settings and the user's own apply. Cursor Agent and Antigravity cannot turn folder config off. See [Folder config](run-options.md#folder-config). At `none` Antigravity's own folder is the root of its own git repository, so the instructions of a repository above it are not read, and over ACP it also starts without the user's MCP servers, skills and global `GEMINI.md`. On the `print` transport the user's MCP servers still start at `none` (every call to them is refused). See [Antigravity](providers/antigravity.md#none).
 
 ## Choosing a level
 

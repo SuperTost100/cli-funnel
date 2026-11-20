@@ -20,9 +20,9 @@ result.structured; // { color: "rosso" }
 
 | | Claude Code | Codex | Cursor Agent | Antigravity | Anthropic API | OpenAI API | Gemini API | Ollama |
 |---|---|---|---|---|---|---|---|---|
-| `system` | `--system-prompt` at `none`, `--append-system-prompt` otherwise | `developerInstructions` | put in front of the prompt | put in front of the prompt | `system` | a system message | `systemInstruction` | a system message |
-| `attachments` | image blocks in the stream-json message | `image` input items | refused | refused | image blocks | `image_url` parts | `inlineData` parts | `images` on the message |
-| `responseSchema` | `--json-schema` | `outputSchema` | asked for in the prompt | `--json-schema` | `output_config.format` | `response_format` | `responseJsonSchema` | `format` |
+| `system` | `--system-prompt` at `none`, `--append-system-prompt` otherwise | `developerInstructions` | put in front of the prompt | the session's system prompt slot over ACP, in front of the prompt on `print` | `system` | a system message | `systemInstruction` | a system message |
+| `attachments` | image blocks in the stream-json message | `image` input items | refused | image content blocks over ACP, refused on `print` | image blocks | `image_url` parts | `inlineData` parts | `images` on the message |
+| `responseSchema` | `--json-schema` | `outputSchema` | asked for in the prompt | asked for in the prompt over ACP, `--json-schema` on `print` | `output_config.format` | `response_format` | `responseJsonSchema` | `format` |
 | `maxOutputTokens` | ignored | ignored | ignored | ignored | `max_tokens` | `max_completion_tokens` | `maxOutputTokens` | `options.num_predict` |
 | `cache` | refused | refused | refused | refused | `cache_control` on the system prompt and newest turn | refused | no effect | refused |
 | `cachedContent` | refused | refused | refused | refused | refused | refused | `cachedContent` | refused |
@@ -138,7 +138,7 @@ Some vendors want more than the call back. Anthropic wants the thinking block th
 
 ## Structured answers
 
-When `responseSchema` is set, `result.structured` holds the parsed answer. Claude Code and Antigravity report it themselves. For the others cli-funnel parses the answer text, and a surrounding code fence is allowed. If the text is not JSON, `structured` is empty and `result.structuredError` says why.
+When `responseSchema` is set, `result.structured` holds the parsed answer. Claude Code and Antigravity on `print` report it themselves. For the others cli-funnel parses the answer text, and a surrounding code fence is allowed. If the text is not JSON, `structured` is empty and `result.structuredError` says why.
 
 cli-funnel does not validate the answer against the schema. `schema: "native"` means the vendor enforces it. `schema: "prompt"` means the model was only asked. Validate either way before you trust it.
 
@@ -299,7 +299,7 @@ for await (const e of funnel.stream({ selection, prompt, verbose: true })) {
 | Claude Code | every stream-json line, control requests included, and stderr |
 | Codex | every JSON-RPC message from `codex app-server` during the turn, the answers to cli-funnel's own requests and the subagents' threads included, and stderr. The answer to `config/read` is left out, because it is the user's whole Codex config, MCP server env and headers included |
 | Cursor Agent | every stream-json line, and stderr |
-| Antigravity | every JSON line, and stderr |
+| Antigravity | every JSON line, and stderr. Over ACP the lines are JSON-RPC messages |
 | Anthropic API | each `/v1/messages` response, then every SSE event |
 | OpenAI API | each `/chat/completions` or `/responses` response, then every SSE event, `[DONE]` included |
 | Gemini API | each `streamGenerateContent` response, then every SSE event |
@@ -308,7 +308,7 @@ for await (const e of funnel.stream({ selection, prompt, verbose: true })) {
 
 It is off by default, and a run without it does no extra work: stderr is split into lines only while a verbose run listens, and HTTP chunks are not copied. Model listings, status checks and pulls send no `raw` events, only runs do. The request cli-funnel sends is not in `raw`.
 
-The run's own secrets are masked in `raw` data the same way as in every other event: `apiKey`, and the values of `env`, `mcpServers` headers and `mcpServers` env entries whose names look like credentials (8 characters or more). Each line of a multiline secret is masked too. HTTP providers also mask their key, the bare token of a `Bearer` header, and every request header value of 8 characters or more except `content-type`, `accept`, `user-agent`, `anthropic-version`, `anthropic-beta` and `openai-beta`. Response headers with `cookie`, `authorization`, `authenticate`, `secret`, `password`, `credential` or `api-key` in their name are left out, and so are token headers such as `x-session-token`, `refresh_token` or `x-auth-token`. Token counts such as `x-ratelimit-remaining-tokens` stay. Each chunk is masked on its own, so a secret a server sent split across two SSE events would not be caught. The key and headers never reach the model, so only a server that echoes them in pieces could do that. Everything else stays as the CLI printed it, which can include file contents, the prompt, tool output and account details such as the signed-in email. Treat `raw` events as a debug log and keep them on the user's machine.
+The run's own secrets are masked in `raw` data the same way as in every other event: `apiKey`, and from `mcpServers` every header value (4 characters or more), the password in a server's URL (4 or more), the values in its query string (8 or more), and the value of an env entry whose name looks like a credential or that is 12 characters or longer (4 or more for the credential names). A URL part is masked as the caller wrote it, percent-encoded or not, and decoded. Errors from every provider, Antigravity's included, are masked the same way. Each line of a multiline secret is masked too. HTTP providers also mask their key, the bare token of a `Bearer` header, and every request header value of 8 characters or more except `content-type`, `accept`, `user-agent`, `anthropic-version`, `anthropic-beta` and `openai-beta`. Response headers with `cookie`, `authorization`, `authenticate`, `secret`, `password`, `credential` or `api-key` in their name are left out, and so are token headers such as `x-session-token`, `refresh_token` or `x-auth-token`. Token counts such as `x-ratelimit-remaining-tokens` stay. Each chunk is masked on its own, so a secret a server sent split across two SSE events would not be caught. The key and headers never reach the model, so only a server that echoes them in pieces could do that. Everything else stays as the CLI printed it, which can include file contents, the prompt, tool output and account details such as the signed-in email. Treat `raw` events as a debug log and keep them on the user's machine.
 
 Stderr travels through its own pipe, so its lines are placed between stdout lines by arrival time. Before the last event of a run, a verbose run waits 20 ms for stderr written just before it. Lines printed after the run's last event are not sent. A stderr line longer than 64 KB, such as a progress bar redrawn with `\r`, arrives in pieces. Claude Code, Cursor Agent and Antigravity hold stderr until the next stdout line, at most 1 MB of it, and drop the oldest lines beyond that. On a live session, a turn gets the lines printed while it runs, and a line printed between turns goes nowhere. Over HTTP, send `"verbose": true` in the `/run` body.
 
@@ -319,7 +319,7 @@ Stderr travels through its own pipe, so its lines are placed between stdout line
 | Claude Code | stdout and stderr | yes, `providerOptions.claude` | yes, `providerOptions.claude`, whole messages |
 | Codex | JSON-RPC messages and stderr | yes, `providerOptions.codex` | yes, `providerOptions.codex`, whole messages |
 | Cursor Agent | stdout and stderr | no: the CLI does not stream them | yes, `providerOptions.agent`, when the `task` call ends |
-| Antigravity | stdout and stderr | yes, `providerOptions.antigravity`, read from the subagent's transcript | yes, `providerOptions.antigravity`, read from the subagent's transcript |
+| Antigravity | stdout and stderr | `print` only, `providerOptions.antigravity`, read from the subagent's transcript | `print` only, `providerOptions.antigravity`, read from the subagent's transcript |
 | Anthropic, OpenAI and Gemini APIs | responses and body chunks | no subagents | no subagents |
 | Ollama, OpenAI-compatible servers | responses and body chunks | no subagents | no subagents |
 
@@ -356,7 +356,7 @@ Options never give the agent more than `selection.access` allows. An option that
 | Cursor Agent | `sandbox` | `enabled` only | | | `enabled` only | yes |
 | Cursor Agent | `mode: "plan"` | refused | | | yes | yes |
 | Cursor Agent | `forwardSubagentText` | yes | | | yes | yes |
-| Antigravity | `forwardSubagentText`, `forwardSubagentTools` | yes | | yes | | yes |
+| Antigravity | `forwardSubagentText`, `forwardSubagentTools` | yes, `print` only | | yes, `print` only | | yes, `print` only |
 | Antigravity | `addDirs` | refused | | yes | | yes |
 | Antigravity | `printTimeoutSec` | yes | | yes | | yes |
 
@@ -383,12 +383,12 @@ cli-funnel run claude claude-sonnet-5 "Update the shared types" --opt addDirs=/s
 
 `none` is for apps that want a model, not an agent. Nothing on the machine changes: no file writes, no commands, no MCP tool calls. Point `cwd` at an empty folder anyway, since some CLIs can still read files.
 
-| CLI | How `none` is enforced | One-line prompt, input tokens |
+| CLI | How `none` is enforced | "Reply with the single word OK.", input tokens |
 |---|---|---|
-| Claude Code | `--tools ""`, `--strict-mcp-config`, `--setting-sources ""` | about 21,800 before, about 400 after |
-| Codex | read-only sandbox, every approval denied, tool features and config MCP servers switched off | about 19,000 before, about 11,900 after |
-| Cursor Agent | runs in a cli-funnel folder whose `.cursor/cli.json` denies every tool, plus `--mode ask` | about 13,900 before, about 16,200 after |
-| Antigravity | runs in a cli-funnel folder whose `.agents/hooks.json` denies every tool call | about 15,700 before and after |
+| Claude Code | `--tools ""`, `--strict-mcp-config`, `--setting-sources ""` | about 900, from about 21,800 without `none` |
+| Codex | read-only sandbox, every approval denied, tool features and config MCP servers switched off | about 17,000, from about 19,000 without `none` |
+| Cursor Agent | runs in a cli-funnel folder whose `.cursor/cli.json` denies every tool, plus `--mode ask` | about 19,000 |
+| Antigravity | runs in a cli-funnel folder whose `.agents/hooks.json` denies every tool call, and over ACP also denies every permission request | about 18,000 |
 
 Removing settings also stops Claude Code from loading the user's CLAUDE.md, hooks and skills. That is where most of the saved tokens come from.
 
@@ -397,7 +397,7 @@ Cursor Agent and Antigravity have no flag that removes tools. Their read-only mo
 - Cursor Agent: `.cursor/cli.json` with deny rules for `Shell(*)`, `Read(**)`, `Write(**)`, `WebFetch(*)` and `Mcp(*:*)`. A deny rule beats every allow rule, the user's approval mode and `--force`. Grep and glob stay inside the folder, which is empty.
 - Antigravity: `.agents/hooks.json` with a `PreToolUse` hook that answers `deny` for every tool except `finish`, which carries the `--json-schema` answer. A deny beats an `allow` from any other hook, and a hook that fails also blocks the call.
 
-The model still sees its tools and may try one. The call fails, shows up in `result.deniedActions`, and the model answers in text. Neither CLI drops the tool definitions, so the token count does not go down. Antigravity still starts MCP servers from the user's config, but every call to them is refused. Project files such as `AGENTS.md` are not loaded, since the run does not happen in `cwd`. See [Access levels](access-levels.md).
+The model still sees its tools and may try one. The call fails, shows up in `result.deniedActions`, and the model answers in text. Neither CLI drops the tool definitions, so the token count does not go down. The numbers in the table are what each tool adds to a call by itself, measured on cli-funnel 0.9.1 and, for Antigravity, on 1.5.12 (17,994 over ACP, 17,998 on `print`). In a second turn of the same live ACP session, 15,940 of 18,063 input tokens came from the prompt cache. `usage.inputTokens` holds the cached part, and `cachedInputTokens` says how much of it that was, on every provider. Over ACP, Antigravity starts with a private Gemini folder, so the user's MCP servers do not start. On the `print` transport it still starts them, and every call to them is refused. Project files such as `AGENTS.md` are not loaded, since the run does not happen in `cwd`. See [Access levels](access-levels.md).
 
 ## Cancel a run
 

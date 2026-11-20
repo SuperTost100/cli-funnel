@@ -1,7 +1,8 @@
 import { execFileSync, spawn, spawnSync, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, accessSync, constants, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join, win32 } from "node:path";
+import { basename, delimiter, join, win32 } from "node:path";
+import { FunnelError } from "../types.js";
 import { Channel } from "./channel.js";
 import { parseLine } from "./ndjson.js";
 import { mask } from "./redact.js";
@@ -196,6 +197,8 @@ export interface ExecResult {
 }
 
 export interface ExecOptions {
+  /** `spawnStream` only: the most characters of one stdout line it holds back. See `MAX_STDOUT_LINE`. */
+  maxLineChars?: number;
   cwd?: string;
   env?: Record<string, string | undefined>;
   input?: string;
@@ -284,6 +287,13 @@ export const STDERR_KEEP = 16_384;
 /** The longest stderr line handed to `onStderr` listeners. A longer one, such as a progress bar redrawn with `\r`, arrives in pieces. */
 export const STDERR_LINE_MAX = 65_536;
 
+/**
+ * The longest stdout line `spawnStream` waits for the end of. A CLI that prints data with no line break would grow the
+ * buffer without bound, so past this the run fails and the process stops. 64 MiB is above any stream-json line seen
+ * (a tool result with a large file in it), and well below what a host could not hold.
+ */
+export const MAX_STDOUT_LINE = 64 * 1024 * 1024;
+
 /** One `onStderr` listener: its secrets, and the line it has not seen the end of yet. */
 interface StderrListener {
   call(line: string): void;
@@ -344,14 +354,26 @@ export function spawnStream(
     if (parsed !== undefined) channel.push(parsed);
   };
 
+  const maxLine = opts.maxLineChars ?? MAX_STDOUT_LINE;
+  let overflowed = false;
   child.stdout.setEncoding("utf8");
   child.stdout.on("data", (chunk: string) => {
+    if (overflowed) return;
     buffer += chunk;
     let i: number;
+    const tooLong = () => {
+      overflowed = true;
+      buffer = "";
+      channel.fail(new FunnelError(`${basename(file)} printed a line of more than ${maxLine} characters. The run was stopped.`, "cli-failed"));
+      terminate(child);
+    };
     while ((i = buffer.indexOf("\n")) >= 0) {
+      // A line over the cap is not parsed or emitted, whether or not its line break came in the same chunk.
+      if (i > maxLine) return tooLong();
       flush(buffer.slice(0, i));
       buffer = buffer.slice(i + 1);
     }
+    if (buffer.length > maxLine) tooLong();
   });
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (d: string) => {
@@ -371,7 +393,7 @@ export function spawnStream(
         if (l.partial) stderrLine(l, l.partial);
         l.partial = "";
       }
-      flush(buffer);
+      if (!overflowed) flush(buffer);
       buffer = "";
       channel.end();
       resolve(code);

@@ -125,13 +125,24 @@ export interface Selection {
   access?: AccessLevel;
 }
 
+/**
+ * Token counts of a run. Every provider follows one convention: `inputTokens` is everything the model read, the cached
+ * part included, so `totalTokens` is `inputTokens + outputTokens`. `cachedInputTokens`, `cacheCreationInputTokens` and
+ * `reasoningTokens` are shares of those two numbers, not additions to them. Fresh input is
+ * `inputTokens - (cachedInputTokens ?? 0) - (cacheCreationInputTokens ?? 0)`.
+ */
 export interface Usage {
+  /** All input tokens, cached ones included. */
   inputTokens: number;
+  /** All output tokens, reasoning ones included. */
   outputTokens: number;
+  /** The part of `inputTokens` read from the prompt cache. */
   cachedInputTokens?: number;
-  /** Input tokens written to the prompt cache. Counted in `inputTokens`. Set by Anthropic and Codex, and only when there were any. */
+  /** The part of `inputTokens` written to the prompt cache. Set by Anthropic, Codex, Cursor Agent and Antigravity over ACP, and only when there were any. */
   cacheCreationInputTokens?: number;
+  /** The part of `outputTokens` the model spent thinking. */
   reasoningTokens?: number;
+  /** `inputTokens + outputTokens`. */
   totalTokens: number;
   /** Set only when the CLI reports it. Subscription runs often do not. */
   costUsd?: number;
@@ -353,7 +364,7 @@ export type FunnelEvent =
   /**
    * The CLI started with less access than `selection.access` asked for, for example when a managed policy allows only a
    * read-only sandbox or switches a permission mode off. It follows `session`, and the run goes on with what the CLI
-   * allowed. Codex, Claude Code and Antigravity (at `full`) report it. Cursor Agent does not state its mode, so it never does.
+   * allowed. Codex, Claude Code and Antigravity on the `print` transport (at `full`) report it. Cursor Agent does not state its mode, so it never does.
    */
   | ({ type: "access.reduced" } & AccessReduced)
   /**
@@ -787,6 +798,13 @@ export interface AgentOptions {
 
 /** Antigravity settings. See docs/providers/antigravity.md. */
 export interface AntigravityOptions {
+  /**
+   * How cli-funnel drives `agy`. `acp` (the default) talks to `agy acp`, the Agent Client Protocol server: one process
+   * per conversation, a system prompt slot, images, and the thinking levels of the account. `print` starts one
+   * `agy --print` process per turn, as 0.9.x did. Needs agy 1.5.0 or newer for `acp`. A run on `apiKey` uses `print`.
+   * See docs/providers/antigravity.md.
+   */
+  transport?: "acp" | "print";
   /** More workspace directories. Absolute paths. Refused at `none`. */
   addDirs?: string[];
   /** End the turn after this many seconds. */
@@ -896,9 +914,10 @@ export interface Provider {
   /**
    * Starts a CLI process that stays alive across turns, for `createFunnel({ sessions: { keepAlive: true } })`. The
    * process is set up from `input`: its selection, system prompt, schema, env, approval handler and `sessionId` to
-   * resume. Run the turns with `turn()`, the first one included.
+   * resume. Run the turns with `turn()`, the first one included. Resolves with `undefined` when this run has no live
+   * session, and the funnel then runs it with `run()` and keeps no process for it.
    */
-  openSession?(input: RunInput): Promise<LiveSession>;
+  openSession?(input: RunInput): Promise<LiveSession | undefined>;
   /** Lists the conversations the CLI saved. Codex only. */
   listThreads?(options?: ListThreadsOptions): Promise<ThreadPage>;
   /** Copies a saved conversation into a new one and returns its session id. The original stays as it was. Codex only. */

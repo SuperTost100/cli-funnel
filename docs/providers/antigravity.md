@@ -1,12 +1,50 @@
 # Antigravity
 
-Provider id `antigravity`. Binary `agy`. Tested against 1.2.11 through 1.3.0 and 1.4.6 to 1.4.7, minimum 1.2.0. The file changes, plans, MCP servers and API key sections below were checked on 1.4.6 and 1.4.7 only.
+Provider id `antigravity`. Binary `agy`. Tested against 1.2.11 through 1.3.0, 1.4.6 to 1.4.7 and 1.5.12, minimum 1.2.0. The default transport needs 1.5.0 or newer. The file changes, plans, MCP servers and API key sections below were checked on 1.4.6 and 1.4.7, and the file changes and plans again over ACP on 1.5.12.
 
-Runs use `agy --print=<prompt> --output-format stream-json` with stdin closed. Linux refuses a single argument over 128 KiB, so a prompt over 100 KB goes on stdin instead (over 30 KB on Windows, where the whole command line is limited to 32,767 characters): `--print= --input-format stream-json` and one line `{"event":"user","message":{"content":"..."}}`. agy does not document that message shape. It is what agy 1.x decodes. The stream carries an `init` event, `step_update` events (text deltas and tool steps) and a final `result` with token usage and `denied_actions`.
+## Transports
+
+`providerOptions.antigravity.transport` picks how cli-funnel drives `agy`:
+
+| Transport | Starts | Needs |
+| --- | --- | --- |
+| `acp` (default) | `agy acp`, the [Agent Client Protocol](https://agentclientprotocol.com) server, one process per conversation | agy 1.5.0 or newer |
+| `print` | one `agy --print` process per turn, as 0.9.x did | agy 1.2.0 or newer |
+
+`acp` is the transport Google offers to other apps. See [Terms and limits](../tos-notes.md#antigravity). It gives a conversation that continues in one process, the model and thinking levels the account has, a slot for the system prompt, images, and per-turn token counts. `print` stays for older agy builds, for the subagent options and for runs on an API key, which `acp` does not take (see [API key](#api-key)). A run with `apiKey` and no `transport` uses `print`. `detect()` says in `detail` when the installed agy is older than 1.5.0, and an ACP run on such a build fails with `unsupported` and names `print`.
+
+### How the ACP transport runs
+
+Each run, or each live session, starts `agy acp` in the run's folder (the folder `none` owns, or `selection.cwd`) and speaks JSON-RPC over its stdin and stdout:
+
+1. `initialize` with client capabilities that grant nothing: no file reads, no file writes, no terminal. agy reads and writes files and runs commands itself, and advertising writes would swap its own diff edits for whole-file client edits.
+2. `session/new`, or `session/resume` with the stored id when the run has a `sessionId` (`session/load` when the agent advertises only that). A conversation agy does not have ends the run with `cli-failed` and "Conversation `<id>` was not found.", with no `session` event.
+3. The model and the thinking level, set with `session/set_config_option` from the `model` and `thought_level` options of the session. They are set again on every activation, because a resumed session answers with the account's default. A model the account does not list fails with `invalid-selection` and names the models it does list.
+4. `system` goes in `_meta.antigravity.systemPrompt.append` when the agent advertises that slot, which 1.5.12 does. It is sent again on every activation, because agy keeps none of it between processes. Without the slot the system prompt goes in front of the prompt, as in `print`.
+5. `session/prompt`. Text arrives as `session/update` notifications: `agent_message_chunk` as `text.delta`, `agent_thought_chunk` as `reasoning.delta`, tool calls as `tool.start` and `tool.end`, and `plan` as `plan`. The answer of the prompt carries the stop reason and the token counts.
+
+`session/cancel` ends a turn when the caller aborts or `printTimeoutSec` passes. agy answers the prompt with `cancelled`, and the process stays up for the next turn of a live session. If it does not answer within five seconds, cli-funnel ends the turn and stops the process.
+
+Verbose runs send every line agy prints on stdout, and its stderr, as `raw` events.
+
+### Sessions
+
+`sessionId` in and out works as on the other CLIs. A one-shot run starts a process, runs one prompt and stops it. With `sessions.keepAlive` the process stays up between turns of the same conversation, so a second turn needs no start and no `session/resume`. After the process is gone, the next turn resumes by id on a new one. Checked on 1.5.12: a word told to the first process was remembered by the second after a resume, and by the same process on the next turn. Settings that cannot change mid-process (model, level, system prompt, access, folder) start a new process, as the [live session rules](../sessions.md#when-a-turn-reuses-a-process) say. `steer` is not available.
+
+### What the account lists
+
+`models()` still runs `agy models` and merges it with the bundled list, because a session per call would add a conversation to the account's history each time. Every ACP session also reports the account's models, and cli-funnel merges those into the list it uses for default efforts. On 1.5.12 the two lists were identical. Besides `low`, `medium` and `high`, some models have an `xhigh` level, shown as "XHigh", and the levels a model offers are the ones its session lists: `gemini-3.8-flash` has three and `gemini-4-neon` has four.
+
+### What `print` does and ACP does not
+
+- No `--json-schema`: ACP has no schema field, so `responseSchema` is asked for in the prompt, `capabilities.schema` is `"prompt"`, and cli-funnel parses the answer. Use `print` when the vendor should enforce the schema.
+- `forwardSubagentText` and `forwardSubagentTools` read the print transport's output and are refused with `unsupported` over ACP.
+- `access.reduced` is not reported at `full`: a session started with `--dangerously-skip-permissions` still reports mode `default`, so the funnel cannot tell.
+- `rateLimits()` still runs `agy --print=/usage`, which starts no model turn.
 
 ## Warnings
 
-`agy` prints warnings on stderr as lines that start with `warning:` and a space, for example `warning: --mode plan has no effect while slash command expansion is disabled.` or `warning: ignoring unsupported stream input message event "bogus"`. Each one becomes a `warning` event with the rest of the line as its message, and `RunResult.warnings` lists them in order. Lines with other prefixes (`error:`, `jetski:`, `[agy]`, `AGY_ERROR:`) are not warnings and are handled as before. Checked on 1.5.3.
+On the `print` transport, `agy` prints warnings on stderr as lines that start with `warning:` and a space, for example `warning: --mode plan has no effect while slash command expansion is disabled.` or `warning: ignoring unsupported stream input message event "bogus"`. Each one becomes a `warning` event with the rest of the line as its message, and `RunResult.warnings` lists them in order. Lines with other prefixes (`error:`, `jetski:`, `[agy]`, `AGY_ERROR:`) are not warnings and are handled as before. Checked on 1.5.3. Over ACP, stderr holds agy's own log lines, which are not warnings and show only as `raw` events.
 
 Stderr is a separate pipe from the stream, so a warning can be read before or after the `init` line that produced `session`. Warnings are therefore held until `session` (and `access.reduced`, when there is one) has gone out, and are emitted right after them. A warning that arrives later goes out before the next event. If the run ends without a `session` event, the held warnings come just before the `done` or `error`. Before the `done` or `error` goes out, cli-funnel waits for `agy` to exit, so the last stderr line is read, and stops a process that is still running after one second. Warnings are masked with the run's secrets, as `raw` events are.
 
@@ -15,27 +53,30 @@ Stderr is a separate pipe from the stream, so a warning can be read before or af
 | Feature | Supported |
 | --- | --- |
 | Access levels | `none`, `accept-edits`, `full` |
-| Effort | yes |
+| Effort | yes, the levels each model lists |
 | Context window | no |
 | Fast mode | no |
-| Resume | yes |
+| Resume | yes, with `sessions.keepAlive` on the same process |
 | Approvals | no |
+| Images | yes over ACP, refused on `print` |
+| System prompt | the session's slot over ACP, in front of the prompt on `print` |
+| JSON schema | asked for in the prompt over ACP, `--json-schema` on `print` |
 | File changes | yes, from the file tools and a plain `rm` |
 | Plans | yes, when the agent keeps a `task.md` |
 | MCP servers | `http` and `stdio`, at `full` only |
-| API key | yes, `apiKey` runs in its own home folder |
+| API key | yes, on `print` only |
 | Questions | no |
 | Sandbox | no |
 
 ## Access
 
-`supervised` is not available. In print mode `agy` cannot ask anyone for permission. A tool that needs a permission is denied on the spot and listed in `denied_actions`, and the run continues without it. There is no request to forward, so cli-funnel cannot offer an approve button.
+`supervised` is not available. In print mode `agy` cannot ask anyone for permission, and over ACP cli-funnel does not forward the permission requests `agy` sends yet: it denies each one. A tool that needs a permission is denied on the spot and listed in `denied_actions`, and the run continues without it. There is no request to forward, so cli-funnel cannot offer an approve button.
 
-- `accept-edits` passes `--mode accept-edits`. Verified: file writes succeed in a workspace the user has already trusted in Antigravity (listed in `trustedWorkspaces` in `~/.gemini/antigravity-cli/settings.json`). In an untrusted directory such as a fresh `/tmp` folder the write is still denied. Trust the folder once in the interactive `agy` first.
-- `full` passes `--dangerously-skip-permissions`. Every tool runs without a check.
+- `accept-edits` passes `--mode accept-edits` on `print`, and sets the session mode `accept-edits` over ACP. Every permission request that is left, such as one for a shell command, is denied and the call shows as `denied:`. Verified: file writes succeed in a workspace the user has already trusted in Antigravity (listed in `trustedWorkspaces` in `~/.gemini/antigravity-cli/settings.json`). In an untrusted directory such as a fresh `/tmp` folder the write is still denied. Trust the folder once in the interactive `agy` first.
+- `full` passes `--dangerously-skip-permissions` on both transports. Every tool runs without a check. Verified over ACP on 1.5.12: a file write and a shell command ran with no request.
 - `auto` is not offered. `agy` 1.3.5 added `--mode auto`, but it is not available on every account. On an account without it, `agy` prints `warning: --mode auto is not available for this account; continuing in the default mode.` on stderr and runs in the default mode. cli-funnel cannot tell from the stream which mode ran, so it cannot promise the level. Tested on 1.3.5.
 
-At `full`, `init` reports `permission_mode: "always-proceed"`. When it reports anything else, the run emits `access.reduced` after `session`. The default mode and `--mode accept-edits` both report `request-review`, so `accept-edits` cannot be checked. See [Access levels](../access-levels.md#when-the-cli-starts-with-less-access).
+On `print`, at `full`, `init` reports `permission_mode: "always-proceed"`. When it reports anything else, the run emits `access.reduced` after `session`. The default mode and `--mode accept-edits` both report `request-review`, so `accept-edits` cannot be checked. See [Access levels](../access-levels.md#when-the-cli-starts-with-less-access).
 
 That is not true of every shell command. On 1.2.13, a `touch` outside the workspace ran without a check both in the default print mode and with `--mode plan --sandbox`. `--mode plan` has no effect together with `--disable-slash-commands`, and the CLI prints a warning saying so. Neither mode can carry `none`.
 
@@ -45,7 +86,7 @@ That is not true of every shell command. On 1.2.13, a `touch` outside the worksp
 
 ### `none`
 
-`agy` loads `.agents/hooks.json` from the folder it runs in. A `PreToolUse` hook that answers `{"decision": "deny"}` blocks the call before any permission check. At `none` the provider runs `agy` with no mode flag in `~/.cache/cli-funnel/workspaces/antigravity-none/`, which holds only that hook file. The hook command is `cat >/dev/null; printf '%s\n' '<deny json>'` (`echo <deny json>` on Windows).
+`agy` loads `.agents/hooks.json` from the folder it runs in, on both transports. A `PreToolUse` hook that answers `{"decision": "deny"}` blocks the call before any permission check. At `none` the provider runs `agy` with no mode flag in `~/.cache/cli-funnel/workspaces/antigravity-none/`, which holds only that hook file. The hook command is `cat >/dev/null; printf '%s\n' '<deny json>'` (`echo <deny json>` on Windows).
 
 The matcher covers every tool name except `finish`. `finish` ends the turn and carries the `--json-schema` answer, and denying it breaks structured output. Go regexp has no lookahead, so the matcher spells the exclusion out.
 
@@ -56,9 +97,19 @@ Verified on 1.3.0:
 - A hook that exits non-zero also blocks the call, so a broken hook fails closed.
 - `--json-schema` still returns `structured_output`. Resume works, because every `none` run uses the same folder.
 
-MCP servers from the user's config still start, but every call to them is denied. The model sees its full tool list, so the input token count is the same as at other levels. The Windows hook command has not been run on Windows.
+The model sees its full tool list, so the input token count is the same as at other levels. The Windows hook command has not been run on Windows.
 
-Denied tools appear as `tool.end` events whose error starts with `denied:`. That includes calls refused by a hook, which `agy` does not list in `denied_actions`. If the run produced no text and something was denied, the finish reason is `denied`.
+**The user's own setup, over ACP.** `agy` reads the user's MCP servers (`~/.gemini/config/mcp_config.json`), skills and global `GEMINI.md` from its Gemini folder, and it starts those servers when a session opens, before any prompt. So at `none` the ACP transport starts `agy acp --gemini-dir=<cache>/workspaces/antigravity-gemini-none`, a folder that holds only a link (a junction on Windows) to the user's `antigravity-cli` data folder. The sign-in and the conversations are reached through the link, so `sessionId` resumes across levels. Checked on 1.5.12 without a model call, in a home folder made for the test (its data folder linked to the real one): a stdio server in that home's `mcp_config.json` wrote its marker line when `agy acp` started the normal way, and wrote nothing with `--gemini-dir`, and the session and its models still came back. A live `none` run through cli-funnel then answered and the marker file stayed empty (`test/antigravity-none-live.test.ts`). The skills in `~/.gemini/config/skills` and the global `GEMINI.md` are out of the run too, but the user's skills are not all out of it. Checked live on 1.5.12 and 1.5.13 (`gemini-3.8-flash`, access `none`, through the funnel, signed in): asked for the names of the skills it had been given, the model listed 22, the names of the user's own skills among them (`aeo`, `cloudflare`, `grilling`, `takeover` and the rest of what was in `~/.gemini/config/skills`) next to agy's built-in ones, with the private folder's `skills` empty. So agy also reads skills from other places under the home folder, which `--gemini-dir` does not move: its own text lists `~/.claude/skills/`, `~/.codex/skills/` and `~/.agents/skills`. The check could not tell which of them it was, since on that machine they all hold the same skills, and it did not try, because that needs a run under another home folder. Asked for instruction files (`AGENTS.md`, `GEMINI.md`, rules, workflows) the model answered that it had none. Skills are text the model reads, not something that runs: every tool is still refused. Do not rely on `none` to keep a user's skills out of the answer. The private folder is made inert before `agy` first sees it. `agy` migrates a Gemini folder it finds without `config/.migrated` on its first start, and through the link that migration moved and re-pointed the user's own `antigravity-cli/skills` folder (found in the first round of experiments and repaired by hand). So cli-funnel writes `config/.migrated`, an empty `config/skills` folder and an empty `config/mcp_config.json` into the private folder first, and replaces a `config/skills` that is a link with an empty folder. Tested without a model call, in a home folder made for the test, with the user's `skills` as a real folder with a file in it and as a link to `~/.gemini/config/skills`: after `initialize` and `session/new` at `none` both were unchanged and nothing from them was loaded. The user's `antigravity-cli` folder is created when it is missing, so the link always has a target and two runs that start together cannot end up with conversations in a folder a later run would remove. The link is compared with `realpath`, and nothing is ever removed with a recursive delete: a stale link goes with `unlink`, a real folder in the link's place is renamed to `antigravity-cli.kept-<time>`. A first run may leave such folders in `~/.cache/cli-funnel/workspaces/antigravity-gemini-none/` (the cache folder, `$XDG_CACHE_HOME/cli-funnel/...` where that is set): they hold conversations that an earlier run kept there. cli-funnel never deletes them. Look inside, move out what you want to keep, and remove them yourself when you are done. On a machine whose sign-in sits in the OS keyring this was not tried: the flag does not change the keyring, but a run that fails to find the sign-in would show up as `not-logged-in`.
+
+**The print transport cannot do that.** `agy --print` has no `--gemini-dir`, and `--settings` knows only a few keys, none of which lists MCP servers (it answers `unknown setting` for every MCP name tried: `mcpServers`, `mcp`, `mcpEnabled`, `enableMcp`, `disableMcp`, `allowedMcpServers`). In a `print` run at `none` the user's MCP servers still start, and the hook refuses every call to them. A private `HOME` would hide them, but it would also hide an OS keyring sign-in, so cli-funnel does not do it. Use ACP when that matters.
+
+**A repository above the folder.** `agy` finds the repository root and loads `AGENTS.md`, `GEMINI.md` and `.agents/` from every folder between the working folder and it, so a user whose home folder is a git repository had their instructions read in a `none` run. The run's folder is now the root of its own repository: it holds a `.git` with a `HEAD`, an `objects` folder and a `refs` folder, which is what makes `git rev-parse --show-toplevel` answer with the folder itself. Checked on 1.5.12 (`gemini-3.8-flash`) with `AGENTS.md` that says "end every reply with ZEBRA" in a real repository above the folder: the reply ended in ZEBRA when the folder had no root of its own and when it held an empty `.git` folder, and did not with `git init` or with the hand-made marker. An empty `.git` folder is not enough. `.agents/` was not tried separately, since the walk is the same one. Both transports use this folder. Cursor Agent does not stop at the marker: see [the Cursor Agent page](agent.md#how-none-works). `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR` and `GIT_CEILING_DIRECTORIES` are taken out of the environment of a `none` run, since they would point git at another repository, or stop it short of the folder's own root, whatever the folder holds.
+
+Over ACP the session also grants the agent nothing on the client side and denies every permission request, so a second layer stands behind the hook. Verified live on 1.5.12 with `gemini-3.8-flash`: asked to read a file outside the folder and to run `touch` on a marker file, the model got `tool call denied by pre-tool hook` for both, the marker was not created and the file's content never reached the answer. Without the hook the same read ran with no permission request at all, so the hook is what enforces `none`, and `agy` does not ask before a read.
+
+Denied tools appear as `tool.end` events whose error starts with `denied:`. Over ACP agy reports a call the hook refused as `failed` with nothing in it (an empty `output` or no output field at all), so that shape is reported as the hook's denial. That includes calls refused by a hook, which `agy` does not list in `denied_actions`. If the run produced no text and something was denied, the finish reason is `denied`.
+
+**A second line behind the hook.** At `none` the funnel watches the tool calls. A call that ends without an error, a call that fails with a message that is neither the hook's denial nor our permission refusal, and a forbidden call that started and never ended by the end of the turn each stop the run with a `cli-failed` error. Only `finish` is allowed to complete. What counts as a refusal at `none` is decided by text that cli-funnel or agy writes, never by what a tool printed: the exact refusal agy gives (`tool call denied by pre-tool hook: <reason>`), our own answer to a permission request, and, over ACP, a failure with nothing in it. A failure whose output merely starts like a refusal, or carries an exit code or any other output, is a tool that may have run, and the run stops. The limit, chosen on purpose: over ACP a refusal and a tool that ran and failed in silence look the same in the stream (every recorded refusal is a `failed` update with no output), so the second counts as refused. Stopping on every silent failure would end any run where the model tries a tool, which is the normal case at `none`.
 
 ## Folder config
 
@@ -76,18 +127,21 @@ Running agy in an empty folder with the project added through `--add-dir` would 
 
 ## Run options
 
-The CLI has no system prompt flag, so `system` goes in front of the prompt inside `<instructions>`. `responseSchema` goes to `--json-schema`, as a path to a private temp file when the schema is over 4 KB (removed after the run), and the `result` event carries the parsed answer in `structured_output`. Verified live. Images are refused.
+Over ACP, `system` goes in the session's system prompt slot, `attachments` go as image content blocks (checked with a PNG on 1.5.12), and `responseSchema` is asked for in the prompt: the schema follows the question in a short instruction, and cli-funnel parses the reply, with or without a code fence. A reply that is not JSON leaves `structured` empty and sets `structuredError`.
+
+On `print` the CLI has no system prompt flag, so `system` goes in front of the prompt inside `<instructions>`. `responseSchema` goes to `--json-schema`, as a path to a private temp file when the schema is over 4 KB (removed after the run), and the `result` event carries the parsed answer in `structured_output`. Images are refused.
 
 ## Provider options
 
-`providerOptions.antigravity` maps to these flags, checked against 1.3.6 and run live:
+`providerOptions.antigravity`, checked against 1.3.6 and 1.5.12 and run live:
 
 | Option | Flag | Access levels |
 | --- | --- | --- |
+| `transport: "acp" \| "print"` | `agy acp`, or `--print` | all |
 | `addDirs: string[]` | `--add-dir=<dir>`, absolute paths | `accept-edits`, `full` |
-| `printTimeoutSec: number` | `--print-timeout=<n>s` | all |
-| `forwardSubagentText: boolean` | none, read from the subagent's transcript | all |
-| `forwardSubagentTools: boolean` | none, read from the subagent's transcript | all |
+| `printTimeoutSec: number` | `--print-timeout=<n>s` on `print`, a `session/cancel` after that long on `acp` | all |
+| `forwardSubagentText: boolean` | none, read from the subagent's transcript. `print` only | all |
+| `forwardSubagentTools: boolean` | none, read from the subagent's transcript. `print` only | all |
 
 At `none` the run happens in a folder that holds only the deny hook, so `addDirs` is refused there.
 
@@ -136,7 +190,9 @@ Antigravity keeps its plan as artifacts in the conversation folder: `task.md`, a
 
 ## API key
 
-`apiKey` runs agy on a Gemini API key. agy only does that when `settings.json` says `"modelProvider": "gemini"`, and it reads that file from the home folder: there is no flag, no environment variable and no project-level file for it. To leave the user's settings and login alone, an API-key run gets its own home folder, `~/.cache/cli-funnel/workspaces/antigravity-api-key/`, whose `.gemini/antigravity-cli/settings.json` holds only that setting. The run's environment has `GEMINI_API_KEY=<key>`, and `HOME` and `USERPROFILE` point at that folder. The key is never an argument, an event or a file.
+`apiKey` runs agy on a Gemini API key, on the `print` transport. A run with `apiKey` and `transport: "acp"` fails with `unsupported`: the ACP sign-in methods were not tried with a key.
+
+agy runs on a key only when `settings.json` says `"modelProvider": "gemini"`, and it reads that file from the home folder: there is no flag, no environment variable and no project-level file for it. To leave the user's settings and login alone, an API-key run gets its own home folder, `~/.cache/cli-funnel/workspaces/antigravity-api-key/`, whose `.gemini/antigravity-cli/settings.json` holds only that setting. The run's environment has `GEMINI_API_KEY=<key>`, and `HOME` and `USERPROFILE` point at that folder. The key is never an argument, an event or a file.
 
 Verified on 1.4.7 with an invalid key: the run starts in the private home without a sign-in and fails with `API key not valid` from `generativelanguage.googleapis.com`, and the user's `settings.json` is unchanged. A run with a valid key is covered by a test that runs when `CLI_FUNNEL_TEST_GEMINI_KEY` is set.
 
@@ -157,11 +213,11 @@ Not supported, so `capabilities.questions` is off and `onQuestion` is never call
 
 ## Models
 
-`models()` runs `agy models` and merges the result with `data/models/antigravity.json`, which is the offline fallback.
+`models()` runs `agy models` and merges the result with `data/models/antigravity.json`, which is the offline fallback. See [What the account lists](#what-the-account-lists) for the ACP side.
 
-`agy` bakes effort into ids such as `gemini-3.8-flash-high`. cli-funnel groups these into one model per base id (`gemini-3.8-flash`) with `efforts` `low`, `medium`, `high`. Ids without variants stay as they are: `claude-sonnet-4-6`, `claude-opus-4-6-thinking`, `gpt-oss-120b-medium`. Those take no effort.
+`agy` bakes effort into ids such as `gemini-3.8-flash-high`. cli-funnel groups these into one model per base id (`gemini-3.8-flash`) with the efforts the ids carry: `low`, `medium`, `high`, and `xhigh` where there is one. Ids without variants stay as they are: `claude-sonnet-4-6`, `claude-opus-4-6-thinking`, `gpt-oss-120b-medium`. Those take no effort.
 
-The `--model` string is the base id plus `--effort <effort>`. Passing a full id together with `--effort` fails with a conflict error, and a base id with no effort fails with "requires --effort". When the selection has no effort, cli-funnel uses the model's default effort (`high` when offered). Gemini 3.1 Pro accepts only `low` and `high`.
+On `print` the `--model` string is the base id plus `--effort <effort>`. Over ACP the base id goes to the session's `model` option and the effort to its `thought_level` option, and an id with the level in it (`gemini-3.8-flash-high`) is read as the base id and a level. Passing a full id together with `--effort` fails with a conflict error, and a base id with no effort fails with "requires --effort". When the selection has no effort, cli-funnel uses the model's default effort (`high` when offered). Gemini 3.1 Pro accepts only `low` and `high`.
 
 ## Login
 
@@ -221,8 +277,20 @@ This follows agy 1.4.12, which documents none of it. `scripts/check-drift.mjs` c
 
 ## Limits
 
+On `print`:
+
 - Resume uses `--conversation <id>` with the `sessionId` from the earlier run. The whole history is replayed, so long conversations start slowly.
 - A resume of a conversation `agy` does not know does not fail in `agy`. It prints `warning: conversation "<id>" not found` on stderr and runs the prompt in a new conversation. A resume that works reports the same id in `init.conversation_id`, and a new conversation reports a different one (checked on 1.5.3). When the id differs from the requested `sessionId`, cli-funnel stops the process and ends the run with an `error` event (code `cli-failed`) that says the conversation was not found and that `agy` started a new one. It sends no `session` event for the new conversation, so the caller does not store its id. The `warning` event comes before the error.
 - Tool steps carry the input parameters. Only shell commands carry output text. The step is sent after the tool has run, not before.
-- Usage has no cost figure. It reports input, output, cached and thinking tokens.
+- Usage has no cost figure. It reports input, output, cached and thinking tokens. `agy --print` adds up the tokens of the whole conversation, so a resumed run reports the earlier turns too (a second turn showed `num_turns: 2`). ACP reports the tokens of the prompt alone.
 - Quota errors from the model API end the run with an error result. Long server retry delays are not retried.
+
+## Usage and limits over ACP
+
+`usage` follows the contract of every provider: `inputTokens` holds the cached part, and `cachedInputTokens` says how much of it came from the cache. agy leaves the cache out of its own `input_tokens` and `inputTokens`, so cli-funnel adds `cache_read_tokens` (or `cachedReadTokens`, `cachedWriteTokens`) back. A second turn of a recorded conversation said 3,571 input and 16,605 cached, which is `inputTokens: 20176` here.
+
+Cost of the prompt "Reply with the single word OK." at access `none` on `gemini-3.8-flash` at effort `low`, measured on 1.5.12: 17,994 input tokens over ACP, 17,998 on `print`. About 18,000 tokens are agy's own tool list and instructions. In the same live ACP session a second turn of the same prompt took 18,063 input tokens, of which 15,940 (88 percent) were served from the cache.
+
+A quota or rate limit comes from a JSON-RPC error of the prompt, or from the `refusal` stop reason, which agy uses only for an exhausted quota. The error text carries Google's own fields (`RESOURCE_EXHAUSTED`, `429`, `QUOTA_EXHAUSTED`), and the run emits a `limit` event, then an `error`. `resetAt` comes from `quotaResetTimeStamp`, else from the delay in `quotaResetDelay` or `retryDelay`. A limit with a wait of more than five hours, or one that names a quota, is `quota`, and any other is `rate`. `SUBSCRIPTION_REQUIRED` ends the run with `cli-failed` and says so. A sign-in error ends it with `not-logged-in`, and cli-funnel never starts a sign-in itself.
+
+These readings follow T3 Code's handling of agy, not a recorded failure, because the account used for testing had quota left. `agy` can also report an upstream API failure as a chat message that ends the turn normally. cli-funnel reads a reply that holds the harness's wording, `Error 429, Message: ..., Status: RESOURCE_EXHAUSTED`, as that failure. A quota error worded differently arrives as ordinary text.

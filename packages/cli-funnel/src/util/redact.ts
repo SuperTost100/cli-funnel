@@ -48,10 +48,13 @@ export async function* redactErrors(events: AsyncIterable<FunnelEvent>, secrets:
 const SECRET_NAME = /auth|token|key|secret|password|cookie|session|credential/i;
 
 /**
- * The run's own secrets, longest first so a secret that contains another is masked whole: `apiKey` at any length, and
- * the values of `RunInput.env`, `mcpServers` headers and `mcpServers` env entries whose names look like credentials.
- * Those values are kept only from 8 characters, so masking them cannot mangle ordinary text. A multiline secret adds
- * each of its lines of 8 characters or more.
+ * The run's own secrets, longest first so a secret that contains another is masked whole: `apiKey` at any length, the
+ * values of `RunInput.env` whose names look like credentials (from 8 characters, so masking them cannot mangle ordinary
+ * text), and everything a caller's `mcpServers` carry: every header value and every env value whatever its name, and the
+ * password of a server URL (from 4 characters, the same floor `redact` uses) and its query values from 8 characters, where a
+ * token often sits. shortcut: a value under 4 characters stays unmasked, since masking it would mangle ordinary text,
+ * and an env value such as `production` is masked wherever it appears. A multiline secret adds each of its lines of 8
+ * characters or more.
  */
 export function runSecrets(input: Pick<RunInput, "apiKey" | "mcpServers" | "env">): string[] {
   const values: string[] = typeof input.apiKey === "string" && input.apiKey ? [input.apiKey] : [];
@@ -62,9 +65,43 @@ export function runSecrets(input: Pick<RunInput, "apiKey" | "mcpServers" | "env"
   };
   named(input.env);
   const servers = typeof input.mcpServers === "object" && input.mcpServers !== null ? Object.values(input.mcpServers) : [];
+  // A header value is a secret whatever the header is called. An env value is one when its name looks like a credential,
+  // or when it is long enough that it is unlikely to be a plain word: `DEBUG=true` must not turn every "true" in an answer
+  // into [redacted].
+  const headers = (entries: unknown) => {
+    if (typeof entries !== "object" || entries === null) return;
+    for (const value of Object.values(entries)) if (typeof value === "string" && value.length >= 4) values.push(value);
+  };
+  const env = (entries: unknown) => {
+    if (typeof entries !== "object" || entries === null) return;
+    for (const [name, value] of Object.entries(entries)) if (typeof value === "string" && value.length >= 4 && (SECRET_NAME.test(name) || value.length >= 12)) values.push(value);
+  };
+  /** The value as written in a URL and decoded, since a CLI's error text quotes the address as written. */
+  const both = (raw: string, floor: number) => {
+    let decoded = raw;
+    try {
+      decoded = decodeURIComponent(raw);
+    } catch {
+      /* not valid percent-encoding: the raw form is all there is */
+    }
+    for (const v of new Set([raw, decoded])) if (v.length >= floor) values.push(v);
+  };
   for (const server of servers) {
     if (typeof server !== "object" || server === null) continue;
-    named(server.type === "http" ? server.headers : server.env);
+    if (server.type === "http") headers(server.headers);
+    else env(server.env);
+    if (server.type === "http" && typeof server.url === "string" && URL.canParse(server.url)) {
+      const url = new URL(server.url);
+      // The address as the CLI quotes it has the password and the query as the caller wrote them, so the raw text of the
+      // address is read, not only what `URL` decodes. A query value such as `mode=fast` is ordinary text, so only a value
+      // of 8 characters or more, where a token sits, counts.
+      both(url.password, 4);
+      const query = server.url.split("#")[0]!.split("?")[1] ?? "";
+      for (const pair of query.split("&")) {
+        const value = pair.slice(pair.indexOf("=") + 1);
+        if (pair.includes("=")) both(value, 8);
+      }
+    }
   }
   // Output is masked line by line in places, such as stderr, so each line of a multiline secret (a PEM key) counts
   // on its own too, with the same floor so a short fragment cannot mangle ordinary text.

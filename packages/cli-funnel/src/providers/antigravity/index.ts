@@ -1,5 +1,5 @@
 import { readFileSync, statSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, realpath, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { manifestModels, mergeModels } from "../../catalog/manifest.js";
@@ -10,6 +10,7 @@ import {
   FunnelError,
   type AuthStatus,
   type FunnelEvent,
+  type LiveSession,
   type LoginEvent,
   type LoginSession,
   type McpServer,
@@ -21,15 +22,20 @@ import {
   type RunInput,
   type Selection,
 } from "../../types.js";
+import { compareVersions } from "../../util/process.js";
 import { detectInstallation, exitedEarly, findBinary, isTerminal, LOGIN_TIMEOUT_MS, rawTap, runUpdate, SETTLE_MS, stderrTail } from "../base.js";
-import { runSecrets } from "../../util/redact.js";
+import { redactErrors, runSecrets } from "../../util/redact.js";
 import { createMapper, parseModels, parseRateLimits, parseWarning } from "./parser.js";
+import { openAcpSession, type AcpSetup } from "./acp/session.js";
+import { ACP_MIN_VERSION } from "./acp/protocol.js";
 import { SubagentTranscripts, type ForwardSubagents } from "./transcript.js";
 import { composePrompt } from "../prompt.js";
+import { createNoneGuard } from "../none-guard.js";
+import { AGY_REFUSAL, DENY_REASON } from "./deny.js";
 import { FEEDBACK_CHANNELS } from "../feedback.js";
-import { bool, dirList, flag, mcpServersFor, optionsFor, positive, requireAccess } from "../options.js";
+import { bool, dirList, flag, mcpServersFor, oneOf, optionsFor, positive, requireAccess } from "../options.js";
 import { requireMachine } from "../../selection.js";
-import { ownedWorkspace } from "../../util/workspace.js";
+import { NO_GIT_ENV, ownedWorkspace } from "../../util/workspace.js";
 
 const TESTED = { min: "1.2.0" };
 
@@ -84,31 +90,37 @@ export function buildArgs(
   return args;
 }
 
-/** Flags for `providerOptions.antigravity`. Throws `invalid-selection` when an option would widen `selection.access`. */
-function optionArgs(input: RunInput): string[] {
-  const o = optionsFor(input, "antigravity", ["addDirs", "printTimeoutSec", "forwardSubagentText", "forwardSubagentTools"]);
-  // Read by the run loop. Checked here so a bad value fails like the other options.
-  bool(o.forwardSubagentText, "forwardSubagentText");
-  bool(o.forwardSubagentTools, "forwardSubagentTools");
-  const args: string[] = [];
+/** The values of `providerOptions.antigravity`, checked. Throws `invalid-selection` when an option would widen `selection.access`. */
+function checkOptions(input: RunInput) {
+  const o = optionsFor(input, "antigravity", ["addDirs", "printTimeoutSec", "forwardSubagentText", "forwardSubagentTools", "transport"]);
+  const forwardText = bool(o.forwardSubagentText, "forwardSubagentText");
+  const forwardTools = bool(o.forwardSubagentTools, "forwardSubagentTools");
   const dirs = dirList(o.addDirs, "addDirs");
   if (dirs) {
     // At `none` the run happens in a folder that holds only the deny hook. Another directory would undo that.
     requireAccess(requireMachine(input.selection).access, ["accept-edits", "full"], "addDirs");
-    for (const d of dirs) args.push(flag("--add-dir", d));
   }
   const timeout = positive(o.printTimeoutSec, "printTimeoutSec");
+  const transport = oneOf(o.transport, "transport", ["acp", "print"] as const) ?? (input.apiKey ? "print" : "acp");
+  return { dirs, timeout, transport, forward: Boolean(forwardText || forwardTools) };
+}
+
+/** Flags for the print transport from `providerOptions.antigravity`. */
+function optionArgs(input: RunInput): string[] {
+  const { dirs, timeout } = checkOptions(input);
+  const args: string[] = [];
+  for (const d of dirs ?? []) args.push(flag("--add-dir", d));
   if (timeout !== undefined) args.push(flag("--print-timeout", `${timeout}s`));
   return args;
 }
 
-const DENY = { decision: "deny", reason: "Tools are disabled. Answer in text only." };
+const DENY = { decision: "deny", reason: DENY_REASON };
 
 /**
  * Matches every tool name except `finish`, which ends the turn and carries the `--json-schema` answer.
  * Go regexp has no lookahead, so the exclusion is spelled out.
  */
-export const NONE_MATCHER = "^(?:[^f].*|f[^i].*|fi[^n].*|fin[^i].*|fini[^s].*|finis[^h].*|finish.+|.{0,5})$";
+export const NONE_MATCHER = "(?s)^(?:[^f].*|f[^i].*|fi[^n].*|fin[^i].*|fini[^s].*|finis[^h].*|finish.+|.{0,5})$";
 
 /**
  * Hook file for `none`. agy loads `.agents/hooks.json` from the cwd, and a `deny` from a PreToolUse hook blocks the
@@ -121,9 +133,97 @@ export function noneHooks(platform: NodeJS.Platform = process.platform): Record<
   return { "cli-funnel-none": { PreToolUse: [{ matcher: NONE_MATCHER, hooks: [{ type: "command", command, timeout: 10 }] }] } };
 }
 
-/** The empty folder `none` runs in. It holds only the deny hook. */
+/**
+ * What makes a folder a git repository for `git rev-parse`: a `HEAD`, an `objects` folder and a `refs` folder. agy looks for
+ * the repository root and loads `AGENTS.md`, `GEMINI.md` and `.agents/` from every folder between the working folder and
+ * that root, so a `none` folder inside a user's repository, or under a home folder that is one, would read the user's
+ * instructions. With its own root it reads nothing above itself. An empty `.git` folder is not enough: agy walked past it.
+ * Cursor Agent does not stop at it: see `docs/providers/agent.md`.
+ */
+export const GIT_MARKER: Record<string, string> = { ".git/HEAD": "ref: refs/heads/main\n", ".git/objects/": "", ".git/refs/": "" };
+
+/** The empty folder `none` runs in. It holds only the deny hook, and the marker that makes it the root of its own repository. */
 export function noneWorkspace(): Promise<string> {
-  return ownedWorkspace("antigravity-none", { ".agents/hooks.json": `${JSON.stringify(noneHooks(), null, 2)}\n` });
+  return ownedWorkspace("antigravity-none", { ...GIT_MARKER, ".agents/hooks.json": `${JSON.stringify(noneHooks(), null, 2)}\n` });
+}
+
+/**
+ * The `--gemini-dir` of a `none` run over ACP. agy reads the user's MCP servers (`config/mcp_config.json`), skills and
+ * global `GEMINI.md` from the folder it calls its Gemini folder, `~/.gemini` by default, and starts those servers before
+ * the first prompt. A folder of our own that holds only a link to the user's `antigravity-cli` data folder has none of
+ * them, and agy still finds the sign-in and the conversations through the link. Checked on 1.5.12: a stdio server in the
+ * user's config started with the default and did not start with this folder, and the session and its models still came
+ * back.
+ *
+ * The folder is made inert before agy sees it. A first start in a Gemini folder with no `config/.migrated` runs agy's
+ * migration, and through the link that moved a user's `antigravity-cli/skills` into the private folder and left a link
+ * behind, or re-pointed an existing link at the private folder. So the folder always holds `config/.migrated`, an empty
+ * `config/skills` folder and an empty MCP config, and agy has nothing to migrate. Checked in a throwaway home on 1.5.12: with
+ * these the user's `skills` came out of a start exactly as it went in, as a folder and as a link to `config/skills`.
+ *
+ * Nothing is removed recursively here. A link is replaced by `unlink`, an old real data folder in the private folder is
+ * moved aside, and the user's data folder is made when there is none, so no conversation is ever kept where a later
+ * run would delete it.
+ *
+ * Calls in one process go one after another: on Windows a junction shows up as an empty folder for a moment while it is
+ * made, and a second call that finds it then would try to move it aside. Another process can still meet that moment, so
+ * a failed move is forgiven when the link points where ours would.
+ */
+let linking: Promise<unknown> = Promise.resolve();
+export function noneGeminiDir(home: string = homedir()): Promise<string> {
+  const made = linking.then(() => makeGeminiDir(home));
+  linking = made.catch(() => undefined);
+  return made;
+}
+
+/** `unlink` that takes it as done when another process got there first (`ENOENT`) and fails on anything else. */
+async function unlinkIfThere(path: string): Promise<void> {
+  await unlink(path).catch((e: NodeJS.ErrnoException) => {
+    if (e.code !== "ENOENT") throw e;
+  });
+}
+
+/** `noneGeminiDir` without the one-at-a-time queue: what several processes running together do. Exported for the test. */
+export async function makeGeminiDir(home: string): Promise<string> {
+  const dir = await ownedWorkspace("antigravity-gemini-none", { "config/.migrated": "", "config/mcp_config.json": `${JSON.stringify({ mcpServers: {} })}\n`, "config/skills/": "" });
+  // `config/skills` is a link when an earlier agy re-pointed it. Replace the link, never what it points at.
+  const skills = join(dir, "config", "skills");
+  if ((await lstat(skills).catch(() => undefined))?.isSymbolicLink()) {
+    await unlinkIfThere(skills);
+    await mkdir(skills, { recursive: true, mode: 0o700 });
+  }
+  const target = dataDir(home);
+  await mkdir(target, { recursive: true, mode: 0o700 });
+  const link = join(dir, "antigravity-cli");
+  // Other processes fix the same link at the same time. Each pass looks at what is there now, and a step that another
+  // process already took (`ENOENT` on a removal, `EEXIST` on the link) sends it round again, as does a path that
+  // Windows holds for a moment (`EBUSY`, `EPERM`) while another process removes or makes it. A few passes are enough: a
+  // process that removes a link it read before another fixed it only makes the next pass of the others make it again.
+  const again = new Set(["ENOENT", "EEXIST", "EBUSY", "EPERM"]);
+  let last: unknown;
+  for (let pass = 0; pass < 10; pass++) {
+    try {
+      const info = await lstat(link).catch(() => undefined);
+      if (info?.isSymbolicLink()) {
+        // By what it resolves to: the home may be reached through a link, and a dangling link resolves to nothing.
+        const [now, want] = await Promise.all([realpath(link).catch(() => undefined), realpath(target)]);
+        if (now === want) return dir;
+        await unlinkIfThere(link);
+      } else if (info) {
+        // A real data folder left here by an earlier run holds conversations. Move it aside, never delete it.
+        await rename(link, `${link}.kept-${Date.now()}`);
+        continue;
+      }
+      // A junction needs no privilege on Windows, where a symbolic link to a folder does.
+      await symlink(target, link, process.platform === "win32" ? "junction" : "dir");
+      return dir;
+    } catch (e) {
+      if (!again.has((e as NodeJS.ErrnoException).code ?? "")) throw e;
+      last = e;
+      await new Promise((resolve) => setTimeout(resolve, 5 * (pass + 1)));
+    }
+  }
+  throw last ?? new FunnelError("The link to agy's data folder could not be made: other processes kept changing it.", "cli-failed");
 }
 
 /**
@@ -304,9 +404,10 @@ const antigravityForward = (input: RunInput): ForwardSubagents => ({
   tools: input.providerOptions?.antigravity?.forwardSubagentTools === true,
 });
 
-async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
+async function* runPrint(input: RunInput): AsyncGenerator<FunnelEvent> {
   const path = findBinary("agy");
   if (!path) throw new FunnelError("agy is not installed.", "not-installed");
+  if (input.attachments?.length) throw new FunnelError('Antigravity takes image attachments only over ACP. Use providerOptions.antigravity.transport "acp".', "unsupported");
   const models = listed?.some((m) => m.id === input.selection.model) ? listed : await manifestModels("antigravity");
   const servers = mcpServersFor(input, ["http", "stdio"], "Antigravity");
   // At accept-edits agy denies every MCP tool call, because headless mode cannot ask. Attaching servers there would only fail.
@@ -328,7 +429,7 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
     const placed = placePrompt(input, process.platform);
     stream = spawnStream(path, buildArgs(input, models, process.platform, schemaFile?.path ?? schema, placed, mcp?.dir), {
       cwd,
-      env: home && input.apiKey ? apiKeyEnv(input.apiKey, home, input.env) : input.env,
+      env: runEnv(input, home && input.apiKey ? apiKeyEnv(input.apiKey, home, input.env) : input.env),
       signal: input.signal,
       input: placed.stdin ?? "",
     });
@@ -365,6 +466,8 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
     clearTimeout(timer);
   };
   let sessionSent = false;
+  let guarded = false;
+  const guard = input.selection.access === "none" ? createNoneGuard((start) => start.name !== "finish", AGY_REFUSAL) : undefined;
   const forward = antigravityForward(input);
   // Only with a forward option: the stream lines and the subagents' transcripts then go through one channel.
   let source: AsyncIterable<unknown> = stream.lines;
@@ -391,7 +494,15 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
       }
       // Nothing goes out after the terminal event.
       const before = mapper.finished;
-      const events = mapper.map(line);
+      let events = mapper.map(line);
+      // The deny hook is agy's own. A tool that finishes at `none` means it did not apply, and the run stops.
+      // At the end of the run, a forbidden call that never ended may have run too.
+      const reason = guard && !before ? events.map((e) => guard.check(e)).find((r) => r !== undefined) ?? (events.some(isTerminal) ? guard.unfinished() : undefined) : undefined;
+      if (reason) {
+        stream.kill();
+        guarded = true;
+        events = [{ type: "error", message: reason, code: "cli-failed" }];
+      }
       transcripts?.watch(line);
       const terminal = events.some(isTerminal);
       if (tap && !before) {
@@ -414,8 +525,9 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
       // The terminal event ends the stream, also when the CLI keeps running (a resume that started another conversation).
       if (terminal) break;
     }
-    if (tap && !mapper.finished) yield* tap.events();
-    if (transcripts && !mapper.finished) yield* await transcripts.finish();
+    // After the guard's error nothing else goes out: the error is the last event of the run.
+    if (tap && !mapper.finished && !guarded) yield* tap.events();
+    if (transcripts && !mapper.finished && !guarded) yield* await transcripts.finish();
   } finally {
     transcripts?.stop();
     tap?.close();
@@ -425,12 +537,77 @@ async function* run(input: RunInput): AsyncGenerator<FunnelEvent> {
     void stream.exited.then(stopStderr);
     await cleanup();
   }
-  if (!mapper.finished) {
+  if (!mapper.finished && !guarded) {
     const last = await exitedEarly(stream, "agy", () => input.signal?.aborted);
     yield* takeWarnings();
     yield last;
   }
 }
+
+/** The environment of a run. At `none` the variables that point git at another repository are removed, as the folder has a git marker of its own. */
+const runEnv = (input: RunInput, env: Record<string, string> | undefined) => (input.selection.access === "none" ? { ...env, ...NO_GIT_ENV } : env);
+
+/** The folder where agy keeps its conversation files and artifacts, for runs on the user's login. */
+const brainFolder = () => join(dataDir(homedir()), "brain");
+
+/** What an ACP session needs before its process starts. Throws for an option the transport cannot honour. */
+async function acpSetup(input: RunInput): Promise<AcpSetup> {
+  const path = findBinary("agy");
+  if (!path) throw new FunnelError("agy is not installed.", "not-installed");
+  const { dirs, timeout, transport, forward } = checkOptions(input);
+  if (transport !== "acp") throw new FunnelError('transport "print" does not open an ACP session.', "invalid-selection");
+  if (input.apiKey !== undefined) throw new FunnelError('Antigravity runs on an API key only with transport "print".', "unsupported");
+  if (forward) throw new FunnelError('forwardSubagentText and forwardSubagentTools read the print transport\'s output. Use transport "print" for them.', "unsupported");
+  const access = requireMachine(input.selection).access;
+  const servers = mcpServersFor(input, ["http", "stdio"], "Antigravity");
+  if (servers.length) requireAccess(access, ["full"], "Antigravity MCP servers");
+  const cwd = access === "none" ? await noneWorkspace() : input.selection.cwd!;
+  const mcp = servers.length ? await mcpWorkspace(servers) : undefined;
+  const args = [
+    ...(dirs ?? []).map((d) => flag("--add-dir", d)),
+    ...(mcp ? [flag("--add-dir", mcp.dir)] : []),
+    ...(access === "full" ? ["--dangerously-skip-permissions"] : []),
+    // At `none` the user's own agy setup stays out: see `noneGeminiDir`.
+    ...(access === "none" ? [flag("--gemini-dir", await noneGeminiDir())] : []),
+  ];
+  return {
+    path,
+    cwd,
+    args,
+    ...(timeout !== undefined ? { timeoutSec: timeout } : {}),
+    brainDir: brainFolder(),
+    readText: readTaskList,
+    createdInRun: (startedAt) => createdInRunFor(input, startedAt),
+    defaultEffort: (model) => toCliModel({ ...input.selection, model, effort: undefined }, listed ?? []).effort,
+    onModels: (live) => {
+      listed = mergeModels(live, listed ?? []);
+    },
+    cleanup: async () => {
+      await mcp?.remove();
+    },
+  };
+}
+
+const transportOf = (input: RunInput) => checkOptions(input).transport;
+
+async function openSession(input: RunInput): Promise<LiveSession | undefined> {
+  // The print transport starts a process per turn and keeps nothing alive, so it has no live session. The funnel runs it directly.
+  if (transportOf(input) === "print") return undefined;
+  return openAcpSession(input, await acpSetup(input));
+}
+
+async function* runRaw(input: RunInput): AsyncGenerator<FunnelEvent> {
+  if (transportOf(input) === "print") return yield* runPrint(input);
+  const session = await openAcpSession(input, await acpSetup(input));
+  try {
+    yield* session.turn(input);
+  } finally {
+    session.close();
+  }
+}
+
+/** The run, with the run's secrets masked in what it reports as an error, as the other CLI providers do: agy quotes the address of a server as written. */
+const run = (input: RunInput): AsyncGenerator<FunnelEvent> => redactErrors(runRaw(input), runSecrets(input));
 
 /** How long agy gets to exit after its `result` before the run stops it. */
 const EXIT_GRACE_MS = 1000;
@@ -447,7 +624,7 @@ async function rateLimits(options: ProcessOptions = {}): Promise<RateLimits> {
   if (!path) throw new FunnelError("agy is not installed.", "not-installed");
   const res = await exec(path, ["--print=/usage", "--output-format", "stream-json"], {
     cwd: await noneWorkspace(),
-    env: options.env,
+    env: { ...options.env, ...NO_GIT_ENV },
     signal: options.signal,
     timeoutMs: USAGE_TIMEOUT_MS,
   }).catch((e: unknown) => {
@@ -485,15 +662,23 @@ export const antigravityProvider: Provider = {
     fast: false,
     resume: true,
     approvals: false,
-    images: false,
-    system: "prompt",
-    schema: "native",
+    images: true,
+    system: "native",
+    // ACP has no schema field. The `print` transport passes `--json-schema`, but the default does not.
+    schema: "prompt",
     mcpServers: ["http", "stdio"],
     apiKey: true,
     plan: true,
     fileChanges: true,
   },
-  detect: () => detectInstallation("agy", TESTED),
+  async detect() {
+    const install = await detectInstallation("agy", TESTED);
+    // The default transport needs `agy acp`, which 1.5.0 introduced. `print` runs on older builds.
+    if (install.installed && install.version && compareVersions(install.version, ACP_MIN_VERSION) < 0) {
+      return { ...install, detail: `agy ${ACP_MIN_VERSION} or newer is needed for the default ACP transport. This version runs only with providerOptions.antigravity.transport "print".` };
+    }
+    return install;
+  },
   authStatus,
   login,
   async logout() {
@@ -514,4 +699,5 @@ export const antigravityProvider: Provider = {
     return listed;
   },
   run,
+  openSession,
 };

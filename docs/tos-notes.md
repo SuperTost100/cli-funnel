@@ -10,6 +10,14 @@ Points worth checking:
 - Whether automated or scripted use of the CLI is allowed on your plan, and what the rate limits are. Headless runs draw from the same quota as interactive ones, but not always at the same rate. On Claude Code, headless runs are reported to use the five-hour window faster: see [Subscription limits and the entry point](providers/claude.md#subscription-limits-and-the-entry-point).
 - Whether your users are signed in to their own accounts, on their own machines. That is the shape this package is built for.
 
+## Antigravity
+
+A reply on Google's developer forum, from an account that speaks for the Antigravity team, lists "wrapping `agy -p` in third-party agent loops" among the uses that get an account suspended, and names the Agent Client Protocol as the way to let other apps drive Antigravity: [TOS clarification: is T3 Code's official Antigravity ACP agent permitted under the Antigravity terms of service?](https://discuss.ai.google.dev/t/tos-clarification-is-t3-code-official-antigravity-acp-agent-permitted-under-the-antigravity-terms-of-service/192027), read on 2026-11-19. That is a report of a forum reply. It is not Google's published policy, and I could not check the terms themselves.
+
+That is why the default Antigravity transport is `agy acp` and not one `agy --print` process per message. The `print` transport stays selectable (`providerOptions.antigravity.transport: "print"`), for older agy builds and for the options only it has, and it is the one the forum reply warns about. A `print` run is a script around `agy -p` in the sense of that reply. Use it with that in mind, and read the current terms before you ship a product on it.
+
+`funnel.rateLimits("antigravity")` runs `agy --print=/usage`, a one-off command that starts no model turn.
+
 ## Things cli-funnel will not do
 
 - It will not pass `claude --bare`. That flag disables subscription login.

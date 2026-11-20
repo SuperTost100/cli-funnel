@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { fakeNodeCli, fakeShCli, sh } from "./fake-cli.js";
-import { collect } from "./helpers.js";
+import { collect, printTransport } from "./helpers.js";
 import { antigravityProvider, buildArgs, NONE_MATCHER, noneHooks, noneWorkspace } from "../src/providers/antigravity/index.js";
 import { createMapper, parseModels, parseWarning } from "../src/providers/antigravity/parser.js";
 import type { FunnelEvent, RunInput } from "../src/types.js";
@@ -68,6 +68,12 @@ describe("antigravity parser", () => {
     expect(r.usage?.totalTokens).toBe(13453);
   });
 
+  it("counts the cache in inputTokens, as the other providers do", () => {
+    // Recorded on agy 1.5.12 from a second turn of a conversation: input_tokens 20253 and cache_read_tokens 15946 are separate.
+    const usage = events("cached.ndjson").find((e) => e.type === "usage");
+    expect(usage).toEqual({ type: "usage", usage: { inputTokens: 36199, outputTokens: 2, cachedInputTokens: 15946, reasoningTokens: undefined, totalTokens: 36201 } });
+  });
+
   it("maps a tool call", () => {
     const e = events("tool.ndjson");
     expect(e.some((x) => x.type === "tool.start" && x.name === "write_to_file")).toBe(true);
@@ -109,12 +115,25 @@ describe("antigravity none", () => {
     expect(antigravityProvider.capabilities.access).toEqual(["none", "accept-edits", "full"]);
   });
 
+  /** A hook matcher is a Go regexp, where a leading `(?s)` lets `.` match a line break. JavaScript spells that as a flag. */
+  const goRegExp = (pattern: string) => (pattern.startsWith("(?s)") ? new RegExp(pattern.slice(4), "s") : new RegExp(pattern));
+
   it("matches every tool except finish", () => {
-    const re = new RegExp(NONE_MATCHER);
+    const re = goRegExp(NONE_MATCHER);
     for (const t of ["run_command", "write_to_file", "view_file", "call_mcp_tool", "invoke_subagent", "fin", "f", "finished", "finish_task", "x"]) {
       expect(re.test(t), t).toBe(true);
     }
     expect(re.test("finish")).toBe(false);
+  });
+
+  it("matches a name that holds a line break too, which a pattern without (?s) lets escape", () => {
+    expect(NONE_MATCHER.startsWith("(?s)")).toBe(true);
+    // Without the flag, `.` stops at a line break, and these names match nothing: the hook would not see the call.
+    const plain = new RegExp(NONE_MATCHER.slice(4));
+    for (const name of ["run\ncommand", "run_command\n", "finish\n", "mcp_x\n_y"]) {
+      expect(plain.test(name), `without the flag: ${name}`).toBe(false);
+      expect(goRegExp(NONE_MATCHER).test(name), name).toBe(true);
+    }
   });
 
   it.skipIf(process.platform === "win32")("hook command prints a deny decision", () => {
@@ -128,12 +147,13 @@ describe("antigravity none", () => {
     expect(hook.command).toBe('echo {"decision":"deny","reason":"Tools are disabled. Answer in text only."}');
   });
 
-  it("writes only the hook file to its workspace", async () => {
+  it("writes only the hook file and the git marker to its workspace", async () => {
     const old = process.env.XDG_CACHE_HOME;
     process.env.XDG_CACHE_HOME = mkdtempSync(join(tmpdir(), "cf-cache-"));
     try {
       const dir = await noneWorkspace();
-      expect(readdirSync(dir)).toEqual([".agents"]);
+      // The hook, and the marker that makes the folder the root of its own git repository.
+      expect(readdirSync(dir).sort()).toEqual([".agents", ".git"]);
       expect(JSON.parse(readFileSync(join(dir, ".agents", "hooks.json"), "utf8"))).toEqual(noneHooks());
     } finally {
       if (old === undefined) delete process.env.XDG_CACHE_HOME;
@@ -160,7 +180,7 @@ describe.skipIf(process.platform === "win32")("antigravity long schema", () => {
     process.env.CLI_FUNNEL_AGY_BIN = bin;
     const schema = { type: "object", properties: { text: { type: "string", description: "x".repeat(200_000) } } };
     const run: RunInput = { selection: { provider: "antigravity", model: "m", cwd: dir, access: "full" }, prompt: "hi", responseSchema: { schema } };
-    for await (const _ of antigravityProvider.run(run)) {
+    for await (const _ of antigravityProvider.run(printTransport(run))) {
       /* drain */
     }
     const [path, size, mode] = readFileSync(log, "utf8").trim().split("\n");
@@ -182,7 +202,7 @@ describe.skipIf(process.platform === "win32")("antigravity verbose", () => {
     chmodSync(bin, 0o755);
     process.env.CLI_FUNNEL_AGY_BIN = bin;
     const events: FunnelEvent[] = [];
-    for await (const e of antigravityProvider.run({ selection: { provider: "antigravity", model: "m", cwd: dir, access: "full" }, prompt: "hi", verbose })) events.push(e);
+    for await (const e of antigravityProvider.run(printTransport({ selection: { provider: "antigravity", model: "m", cwd: dir, access: "full" }, prompt: "hi", verbose }))) events.push(e);
     return events;
   };
 
@@ -274,7 +294,7 @@ describe.skipIf(process.env.CLI_FUNNEL_LIVE !== "1")("antigravity live", () => {
 
   it("answers a tiny prompt", async () => {
     const r = await collect(
-      antigravityProvider.run({ ...input({ cwd: "/tmp", model: "gemini-3.8-flash", effort: "low" }), prompt: "Reply with the word OK" }),
+      antigravityProvider.run(printTransport({ ...input({ cwd: "/tmp", model: "gemini-3.8-flash", effort: "low" }), prompt: "Reply with the word OK" })),
       input(),
     );
     expect(r.text).toMatch(/OK/);
@@ -284,7 +304,7 @@ describe.skipIf(process.env.CLI_FUNNEL_LIVE !== "1")("antigravity live", () => {
   it("none answers and blocks a shell write", async () => {
     const target = join(mkdtempSync(join(tmpdir(), "cf-agy-none-")), "out.txt");
     const run = { ...input({ access: "none" }), prompt: `Run the shell command "touch ${target}", then reply "done".` };
-    const r = await collect(antigravityProvider.run(run), run);
+    const r = await collect(antigravityProvider.run(printTransport(run)), run);
     expect(existsSync(target)).toBe(false);
     expect(r.text.length).toBeGreaterThan(0);
   }, 120_000);
@@ -307,7 +327,7 @@ describe.skipIf(process.platform === "win32")("antigravity default effort", () =
     process.env.CLI_FUNNEL_AGY_BIN = bin;
     expect((await antigravityProvider.models()).find((m) => m.id === "new-model")?.defaultEffort).toBe("high");
     const run: RunInput = { selection: { provider: "antigravity", model: "new-model", cwd: dir, access: "full" }, prompt: "hi" };
-    for await (const _ of antigravityProvider.run(run)) {
+    for await (const _ of antigravityProvider.run(printTransport(run))) {
       /* drain */
     }
     expect(readFileSync(log, "utf8")).toContain("--effort high");
@@ -345,7 +365,7 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"ok"}}'`,
   }
   const drain = async (r: RunInput) => {
     const out: FunnelEvent[] = [];
-    for await (const e of antigravityProvider.run(r)) out.push(e);
+    for await (const e of antigravityProvider.run(printTransport(r))) out.push(e);
     return out;
   };
   const types = (events: FunnelEvent[]) => events.map((e) => e.type);
@@ -360,7 +380,7 @@ echo 'jetski: not a warning' >&2`);
     const events = await drain(run);
     expect(types(events)).toEqual(["session", "warning", "text.delta", "done"]);
     expect(events[1]).toEqual({ type: "warning", message: "--mode plan has no effect while slash command expansion is disabled." });
-    expect((await collect(antigravityProvider.run(run), run)).warnings).toEqual(["--mode plan has no effect while slash command expansion is disabled."]);
+    expect((await collect(antigravityProvider.run(printTransport(run)), run)).warnings).toEqual(["--mode plan has no effect while slash command expansion is disabled."]);
   });
 
   it("puts the warning after access.reduced", async () => {
@@ -442,7 +462,7 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"ok"}}'`,
   };
   const drain = async (r: RunInput) => {
     const out: FunnelEvent[] = [];
-    for await (const e of antigravityProvider.run(r)) out.push(e);
+    for await (const e of antigravityProvider.run(printTransport(r))) out.push(e);
     return out;
   };
 

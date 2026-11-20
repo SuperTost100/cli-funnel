@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { redact, redactErrors, redactSecrets } from "../src/util/redact.js";
+import { mask, redact, redactErrors, redactSecrets, runSecrets } from "../src/util/redact.js";
 import type { FunnelEvent } from "../src/types.js";
 
 const GH = "ghp_" + "a1B2c3D4e5".repeat(4);
@@ -134,5 +134,52 @@ describe("redactSecrets across text.delta events", () => {
     }
     expect(seen.join("")).toBe("tok-abcdef");
     expect(caught.message).toBe("boom [redacted]");
+  });
+});
+
+describe("runSecrets for the caller's MCP servers", () => {
+  const input = (mcpServers: object) => ({ mcpServers: mcpServers as never });
+
+  it("takes every header value and every env value, whatever the name is", () => {
+    const secrets = runSecrets(
+      input({
+        api: { type: "http", url: "http://127.0.0.1:1/mcp", headers: { "X-Custom": "header-value-1", "Content-Type": "application/json", Authorization: "Bearer abcdefgh" } },
+        local: { type: "stdio", command: "node", args: ["s.js"], env: { REGION: "eu-west-1", FLAG: "on", DEBUG: "true", API_TOKEN: "tok-1234", CONNECTION: "postgres-host-1" } },
+      }),
+    );
+    // Every header value, whatever the header is called.
+    for (const v of ["header-value-1", "application/json", "Bearer abcdefgh"]) expect(secrets, v).toContain(v);
+    // An env value when its name looks like a credential, or when it is 12 characters or more.
+    for (const v of ["tok-1234", "postgres-host-1"]) expect(secrets, v).toContain(v);
+    // Not a short value of an ordinary name: `DEBUG=true` must not turn every "true" in an answer into [redacted].
+    for (const v of ["eu-west-1", "on", "true"]) expect(secrets, v).not.toContain(v);
+  });
+
+  it("takes the values of a server URL's query string and its password, and leaves the rest of the URL", () => {
+    const secrets = runSecrets(input({ api: { type: "http", url: "https://user:hunter2hunter2@host.example/mcp?api_key=SECRETVALUE1&mode=fast&t=abc" } }));
+    expect(secrets).toEqual(expect.arrayContaining(["SECRETVALUE1", "hunter2hunter2"]));
+    expect(secrets).not.toContain("fast");
+    expect(secrets).not.toContain("host.example");
+  });
+
+  it("takes the password and query values as written in the URL, percent-encoded, as well as decoded", () => {
+    const secrets = runSecrets(input({ api: { type: "http", url: "https://u:p%40ssword12@host.example/mcp?token=abcdefg%2Fh12&mode=fast" } }));
+    expect(secrets).toEqual(expect.arrayContaining(["p%40ssword12", "p@ssword12", "abcdefg%2Fh12", "abcdefg/h12"]));
+    // How agy's error text quotes the address: the raw form is what appears, and it must be masked.
+    expect(mask({ message: "dial https://u:p%40ssword12@host.example/mcp?token=abcdefg%2Fh12 failed" }, secrets)).toEqual({ message: "dial https://u:[redacted]@host.example/mcp?token=[redacted] failed" });
+  });
+
+  it("masks them in a raw-style value, in an error message and in a thrown error", async () => {
+    const run = input({ api: { type: "http", url: "https://h.example/mcp?token=QUERYTOKEN99", headers: { "X-Custom": "header-value-1" } }, local: { type: "stdio", command: "node", env: { REGION: "eu-west-1", TOKEN_FILE: "secret-file-path" } } });
+    const secrets = runSecrets(run);
+    expect(mask({ line: "sent header-value-1 to https://h.example/mcp?token=QUERYTOKEN99 in eu-west-1" }, secrets)).toEqual({ line: "sent [redacted] to https://h.example/mcp?token=[redacted] in eu-west-1" });
+    const events: FunnelEvent[] = [{ type: "error", message: "failed: header-value-1 rejected, file secret-file-path" }];
+    const out: FunnelEvent[] = [];
+    for await (const e of redactSecrets((async function* () { yield* events; })(), secrets)) out.push(e);
+    expect(out[0]).toEqual({ type: "error", message: "failed: [redacted] rejected, file [redacted]" });
+  });
+
+  it("keeps the old rule for the run's own env: only credential-looking names", () => {
+    expect(runSecrets({ env: { MY_TOKEN: "abcdefghij", REGION: "eu-west-1" } })).toEqual(["abcdefghij"]);
   });
 });

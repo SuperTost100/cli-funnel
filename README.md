@@ -83,9 +83,9 @@ The same call also reaches the Anthropic, OpenAI and Gemini APIs with a key, a l
 | Fast mode                        | no          | yes   | yes           | no               |
 | Live model list                  | no, bundled | yes   | yes           | yes              |
 | Resume a conversation            | yes         | yes   | yes           | yes              |
-| System prompt                    | yes         | yes   | in the prompt | in the prompt    |
-| Image input                      | yes         | yes   | no            | no               |
-| JSON schema output               | yes         | yes   | in the prompt | yes              |
+| System prompt                    | yes         | yes   | in the prompt | yes (session)    |
+| Image input                      | yes         | yes   | no            | yes              |
+| JSON schema output               | yes         | yes   | in the prompt | in the prompt    |
 | Sign-in from your UI             | link        | link  | link          | terminal handoff |
 
 Every "no" in this table is a limit of the CLI, not of cli-funnel. cli-funnel does not fake a feature. When a CLI cannot enforce something headlessly, the option is not offered. [Access levels](docs/access-levels.md) explains each gap.
